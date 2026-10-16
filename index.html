@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>SääÄly</title>
+<meta name="description" content="SääÄly yhdistää usean säämallin ennusteen yhdeksi ja selittää sään tekoälyn avulla.">
+<meta name="theme-color" content="#0b1530">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SääÄly">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<canvas id="sky" aria-hidden="true"></canvas>
+<div class="scrim" aria-hidden="true"></div>
+
+<main id="app">
+  <header class="top">
+    <button id="placeBtn" class="place" type="button" data-act="open-search" aria-haspopup="dialog" aria-label="Vaihda paikkakuntaa"></button>
+    <div class="top-actions">
+      <button class="icon-btn" type="button" data-act="locate" aria-label="Käytä sijaintiani"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+      <button id="refreshBtn" class="icon-btn" type="button" data-act="refresh" aria-label="Päivitä sää"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 5.7"/><path d="M20 4v7h-7"/></svg></button>
+      <button class="icon-btn" type="button" data-act="open-settings" aria-label="Asetukset"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M18 7h2M4 17h2M11 17h9"/><circle cx="15.5" cy="7" r="2.3"/><circle cx="8.5" cy="17" r="2.3"/></svg></button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
+
+  <section id="hero" class="hero" aria-label="Sää nyt"></section>
+  <section id="ai" class="ai" aria-label="Tekoälyn selitys" hidden></section>
+  <div id="forecast" class="panel" hidden>
+    <section id="hourly" aria-label="Tuntiennuste"></section>
+    <section id="daily" aria-label="Päiväennuste"></section>
+    <section id="models" aria-label="Mallivertailu"></section>
+  </div>
+
+  <footer class="foot">
+    <p>Sääennusteet: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0), jonka kautta ECMWF, DWD ICON, MET Norway, Météo-France, UK Met Office, NOAA GFS ja Environment Canada. Paikkahaku: Open-Meteo / GeoNames. Paikannimet: BigDataCloud ja © OpenStreetMap-tekijät. Selitykset ja chat: Google Gemini.</p>
+    <p>Kokeiluversio. Tärkeissä päätöksissä ja vaaratilanteissa katso Ilmatieteen laitoksen varoitukset.</p>
+  </footer>
+</main>
+
+<button id="fab" class="fab" type="button" data-act="open-chat" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>Kysy SääÄlyltä</button>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-backdrop" data-act="close"></div>
+  <div id="sheetPanel" class="sheet-panel" role="dialog" aria-modal="true" tabindex="-1"></div>
+</div>
+
+<noscript><p class="nojs">SääÄly tarvitsee JavaScriptin toimiakseen.</p></noscript>
+
+<script>
+// Näyttää käynnistysvirheet ruudulla, koska puhelimessa konsoli ei ole näkyvissä.
+(function () {
+  var box;
+  function show(msg) {
+    if (!box) {
+      box = document.createElement('pre');
+      box.id = 'crash';
+      box.setAttribute('role', 'alert');
+      box.addEventListener('click', function () { box.remove(); box = null; });
+      document.body.appendChild(box);
+    }
+    box.textContent += msg + '\n';
+  }
+  window.addEventListener('error', function (e) {
+    show('Virhe: ' + (e.message || e.type) + (e.filename ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : ''));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    show('Virhe: ' + ((e.reason && e.reason.message) || e.reason));
+  });
+})();
+</script>
+<script src="saaaly.js" defer></script>
+</body>
+</html>
