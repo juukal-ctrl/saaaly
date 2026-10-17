@@ -259,8 +259,9 @@ return { MODELS };
 
 // ---- weather.js ----
 __m['weather'] = (() => {
-// weather.js: säädatan haku Open-Meteosta. Jokainen malli haetaan omana kutsunaan (Promise.all,
-// mutta fetchModel ei koskaan heitä virhettä), joten yksi huono malli ei kaada koko hakua.
+// weather.js: säädatan haku Open-Meteosta. Jokainen malli haetaan omana kutsunaan, mutta enintään
+// muutama kerrallaan (rajapinta hylkää liian monta samanaikaista kutsua). fetchModel ei koskaan heitä
+// virhettä, joten yksi huono malli ei kaada koko hakua.
 
 const { MODELS } = __m['models'];
 const { defaultFetch, store } = __m['util'];
@@ -355,6 +356,27 @@ function parseModelResponse(json, id) {
   };
 }
 
+// ---- Virhetilanteiden tunnistus ja uudelleenyritys ----
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Open-Meteo hylkää kutsun, kun samalta osoitteelta tulee liikaa samanaikaisia kutsuja. Hetken päästä kannattaa yrittää uudelleen. */
+const isBusy = (e) => /too many concurrent/i.test(e?.message || '');
+
+/** Alueellinen malli (esim. MET Nordic) ei kata paikkaa. Ei ole virhe eikä merkki mallin poistumisesta. */
+const isNoCoverage = (e) => /no data is available for this location/i.test(e?.message || '');
+
+async function fetchWithRetry(url, opts, { retries, sleepFn }) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchJson(url, opts);
+    } catch (e) {
+      if (attempt >= retries || !isBusy(e)) throw e;
+      await sleepFn(300 * (attempt + 1) + Math.floor(Math.random() * 250));
+    }
+  }
+}
+
 // ---- Mallien saatavuuden muisti (säästää turhia kutsuja) ----
 
 const HALF_DAY = 12 * 3600 * 1000;
@@ -386,7 +408,7 @@ function markDead(model, now) {
 const elapsed = (t0) => Math.round((globalThis.performance?.now?.() ?? Date.now()) - t0);
 
 /** Hakee yhden mallin. Ei koskaan heitä: palauttaa { ok:false, error } virhetilanteessa. */
-async function fetchModel(model, lat, lon, { fetchFn = defaultFetch, noCache = false, days = 7, now = Date.now(), timeoutMs = 15000 } = {}) {
+async function fetchModel(model, lat, lon, { fetchFn = defaultFetch, noCache = false, days = 7, now = Date.now(), timeoutMs = 15000, sleepFn = defaultSleep, retries = 2 } = {}) {
   const t0 = globalThis.performance?.now?.() ?? Date.now();
   if (model.optional && isDead(model, now)) {
     return { model, ok: false, skipped: true, id: model.ids[0], error: 'Ei saatavilla (ohitettu)', ms: 0 };
@@ -394,16 +416,19 @@ async function fetchModel(model, lat, lon, { fetchFn = defaultFetch, noCache = f
   let lastErr = null;
   for (const id of orderedIds(model)) {
     try {
-      const json = await fetchJson(buildUrl(lat, lon, id, { days }), { fetchFn, noCache, timeoutMs });
+      const json = await fetchWithRetry(buildUrl(lat, lon, id, { days }), { fetchFn, noCache, timeoutMs }, { retries, sleepFn });
       const data = parseModelResponse(json, id);
       rememberResolved(model, id);
       return { model, ok: true, id, data, ms: elapsed(t0) };
     } catch (e) {
       lastErr = e;
-      if (e.status !== 400) break; // vain virheellinen mallinimi kokeilee seuraavaa tunnistetta
+      if (isNoCoverage(e) || isBusy(e) || e.status !== 400) break; // vain virheellinen mallinimi kokeilee seuraavaa tunnistetta
     }
   }
-  if (model.optional && lastErr?.status === 400) markDead(model, now);
+  if (isNoCoverage(lastErr)) {
+    return { model, ok: false, coverage: true, id: model.ids[0], error: 'Malli ei kata tätä paikkaa', status: lastErr.status, kind: 'coverage', ms: elapsed(t0) };
+  }
+  if (model.optional && lastErr?.status === 400 && !isBusy(lastErr)) markDead(model, now);
   return {
     model,
     ok: false,
@@ -415,12 +440,22 @@ async function fetchModel(model, lat, lon, { fetchFn = defaultFetch, noCache = f
   };
 }
 
-async function fetchAll(lat, lon, { models = MODELS, fetchFn = defaultFetch, noCache = false, days = 7, now = Date.now(), timeoutMs = 15000 } = {}) {
-  return Promise.all(models.map((m) => fetchModel(m, lat, lon, { fetchFn, noCache, days, now, timeoutMs })));
+/** Hakee kaikki mallit, enintään `concurrency` kerrallaan. Tulokset ovat samassa järjestyksessä kuin mallit. */
+async function fetchAll(lat, lon, { models = MODELS, fetchFn = defaultFetch, noCache = false, days = 7, now = Date.now(), timeoutMs = 10000, concurrency = 3, sleepFn } = {}) {
+  const results = new Array(models.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < models.length) {
+      const i = next++;
+      results[i] = await fetchModel(models[i], lat, lon, { fetchFn, noCache, days, now, timeoutMs, ...(sleepFn ? { sleepFn } : {}) });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), models.length) }, worker));
+  return results;
 }
 
 function summarizeErrors(results) {
-  const bad = results.filter((r) => !r.ok && !r.skipped);
+  const bad = results.filter((r) => !r.ok && !r.skipped && !r.coverage);
   if (!bad.length) return 'Ei virheitä';
   const first = bad[0];
   const same = bad.every((r) => r.error === first.error);
@@ -807,11 +842,12 @@ function blendForecast(results) {
       id: r.id,
       ok: !!r.ok,
       skipped: !!r.skipped,
+      coverage: !!r.coverage,
       error: r.error || null,
       ms: r.ms,
     })),
     modelsUsed: ok.length,
-    modelsTotal: results.filter((r) => !r.skipped).length,
+    modelsTotal: results.filter((r) => !r.skipped && !r.coverage).length, // alueellinen malli, joka ei kata paikkaa, ei ole puuttuva malli
   };
 }
 
@@ -857,7 +893,7 @@ function snapshot(fc, idx, frac = 0) {
 /** Jokaisen mallin oma lämpötila nyt (interpoloitu) ja ero yhdistelmään. */
 function modelRows(results, fc, idx, frac, blendTemp) {
   return results.map((r) => {
-    if (!r.ok) return { model: r.model, ok: false, skipped: !!r.skipped, error: r.error };
+    if (!r.ok) return { model: r.model, ok: false, skipped: !!r.skipped, coverage: !!r.coverage, error: r.error };
     const arr = r.data.vars.temperature_2m;
     const at = (i) => {
       const j = fc.align[r.model.key]?.(i);
@@ -2256,7 +2292,8 @@ function modelsHtml({ results, fc, nowMs }) {
   const body = rows
     .map((r) => {
       if (!r.ok) {
-        return `<tr class="off"><th scope="row">${esc(r.model.short)}</th><td colspan="3">${r.skipped ? 'ei saatavilla' : 'ei vastannut'}<small>${esc(r.error || '')}</small></td></tr>`;
+        const state = r.skipped ? 'ei saatavilla' : r.coverage ? 'ei kata tätä paikkaa' : 'ei vastannut';
+        return `<tr class="off"><th scope="row">${esc(r.model.short)}</th><td colspan="3">${state}${r.coverage ? '' : `<small>${esc(r.error || '')}</small>`}</td></tr>`;
       }
       const d = r.delta;
       const cls = r.temp == null ? 'off' : Math.abs(d) <= 1 ? 'ok' : Math.abs(d) <= 2.5 ? 'mid' : 'far';
@@ -2378,7 +2415,7 @@ const { aiSettings, explain, chat, listModels, pickFlash, generate, textOf, comp
 const { makeDemoFetch } = __m['demo'];
 const { selLabel, placeHtml, heroHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml } = __m['views'];
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 
 // ---------- Ympäristö ----------
 
@@ -2604,7 +2641,7 @@ function persistCache() {
   const slim = state.results.map((r) =>
     r.ok
       ? { ok: true, key: r.model.key, id: r.id, data: r.data, ms: r.ms }
-      : { ok: false, key: r.model.key, id: r.id, error: r.error, skipped: !!r.skipped, status: r.status, ms: r.ms },
+      : { ok: false, key: r.model.key, id: r.id, error: r.error, skipped: !!r.skipped, coverage: !!r.coverage, status: r.status, ms: r.ms },
   );
   store.set('cache', { placeKey: placeKey(state.place), fetchedAt: state.fetchedAt, results: slim });
 }
@@ -3099,12 +3136,17 @@ async function runDiagnostics() {
   const results = await fetchAll(p.lat, p.lon, { fetchFn, noCache: true, now: t });
   for (const r of results) {
     if (!r.ok) {
-      push(`  ✗ ${r.model.short} (${r.id}): ${r.skipped ? 'ei saatavilla, ohitettu' : r.error}`);
+      const why = r.skipped ? 'ei saatavilla, ohitettu' : r.coverage ? 'ei kata tätä paikkaa (normaalia alueelliselle mallille)' : r.error;
+      push(`  ${r.coverage ? '–' : '✗'} ${r.model.short} (${r.id}): ${why}`);
       continue;
     }
+    // Sama interpolointi kuin yhdistelmässä, jotta mallien luvut ja yhdistelmä ovat vertailukelpoisia.
     const ln = localNow(t, r.data.tz);
     const i = r.data.time.indexOf(ln.iso.slice(0, 13) + ':00');
-    const v = i >= 0 ? r.data.vars.temperature_2m[i] : null;
+    const arr = r.data.vars.temperature_2m;
+    const a = i >= 0 ? arr[i] : null;
+    const b = i >= 0 && arr[i + 1] != null ? arr[i + 1] : a;
+    const v = a == null ? null : a + (b - a) * (ln.minute / 60);
     push(`  ✓ ${r.model.short} (${r.id}) ${r.ms} ms, nyt ${v == null ? 'ei arvoa' : fmtTemp(v, { digits: 1 })}, aikasarja ${r.data.time[0].slice(5, 10)}…${r.data.time.at(-1).slice(5, 10)}`);
   }
   try {
@@ -3113,7 +3155,7 @@ async function runDiagnostics() {
     const s = snapshot(fc, idx, frac);
     push(`Aikavyöhyke ${fc.tz}, paikallinen aika nyt ${local.iso.slice(11)}`);
     push(`Yhdistelmä nyt: ${fmtTemp(s.temp, { digits: 1 })}, hajonta ${fmtNum(s.spread, 1)}°, ${fc.modelsUsed}/${fc.modelsTotal} mallia`);
-    push('Vertaa tätä lukua Ilmatieteen laitoksen havaintoon lähimmältä asemalta.');
+    push(/suomi|finland/i.test(p.country || '') ? 'Vertaa tätä lukua Ilmatieteen laitoksen havaintoon lähimmältä asemalta.' : 'Vertaa tätä lukua paikalliseen havaintoon tai toiseen sääsovellukseen.');
   } catch (e) {
     push(`Yhdistely epäonnistui: ${e.message}`);
   }
