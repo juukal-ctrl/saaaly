@@ -1313,6 +1313,72 @@ button.chip-sm.active {
   stroke-linejoin: round;
 }
 
+/* Vastausten lähde: kolmen tilan valitsin (chat-paneelissa ja asetuksissa) ja lähdemerkintä vastauksen alla */
+
+.modebar {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  margin: 8px 22px 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.set .modebar {
+  margin: 8px 0 0;
+}
+
+.seg {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 6px;
+  border-radius: 12px;
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.seg[aria-pressed='true'] {
+  background: var(--frost);
+  color: var(--night);
+  font-weight: 600;
+}
+
+.seg.off {
+  color: var(--ink-3);
+  opacity: 0.7;
+}
+
+.seg:not([aria-pressed='true']):active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pill.sm {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13.5px;
+}
+
+.msg .src {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
 /* Käynnistysvirhe (näkyy puhelimessa ilman konsolia) */
 
 #crash {
