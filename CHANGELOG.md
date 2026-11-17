@@ -1,5 +1,14 @@
 # Muutosloki
 
+## 0.3.2 – UI- ja UX-arvioiden korjaukset
+
+- Vastauskaista: takki ja sateenvarjo aina kahdessa sarakkeessa, tutkalause niiden alle; huomiokaista näyttää vakavimman täysrivinä ja loput yhtenä tiivistettynä rivinä. Vastaus mahtuu 360 px:n ruudulle.
+- Uusi Tänään/Huomenna-valinta vastauskaistan otsikossa; chat-ehdotukset päivitetty.
+- Sateenvarjokaistan teksti kertoo, mihin asti sadetta ei ole ja milloin seuraava sade alkaa ("ei sadetta klo 21 asti · seuraava sade huomenna klo 00"). Sadejaksojen päättymisaika on sama kaikissa teksteissä.
+- Jos virallisia varoituksia ei voitu tarkistaa (yhteysvirhe, vanhentunut peili, offline), etusivu kertoo sen ja linkittää Ilmatieteen laitoksen varoituksiin.
+- Paikannimen tunnistus: pienellä kirjoitettu sana ("lapsen", "kotona") ei enää tulkitu paikaksi, paikallissijat ("lapuassa", "lahdessa") toimivat.
+- Valintapainikkeiden korkeus 44 px.
+
 ## 0.3.1 (2026-11)
 
 Korjaukset

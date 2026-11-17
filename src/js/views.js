@@ -150,26 +150,37 @@ const OWN_COVERED_BY = { thunder: /ukkos/i, gust: /tuuli|myrsky|puusk/i, storm: 
 const SEV = { Moderate: ['yellow', 'Keltainen varoitus'], Severe: ['orange', 'Oranssi varoitus'], Extreme: ['red', 'Punainen varoitus'] };
 
 /** Sivun yläreunan huomiokaista: viralliset varoitukset (täytetty väri) ja SääÄlyn omat huomiot (katkoviiva, neutraali). */
-export function alertsHtml({ alerts = [], official = [] }) {
+export function alertsHtml({ alerts = [], official = [], officialState = 'ok' }) {
   const off = official.slice(0, 3);
   // Viralliset ensin. Oma huomio, jonka virallinen varoitus jo kattaa (esim. ukkonen), jätetään pois, ja rivejä on yhteensä enintään kolme,
   // ettei huomiokaista työnnä lämpötilaa ja vastauskaistaa ruudun alareunaan.
   const dup = (a) => off.some((o) => OWN_COVERED_BY[a.key]?.test(o.title || ''));
-  const own = alerts.filter((a) => a.level >= 1 && !dup(a)).slice(0, 3 - off.length);
-  if (!own.length && !off.length) return '';
-  const offRows = off
-    .map((o) => {
-      const [cls, word] = SEV[o.severity] || SEV.Moderate;
-      return `<details class="alert off sev-${cls}"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(word)} · ${esc(o.title)}</b><small>${esc(o.when || '')}</small></span><span class="badge">Ilmatieteen laitos</span>${SVG.caret}</summary><p>${esc(o.text || '')}</p></details>`;
-    })
-    .join('');
-  const ownRows = own
-    .map(
-      (a) =>
-        `<details class="alert own"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')}</small></span><span class="badge">SääÄlyn huomio</span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`,
-    )
-    .join('');
-  return `<div class="alert-list" role="region" aria-label="Säähuomiot">${offRows}${ownRows}</div>`;
+  const unknown = officialState === 'unknown' && !off.length;
+  const own = alerts.filter((a) => a.level >= 1 && !dup(a)).slice(0, 3 - off.length - (unknown ? 1 : 0));
+  if (!own.length && !off.length && !unknown) return '';
+  const rows = [];
+  for (const o of off) {
+    const [cls, word] = SEV[o.severity] || SEV.Moderate;
+    rows.push({
+      title: o.title,
+      html: `<details class="alert off sev-${cls}"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(word)} · ${esc(o.title)}</b><small>${esc(o.when || '')}</small><span class="badge">Ilmatieteen laitos</span></span>${SVG.caret}</summary><p>${esc(o.text || '')}</p></details>`,
+    });
+  }
+  for (const a of own) {
+    rows.push({
+      title: a.title,
+      html: `<details class="alert own"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')}</small><span class="badge">SääÄlyn huomio</span></span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`,
+    });
+  }
+  let body = rows.length ? rows[0].html : '';
+  if (rows.length > 1) {
+    const rest = rows.slice(1);
+    body += `<details class="alert own more-alerts"><summary>${GLYPH.alert}<span class="a-txt"><b>Lisäksi ${rest.length} huomiota</b><small>${esc(rest.map((r) => r.title).join(' · '))}</small></span>${SVG.caret}</summary><div class="more-body">${rest.map((r) => r.html).join('')}</div></details>`;
+  }
+  if (unknown) {
+    body += `<p class="alert-unknown">Virallisia varoituksia ei voitu tarkistaa. <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Katso Ilmatieteen laitoksen varoitukset</a></p>`;
+  }
+  return `<div class="alert-list" role="region" aria-label="Säähuomiot">${body}</div>`;
 }
 
 const ROW_GLYPH = { slippery: 'ice', wind: 'wind', uv: 'uv', frost: 'frost', fog: 'fog' };
@@ -186,12 +197,13 @@ export function verdictHtml({ v, nowcastLine = '' }) {
     .map((c) => `<li class="vrow ${esc(c.level)}">${GLYPH[ROW_GLYPH[c.key]] || SVG.info}<span><b>${esc(c.text)}</b>${c.sub ? `<small>${esc(c.sub)}</small>` : ''}</span></li>`)
     .join('');
   return `
-    <div class="row between v-head"><h2 class="label">Mitä päälle ja mukaan</h2><span class="tag">${esc(v.win.caption)}</span></div>
-    ${nowcastLine ? `<p class="vnow" role="status" aria-live="polite">${GLYPH.radar}<span>${esc(nowcastLine)}</span></p>` : ''}
+    <div class="row between v-head"><h2 class="label">Mitä päälle ja mukaan</h2><div class="modebar v-seg" role="group" aria-label="Ajankohta"><button class="seg" type="button" data-act="vday" data-day="today" aria-pressed="${!tomorrow}">Tänään</button><button class="seg" type="button" data-act="vday" data-day="tomorrow" aria-pressed="${tomorrow}">Huomenna</button></div></div>
+    <p class="fine v-cap">${esc(v.win.caption)}</p>
     <div class="vgrid">
       <button class="vcell coat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${GLYPH.coat}<span><b>${esc(coat.text)}</b><small>${esc(coatSub)}</small></span></button>
       <button class="vcell umb ${esc(umb.level)}" type="button" data-act="ask-open" data-q="${esc(askRain)}">${umbGlyph}<span><b>${esc(umb.text)}</b><small>${esc(umb.sub)}</small></span></button>
     </div>
+    ${nowcastLine ? `<p class="vnow" role="status" aria-live="polite">${GLYPH.radar}<span>${esc(nowcastLine)}</span></p>` : ''}
     ${rows ? `<ul class="vrows">${rows}</ul>` : ''}
     <p class="fine">SääÄlyn oma arvio mallidatasta, ei virallinen ohje.</p>`;
 }
@@ -512,7 +524,7 @@ export function aboutSheetHtml({ version, demo, sources = [] }) {
     </div>`;
 }
 
-export const CHAT_CHIPS = ['Mitä pukisin tänään?', 'Sataako huomenna?', 'Milloin on paras hetki lenkille?', 'Mitä mallit ennustavat huomiselle?', 'Millainen sää on Rovaniemellä?'];
+export const CHAT_CHIPS = ['Mitä pukisin huomenna?', 'Sataako huomenna?', 'Mitä pukisin tänään?', 'Milloin on paras hetki lenkille?', 'Millainen sää on Rovaniemellä?'];
 
 export function chatSheetHtml({ mode = 'internal', hasKey = false, hasMessages = false }) {
   const chips = CHAT_CHIPS.map((q) => `<button class="pill" type="button" data-act="ask" data-q="${esc(q)}">${esc(q)}</button>`).join('');

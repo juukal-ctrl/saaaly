@@ -4,7 +4,7 @@
 // (ctx.geocode, ctx.forecastFor), joten moottori toimii ilman verkkoa ja on testattavissa.
 
 import { parseQuestion } from './nlu.js';
-import { nowPosition, snapshot, SYMBOLS, wetSpans, modelWindow, modelSeries, describeNow, describeDay } from './blend.js';
+import { nowPosition, snapshot, SYMBOLS, wetSpans, rainSpansFrom, modelWindow, modelSeries, describeNow, describeDay } from './blend.js';
 import { sunEvents, dayLengthMs, moonInfo } from './sun.js';
 import { fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, localNow, zonedToUtcMs } from './util.js';
 import { placeKey, haversineKm } from './geo.js';
@@ -1317,7 +1317,7 @@ function composeCompare(loaded, q, nowMs) {
 function rainNowNext(X, w) {
   const { fc } = X;
   const now = w.nowIdx;
-  const spans = wetSpans(fc, now, Math.min(fc.hours.length - 1, now + 47));
+  const spans = rainSpansFrom(fc, now, 47);
   const s0 = spans[0];
   const peak = (s) => Math.max(...fc.hours.slice(s.start, s.end + 1).map((h) => h.precip));
   const endClock = (s) => `noin klo ${pad2((+hh(fc.hours[s.end].t) + 1) % 24)}`;

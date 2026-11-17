@@ -614,6 +614,12 @@ export function popText(h) {
  * ennustaa yhteensä 0,3 mm: yksittäinen eri mieltä oleva malli ei tee sateesta ennustetta.
  * Palauttaa jaksoja, joissa pwin = sateen todennäköisyys jakson aikana ja timingUncertain = mallit ovat eri mieltä alkamisajasta.
  */
+/** Sadejaksot, jotka ALKAVAT horisontin sisällä; loppu saa ylittää sen, jotta eri tekstit kertovat saman päättymisajan. */
+export function rainSpansFrom(fc, fromIdx, horizonH) {
+  const last = fc.hours.length - 1;
+  return wetSpans(fc, fromIdx, Math.min(last, fromIdx + horizonH + 12)).filter((sp) => sp.start <= fromIdx + horizonH);
+}
+
 export function wetSpans(fc, from, to, { minPwin = 0.3 } = {}) {
   const { hours, pm } = fc;
   to = Math.min(to, hours.length - 1);
@@ -746,7 +752,7 @@ export function describeNow(fc, nowMs) {
   const feels = Math.abs(s.feels - s.temp) >= 2 ? `, tuntuu kuin ${fmtTemp(s.feels)}` : '';
   out.push(`${SYMBOLS[s.sym]}, ${fmtTemp(s.temp)}${feels}.`);
   out.push(windText(s));
-  const spans = wetSpans(fc, idx, Math.min(fc.hours.length - 1, idx + 24));
+  const spans = rainSpansFrom(fc, idx, 24);
   if (spans.length) out.push(...spanSentences(spans, local.date, 2, idx));
   else out.push('Seuraavan vuorokauden aikana ei odoteta merkittävää sadetta.');
   const next = fc.hours.slice(idx, idx + 25);

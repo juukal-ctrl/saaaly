@@ -311,13 +311,19 @@ export function ownAlerts(fc, from, to, { month = 6, lat = 60 } = {}) {
  * Ikkuna, jota vastauskaista koskee: aamulla koko päivä, päivällä seuraavat 6 tuntia, illalla ja yöllä huomisen päivä
  * (silloin kysytään yleensä seuraavan päivän pukeutumista). Palauttaa fc.hours-indeksit.
  */
-export function verdictWindow(fc, nowMs) {
+export function verdictWindow(fc, nowMs, force = 'auto') {
   const { idx, local } = nowPosition(fc, nowMs);
   const last = fc.hours.length - 1;
   const h = local.hour;
   const dayStr = local.date;
   const findDay = (date, hour) => fc.hours.findIndex((x) => x.t === `${date}T${String(hour).padStart(2, '0')}:00`);
-  if (h >= 20 || h < 5) {
+  if (force === 'tomorrow') {
+    const date = new Date(Date.parse(dayStr + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10);
+    const a = findDay(date, 7);
+    const b = findDay(date, 17);
+    if (a >= 0 && b >= a) return { from: a, to: b, kind: 'tomorrow', label: 'huomenna', nowIdx: idx, forced: true };
+  }
+  if (force !== 'today' && (h >= 20 || h < 5)) {
     // Yö: huomisen aamusta iltapäivään (jos kello on 00–04, "huomenna" on tämä päivä)
     const date = h >= 20 ? new Date(Date.parse(dayStr + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10) : dayStr;
     const a = findDay(date, 7);
@@ -331,6 +337,19 @@ export function verdictWindow(fc, nowMs) {
   return { from: idx, to: Math.min(last, idx + 6), kind: 'soon', label: 'seuraavat tunnit', nowIdx: idx };
 }
 
+/** "ei sadetta klo 21 asti · seuraava sade huomenna klo 00" tai "sade alkaa jo huomenna klo 00", jos ikkunan ulkopuolinen sade alkaa ennen sitä. */
+function dryText(fc, win, nowIdx, today) {
+  const { from, to } = win;
+  const last = fc.hours.length - 1;
+  if (win.kind === 'tomorrow' || win.kind === 'day') {
+    const pre = wetSpans(fc, Math.max(0, from - 4), to).find((sp) => sp.start < from && sp.end >= from - 1);
+    if (pre) return `sade alkaa jo ${spanLabel(fc, pre.start, pre.end, today)}`;
+  }
+  const next = to < last ? wetSpans(fc, to + 1, Math.min(last, to + 36))[0] : null;
+  const base = `ei sadetta klo ${endHour(fc.hours[to].t)} asti`;
+  return next ? `${base} · seuraava sade ${spanLabel(fc, next.start, next.end, today)}` : base;
+}
+
 const pad2 = (n) => String(n).padStart(2, '0');
 
 /**
@@ -339,7 +358,7 @@ const pad2 = (n) => String(n).padStart(2, '0');
  * opts.nowcast: tutkaennuste (nowcast.js) jos saatavilla; opts.month, opts.lat; opts.activity, opts.sensitivity.
  */
 export function verdict(fc, nowMs, opts = {}) {
-  const win = verdictWindow(fc, nowMs);
+  const win = verdictWindow(fc, nowMs, opts.window);
   const { from, to, nowIdx } = win;
   const today = fc.hours[nowIdx].t.slice(0, 10);
   const month = opts.month ?? +today.slice(5, 7);
@@ -380,7 +399,7 @@ export function verdict(fc, nowMs, opts = {}) {
   let part;
   if (level === 'no') {
     text = 'Ei sateenvarjoa';
-    sub = 'ei sadetta odotettavissa';
+    sub = dryText(fc, win, nowIdx, today);
     part = 'Sateenvarjoa ei tarvita';
   } else if (u.kind === 'snow') {
     text = level === 'yes' ? 'Lunta tulossa' : 'Lumikuuron mahdollisuus';

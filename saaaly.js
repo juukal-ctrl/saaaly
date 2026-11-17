@@ -1320,6 +1320,12 @@ function popText(h) {
  * ennustaa yhteensä 0,3 mm: yksittäinen eri mieltä oleva malli ei tee sateesta ennustetta.
  * Palauttaa jaksoja, joissa pwin = sateen todennäköisyys jakson aikana ja timingUncertain = mallit ovat eri mieltä alkamisajasta.
  */
+/** Sadejaksot, jotka ALKAVAT horisontin sisällä; loppu saa ylittää sen, jotta eri tekstit kertovat saman päättymisajan. */
+function rainSpansFrom(fc, fromIdx, horizonH) {
+  const last = fc.hours.length - 1;
+  return wetSpans(fc, fromIdx, Math.min(last, fromIdx + horizonH + 12)).filter((sp) => sp.start <= fromIdx + horizonH);
+}
+
 function wetSpans(fc, from, to, { minPwin = 0.3 } = {}) {
   const { hours, pm } = fc;
   to = Math.min(to, hours.length - 1);
@@ -1452,7 +1458,7 @@ function describeNow(fc, nowMs) {
   const feels = Math.abs(s.feels - s.temp) >= 2 ? `, tuntuu kuin ${fmtTemp(s.feels)}` : '';
   out.push(`${SYMBOLS[s.sym]}, ${fmtTemp(s.temp)}${feels}.`);
   out.push(windText(s));
-  const spans = wetSpans(fc, idx, Math.min(fc.hours.length - 1, idx + 24));
+  const spans = rainSpansFrom(fc, idx, 24);
   if (spans.length) out.push(...spanSentences(spans, local.date, 2, idx));
   else out.push('Seuraavan vuorokauden aikana ei odoteta merkittävää sadetta.');
   const next = fc.hours.slice(idx, idx + 25);
@@ -1484,7 +1490,7 @@ function describeDay(fc, date, nowMs) {
   out.push(`Tuuli enimmillään ${fmtNum(d.wind)} m/s, puuskissa ${fmtNum(d.gust)} m/s.`);
   return out;
 }
-return { SYMBOLS, median, wMedian, wMean, wQuantile, combine, phaseShare, windowPopPm, cloudSymbol, pickSymbol, blendForecast, nowPosition, snapshot, modelRows, modelSeries, modelWindow, modelDaily, confidence, popPct, popText, wetSpans, hh, endHour, whenLabel, spanLabel, describeNow, describeHour, describeDay };
+return { SYMBOLS, median, wMedian, wMean, wQuantile, combine, phaseShare, windowPopPm, cloudSymbol, pickSymbol, blendForecast, nowPosition, snapshot, modelRows, modelSeries, modelWindow, modelDaily, confidence, popPct, popText, rainSpansFrom, wetSpans, hh, endHour, whenLabel, spanLabel, describeNow, describeHour, describeDay };
 })();
 
 // ---- geo.js ----
@@ -2921,7 +2927,7 @@ const FI_EXTRA = [
 const ALIASES = {
   hesa: 'Helsinki', stadi: 'Helsinki', stad: 'Helsinki', hki: 'Helsinki', helsingfors: 'Helsinki',
   tampesteri: 'Tampere', tre: 'Tampere', tammerfors: 'Tampere',
-  tku: 'Turku', abo: 'Turku',
+  tku: 'Turku', abo: 'Turku', turu: 'Turku', lahde: 'Lahti', lahte: 'Lahti', // astevaihtelun vartalot (turussa, lahdessa)
   rova: 'Rovaniemi', roi: 'Rovaniemi',
   jkl: 'Jyväskylä', jyska: 'Jyväskylä', jyskä: 'Jyväskylä',
   lappee: 'Lappeenranta', villmanstrand: 'Lappeenranta',
@@ -2939,6 +2945,9 @@ const CASE_SUFFIXES = [
 ];
 
 /** Puhekielen paikkapäätteet ("Turus", "Oulust", "Tampereel", "Rovaniemelt"). Vain isolla alkukirjaimella kirjoitetuille sanoille. */
+/** Pienellä alkukirjaimella kirjoitettu sana tulkitaan paikaksi vain paikallissijoissa; genetiivi/partitiivi ("lapsen", "kotona") vaatisi isoa alkukirjainta. */
+const LOCATIVE_SUFFIXES = ['issa', 'issä', 'ista', 'istä', 'illa', 'illä', 'ille', 'ilta', 'iltä', 'ssa', 'ssä', 'sta', 'stä', 'lla', 'llä', 'lta', 'ltä', 'lle', 'iin', 'hin', 'seen', 'uun', 'oon', 'aan', 'ään', 'yyn', 'öön'];
+
 const COLLOQ_SUFFIXES = ['st', 'lt', 's', 'l'];
 
 const lower = (s) => String(s).toLocaleLowerCase('fi-FI');
@@ -3009,12 +3018,12 @@ function findOffline(word) {
     let score = -1;
     if (w === c.key) score = 1000;
     else {
-      const sufs = capital ? [...CASE_SUFFIXES.map(fold), ...COLLOQ_SUFFIXES] : CASE_SUFFIXES.map(fold);
+      const sufs = capital ? [...CASE_SUFFIXES.map(fold), ...COLLOQ_SUFFIXES] : LOCATIVE_SUFFIXES.map(fold);
       for (const suf of sufs) {
         if (w.length - suf.length < 3 || !w.endsWith(suf)) continue;
         const stem = w.slice(0, -suf.length);
         const cp = commonPrefix(stem, c.key);
-        if (cp < Math.max(3, c.key.length - 2)) continue;
+        if (cp < Math.max(3, c.key.length - (c.key.length <= 5 ? 1 : 2))) continue;
         if (stem.length > c.key.length + 2 || stem.length < c.key.length - 3) continue;
         score = Math.max(score, cp * 10 - Math.abs(stem.length - c.key.length) - (COLLOQ_SUFFIXES.includes(suf) ? 1 : 0));
       }
@@ -3040,7 +3049,7 @@ function findOffline(word) {
   }
   return null;
 }
-return { FOREIGN_CITIES, FI_EXTRA, ALIASES, CASE_SUFFIXES, COLLOQ_SUFFIXES, lower, fold, editDistance, findOffline };
+return { FOREIGN_CITIES, FI_EXTRA, ALIASES, CASE_SUFFIXES, LOCATIVE_SUFFIXES, COLLOQ_SUFFIXES, lower, fold, editDistance, findOffline };
 })();
 
 // ---- nlu.js ----
@@ -3899,13 +3908,19 @@ function ownAlerts(fc, from, to, { month = 6, lat = 60 } = {}) {
  * Ikkuna, jota vastauskaista koskee: aamulla koko päivä, päivällä seuraavat 6 tuntia, illalla ja yöllä huomisen päivä
  * (silloin kysytään yleensä seuraavan päivän pukeutumista). Palauttaa fc.hours-indeksit.
  */
-function verdictWindow(fc, nowMs) {
+function verdictWindow(fc, nowMs, force = 'auto') {
   const { idx, local } = nowPosition(fc, nowMs);
   const last = fc.hours.length - 1;
   const h = local.hour;
   const dayStr = local.date;
   const findDay = (date, hour) => fc.hours.findIndex((x) => x.t === `${date}T${String(hour).padStart(2, '0')}:00`);
-  if (h >= 20 || h < 5) {
+  if (force === 'tomorrow') {
+    const date = new Date(Date.parse(dayStr + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10);
+    const a = findDay(date, 7);
+    const b = findDay(date, 17);
+    if (a >= 0 && b >= a) return { from: a, to: b, kind: 'tomorrow', label: 'huomenna', nowIdx: idx, forced: true };
+  }
+  if (force !== 'today' && (h >= 20 || h < 5)) {
     // Yö: huomisen aamusta iltapäivään (jos kello on 00–04, "huomenna" on tämä päivä)
     const date = h >= 20 ? new Date(Date.parse(dayStr + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10) : dayStr;
     const a = findDay(date, 7);
@@ -3919,6 +3934,19 @@ function verdictWindow(fc, nowMs) {
   return { from: idx, to: Math.min(last, idx + 6), kind: 'soon', label: 'seuraavat tunnit', nowIdx: idx };
 }
 
+/** "ei sadetta klo 21 asti · seuraava sade huomenna klo 00" tai "sade alkaa jo huomenna klo 00", jos ikkunan ulkopuolinen sade alkaa ennen sitä. */
+function dryText(fc, win, nowIdx, today) {
+  const { from, to } = win;
+  const last = fc.hours.length - 1;
+  if (win.kind === 'tomorrow' || win.kind === 'day') {
+    const pre = wetSpans(fc, Math.max(0, from - 4), to).find((sp) => sp.start < from && sp.end >= from - 1);
+    if (pre) return `sade alkaa jo ${spanLabel(fc, pre.start, pre.end, today)}`;
+  }
+  const next = to < last ? wetSpans(fc, to + 1, Math.min(last, to + 36))[0] : null;
+  const base = `ei sadetta klo ${endHour(fc.hours[to].t)} asti`;
+  return next ? `${base} · seuraava sade ${spanLabel(fc, next.start, next.end, today)}` : base;
+}
+
 const pad2 = (n) => String(n).padStart(2, '0');
 
 /**
@@ -3927,7 +3955,7 @@ const pad2 = (n) => String(n).padStart(2, '0');
  * opts.nowcast: tutkaennuste (nowcast.js) jos saatavilla; opts.month, opts.lat; opts.activity, opts.sensitivity.
  */
 function verdict(fc, nowMs, opts = {}) {
-  const win = verdictWindow(fc, nowMs);
+  const win = verdictWindow(fc, nowMs, opts.window);
   const { from, to, nowIdx } = win;
   const today = fc.hours[nowIdx].t.slice(0, 10);
   const month = opts.month ?? +today.slice(5, 7);
@@ -3968,7 +3996,7 @@ function verdict(fc, nowMs, opts = {}) {
   let part;
   if (level === 'no') {
     text = 'Ei sateenvarjoa';
-    sub = 'ei sadetta odotettavissa';
+    sub = dryText(fc, win, nowIdx, today);
     part = 'Sateenvarjoa ei tarvita';
   } else if (u.kind === 'snow') {
     text = level === 'yes' ? 'Lunta tulossa' : 'Lumikuuron mahdollisuus';
@@ -4023,7 +4051,7 @@ __m['answer'] = (() => {
 // (ctx.geocode, ctx.forecastFor), joten moottori toimii ilman verkkoa ja on testattavissa.
 
 const { parseQuestion } = __m['nlu'];
-const { nowPosition, snapshot, SYMBOLS, wetSpans, modelWindow, modelSeries, describeNow, describeDay } = __m['blend'];
+const { nowPosition, snapshot, SYMBOLS, wetSpans, rainSpansFrom, modelWindow, modelSeries, describeNow, describeDay } = __m['blend'];
 const { sunEvents, dayLengthMs, moonInfo } = __m['sun'];
 const { fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, localNow, zonedToUtcMs } = __m['util'];
 const { placeKey, haversineKm } = __m['geo'];
@@ -5336,7 +5364,7 @@ function composeCompare(loaded, q, nowMs) {
 function rainNowNext(X, w) {
   const { fc } = X;
   const now = w.nowIdx;
-  const spans = wetSpans(fc, now, Math.min(fc.hours.length - 1, now + 47));
+  const spans = rainSpansFrom(fc, now, 47);
   const s0 = spans[0];
   const peak = (s) => Math.max(...fc.hours.slice(s.start, s.end + 1).map((h) => h.precip));
   const endClock = (s) => `noin klo ${pad2((+hh(fc.hours[s.end].t) + 1) % 24)}`;
@@ -6559,26 +6587,37 @@ const OWN_COVERED_BY = { thunder: /ukkos/i, gust: /tuuli|myrsky|puusk/i, storm: 
 const SEV = { Moderate: ['yellow', 'Keltainen varoitus'], Severe: ['orange', 'Oranssi varoitus'], Extreme: ['red', 'Punainen varoitus'] };
 
 /** Sivun yläreunan huomiokaista: viralliset varoitukset (täytetty väri) ja SääÄlyn omat huomiot (katkoviiva, neutraali). */
-function alertsHtml({ alerts = [], official = [] }) {
+function alertsHtml({ alerts = [], official = [], officialState = 'ok' }) {
   const off = official.slice(0, 3);
   // Viralliset ensin. Oma huomio, jonka virallinen varoitus jo kattaa (esim. ukkonen), jätetään pois, ja rivejä on yhteensä enintään kolme,
   // ettei huomiokaista työnnä lämpötilaa ja vastauskaistaa ruudun alareunaan.
   const dup = (a) => off.some((o) => OWN_COVERED_BY[a.key]?.test(o.title || ''));
-  const own = alerts.filter((a) => a.level >= 1 && !dup(a)).slice(0, 3 - off.length);
-  if (!own.length && !off.length) return '';
-  const offRows = off
-    .map((o) => {
-      const [cls, word] = SEV[o.severity] || SEV.Moderate;
-      return `<details class="alert off sev-${cls}"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(word)} · ${esc(o.title)}</b><small>${esc(o.when || '')}</small></span><span class="badge">Ilmatieteen laitos</span>${SVG.caret}</summary><p>${esc(o.text || '')}</p></details>`;
-    })
-    .join('');
-  const ownRows = own
-    .map(
-      (a) =>
-        `<details class="alert own"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')}</small></span><span class="badge">SääÄlyn huomio</span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`,
-    )
-    .join('');
-  return `<div class="alert-list" role="region" aria-label="Säähuomiot">${offRows}${ownRows}</div>`;
+  const unknown = officialState === 'unknown' && !off.length;
+  const own = alerts.filter((a) => a.level >= 1 && !dup(a)).slice(0, 3 - off.length - (unknown ? 1 : 0));
+  if (!own.length && !off.length && !unknown) return '';
+  const rows = [];
+  for (const o of off) {
+    const [cls, word] = SEV[o.severity] || SEV.Moderate;
+    rows.push({
+      title: o.title,
+      html: `<details class="alert off sev-${cls}"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(word)} · ${esc(o.title)}</b><small>${esc(o.when || '')}</small><span class="badge">Ilmatieteen laitos</span></span>${SVG.caret}</summary><p>${esc(o.text || '')}</p></details>`,
+    });
+  }
+  for (const a of own) {
+    rows.push({
+      title: a.title,
+      html: `<details class="alert own"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')}</small><span class="badge">SääÄlyn huomio</span></span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`,
+    });
+  }
+  let body = rows.length ? rows[0].html : '';
+  if (rows.length > 1) {
+    const rest = rows.slice(1);
+    body += `<details class="alert own more-alerts"><summary>${GLYPH.alert}<span class="a-txt"><b>Lisäksi ${rest.length} huomiota</b><small>${esc(rest.map((r) => r.title).join(' · '))}</small></span>${SVG.caret}</summary><div class="more-body">${rest.map((r) => r.html).join('')}</div></details>`;
+  }
+  if (unknown) {
+    body += `<p class="alert-unknown">Virallisia varoituksia ei voitu tarkistaa. <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Katso Ilmatieteen laitoksen varoitukset</a></p>`;
+  }
+  return `<div class="alert-list" role="region" aria-label="Säähuomiot">${body}</div>`;
 }
 
 const ROW_GLYPH = { slippery: 'ice', wind: 'wind', uv: 'uv', frost: 'frost', fog: 'fog' };
@@ -6595,12 +6634,13 @@ function verdictHtml({ v, nowcastLine = '' }) {
     .map((c) => `<li class="vrow ${esc(c.level)}">${GLYPH[ROW_GLYPH[c.key]] || SVG.info}<span><b>${esc(c.text)}</b>${c.sub ? `<small>${esc(c.sub)}</small>` : ''}</span></li>`)
     .join('');
   return `
-    <div class="row between v-head"><h2 class="label">Mitä päälle ja mukaan</h2><span class="tag">${esc(v.win.caption)}</span></div>
-    ${nowcastLine ? `<p class="vnow" role="status" aria-live="polite">${GLYPH.radar}<span>${esc(nowcastLine)}</span></p>` : ''}
+    <div class="row between v-head"><h2 class="label">Mitä päälle ja mukaan</h2><div class="modebar v-seg" role="group" aria-label="Ajankohta"><button class="seg" type="button" data-act="vday" data-day="today" aria-pressed="${!tomorrow}">Tänään</button><button class="seg" type="button" data-act="vday" data-day="tomorrow" aria-pressed="${tomorrow}">Huomenna</button></div></div>
+    <p class="fine v-cap">${esc(v.win.caption)}</p>
     <div class="vgrid">
       <button class="vcell coat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${GLYPH.coat}<span><b>${esc(coat.text)}</b><small>${esc(coatSub)}</small></span></button>
       <button class="vcell umb ${esc(umb.level)}" type="button" data-act="ask-open" data-q="${esc(askRain)}">${umbGlyph}<span><b>${esc(umb.text)}</b><small>${esc(umb.sub)}</small></span></button>
     </div>
+    ${nowcastLine ? `<p class="vnow" role="status" aria-live="polite">${GLYPH.radar}<span>${esc(nowcastLine)}</span></p>` : ''}
     ${rows ? `<ul class="vrows">${rows}</ul>` : ''}
     <p class="fine">SääÄlyn oma arvio mallidatasta, ei virallinen ohje.</p>`;
 }
@@ -6921,7 +6961,7 @@ function aboutSheetHtml({ version, demo, sources = [] }) {
     </div>`;
 }
 
-const CHAT_CHIPS = ['Mitä pukisin tänään?', 'Sataako huomenna?', 'Milloin on paras hetki lenkille?', 'Mitä mallit ennustavat huomiselle?', 'Millainen sää on Rovaniemellä?'];
+const CHAT_CHIPS = ['Mitä pukisin huomenna?', 'Sataako huomenna?', 'Mitä pukisin tänään?', 'Milloin on paras hetki lenkille?', 'Millainen sää on Rovaniemellä?'];
 
 function chatSheetHtml({ mode = 'internal', hasKey = false, hasMessages = false }) {
   const chips = CHAT_CHIPS.map((q) => `<button class="pill" type="button" data-act="ask" data-q="${esc(q)}">${esc(q)}</button>`).join('');
@@ -6975,8 +7015,8 @@ const { fetchWarnings, officialRows, inFinland, MIRROR_URL } = __m['warnings'];
 const { makeDemoFetch } = __m['demo'];
 const { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
 
-const VERSION = '0.3.1';
-const BUILD = '1e6b1498fc'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
+const VERSION = '0.3.2';
+const BUILD = '641190df0f'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
 // ---------- Ympäristö ----------
@@ -7051,6 +7091,7 @@ const state = {
   banner: null,
   first: false, // ensimmäinen käynnistys: näytetään paikan valintakortti, eikä sijaintilupaa kysytä ennen kuin käyttäjä painaa
   sens: Math.max(-3, Math.min(3, store.num('sens', 0))), // kylmänsietokyky: −3 (palelen helposti) … +3 (kestän kylmää)
+  vday: 'auto', // vastauskaistan ajankohta: 'auto' | 'today' | 'tomorrow'
   mg: { range: Object.hasOwn(MG_RANGES, store.str('mgRange', '24h')) ? store.str('mgRange', '24h') : '24h', inspectIso: null }, // sääkaavio: aikaväli ja tarkastettu hetki
   nowcast: null, // tutkaennusteen tulkinta nykyhetkelle (nowcast.js), jos saatavilla
   nc: { raw: null, key: '', at: 0, ttl: 0 }, // viimeisin haettu tutkaennuste, paikka ja haun ajankohta
@@ -7126,13 +7167,13 @@ function renderAdvice(fc, now) {
   state.nowcast = currentNowcast(now);
   state.official = currentOfficial(now);
   try {
-    v = verdict(fc, now, { lat: state.place?.lat, sensitivity: state.sens, nowcast: state.nowcast });
+    v = verdict(fc, now, { window: state.vday, lat: state.place?.lat, sensitivity: state.sens, nowcast: state.nowcast });
   } catch {
     v = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
   }
   el.verdict.hidden = !v;
   patch('verdict', el.verdict, v ? verdictHtml({ v, nowcastLine: state.nowcast?.ok && v.win?.kind !== 'tomorrow' ? state.nowcast.line : '' }) : '');
-  const html = v ? alertsHtml({ alerts: v.alerts, official: state.official }) : '';
+  const html = v ? alertsHtml({ alerts: v.alerts, official: state.official, officialState: officialState(now) }) : '';
   el.alerts.hidden = !html;
   patch('alerts', el.alerts, html);
 }
@@ -7184,6 +7225,18 @@ function currentOfficial(now) {
   }
 }
 
+/** Onko virallisten varoitusten tila tiedossa? 'unknown' = niitä ei voitu tarkistaa (haku epäonnistui, peili vanhentunut tai laite offline). */
+function officialState(now) {
+  const p = state.place;
+  if (!p || !inFinland(p.lat, p.lon)) return 'ok';
+  const st = sources.status('warnings');
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  if (state.warn.stale) return 'unknown';
+  if (state.warn.at && now - state.warn.at > 6 * 3600000) return 'unknown';
+  if (!state.warn.raw) return offline || Number(st.lastFail) > (Number(st.lastOk) || 0) ? 'unknown' : 'ok';
+  return Number(st.lastFail) > (Number(st.lastOk) || 0) && now - state.warn.at > 30 * 60000 ? 'unknown' : 'ok';
+}
+
 /** Hakee Ilmatieteen laitoksen varoitussyötteen, jos edellinen on vanha. Hiljainen varmistus kuten tutkaennusteessa; Suomen ulkopuolella ei haeta. */
 async function refreshWarnings({ ignoreAge = false } = {}) {
   const p = state.place;
@@ -7194,7 +7247,7 @@ async function refreshWarnings({ ignoreAge = false } = {}) {
   try {
     const r = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn, now }), { now });
     // Vanhentunut peili (value null) ei ole virhe, mutta uutta tietoa ei ole: edellinen lista jää voimaan ja seuraavaa hakua odotetaan normaalisti
-    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now };
+    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now, stale: !r.value, fetchedAt: r.value ? r.value.fetchedAt : state.warn.fetchedAt };
   } finally {
     warnBusy = false;
   }
@@ -8269,6 +8322,10 @@ const ACTIONS = {
   now: () => select({ type: 'now' }),
   hour: (t) => select({ type: 'hour', iso: t.dataset.iso }),
   day: (t) => select({ type: 'day', date: t.dataset.date }),
+  vday: (t) => {
+    state.vday = t.dataset.day === 'tomorrow' ? 'tomorrow' : 'today';
+    if (state.fc) renderAdvice(state.fc, nowMs());
+  },
   'ai-run': () => runAi({ force: true }),
   pick: (t) => pickPlace(state.found[+t.dataset.i]),
   'pick-recent': (t) => pickPlace(state.recent[+t.dataset.i]),

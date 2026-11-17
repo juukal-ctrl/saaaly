@@ -18,7 +18,7 @@ import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.j
 import { makeDemoFetch } from './demo.js';
 import { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 
-const VERSION = '0.3.1';
+const VERSION = '0.3.2';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
@@ -94,6 +94,7 @@ const state = {
   banner: null,
   first: false, // ensimmäinen käynnistys: näytetään paikan valintakortti, eikä sijaintilupaa kysytä ennen kuin käyttäjä painaa
   sens: Math.max(-3, Math.min(3, store.num('sens', 0))), // kylmänsietokyky: −3 (palelen helposti) … +3 (kestän kylmää)
+  vday: 'auto', // vastauskaistan ajankohta: 'auto' | 'today' | 'tomorrow'
   mg: { range: Object.hasOwn(MG_RANGES, store.str('mgRange', '24h')) ? store.str('mgRange', '24h') : '24h', inspectIso: null }, // sääkaavio: aikaväli ja tarkastettu hetki
   nowcast: null, // tutkaennusteen tulkinta nykyhetkelle (nowcast.js), jos saatavilla
   nc: { raw: null, key: '', at: 0, ttl: 0 }, // viimeisin haettu tutkaennuste, paikka ja haun ajankohta
@@ -169,13 +170,13 @@ function renderAdvice(fc, now) {
   state.nowcast = currentNowcast(now);
   state.official = currentOfficial(now);
   try {
-    v = verdict(fc, now, { lat: state.place?.lat, sensitivity: state.sens, nowcast: state.nowcast });
+    v = verdict(fc, now, { window: state.vday, lat: state.place?.lat, sensitivity: state.sens, nowcast: state.nowcast });
   } catch {
     v = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
   }
   el.verdict.hidden = !v;
   patch('verdict', el.verdict, v ? verdictHtml({ v, nowcastLine: state.nowcast?.ok && v.win?.kind !== 'tomorrow' ? state.nowcast.line : '' }) : '');
-  const html = v ? alertsHtml({ alerts: v.alerts, official: state.official }) : '';
+  const html = v ? alertsHtml({ alerts: v.alerts, official: state.official, officialState: officialState(now) }) : '';
   el.alerts.hidden = !html;
   patch('alerts', el.alerts, html);
 }
@@ -227,6 +228,18 @@ function currentOfficial(now) {
   }
 }
 
+/** Onko virallisten varoitusten tila tiedossa? 'unknown' = niitä ei voitu tarkistaa (haku epäonnistui, peili vanhentunut tai laite offline). */
+function officialState(now) {
+  const p = state.place;
+  if (!p || !inFinland(p.lat, p.lon)) return 'ok';
+  const st = sources.status('warnings');
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  if (state.warn.stale) return 'unknown';
+  if (state.warn.at && now - state.warn.at > 6 * 3600000) return 'unknown';
+  if (!state.warn.raw) return offline || Number(st.lastFail) > (Number(st.lastOk) || 0) ? 'unknown' : 'ok';
+  return Number(st.lastFail) > (Number(st.lastOk) || 0) && now - state.warn.at > 30 * 60000 ? 'unknown' : 'ok';
+}
+
 /** Hakee Ilmatieteen laitoksen varoitussyötteen, jos edellinen on vanha. Hiljainen varmistus kuten tutkaennusteessa; Suomen ulkopuolella ei haeta. */
 async function refreshWarnings({ ignoreAge = false } = {}) {
   const p = state.place;
@@ -237,7 +250,7 @@ async function refreshWarnings({ ignoreAge = false } = {}) {
   try {
     const r = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn, now }), { now });
     // Vanhentunut peili (value null) ei ole virhe, mutta uutta tietoa ei ole: edellinen lista jää voimaan ja seuraavaa hakua odotetaan normaalisti
-    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now };
+    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now, stale: !r.value, fetchedAt: r.value ? r.value.fetchedAt : state.warn.fetchedAt };
   } finally {
     warnBusy = false;
   }
@@ -1312,6 +1325,10 @@ const ACTIONS = {
   now: () => select({ type: 'now' }),
   hour: (t) => select({ type: 'hour', iso: t.dataset.iso }),
   day: (t) => select({ type: 'day', date: t.dataset.date }),
+  vday: (t) => {
+    state.vday = t.dataset.day === 'tomorrow' ? 'tomorrow' : 'today';
+    if (state.fc) renderAdvice(state.fc, nowMs());
+  },
   'ai-run': () => runAi({ force: true }),
   pick: (t) => pickPlace(state.found[+t.dataset.i]),
   'pick-recent': (t) => pickPlace(state.recent[+t.dataset.i]),

@@ -126,7 +126,7 @@ export const FI_EXTRA = [
 export const ALIASES = {
   hesa: 'Helsinki', stadi: 'Helsinki', stad: 'Helsinki', hki: 'Helsinki', helsingfors: 'Helsinki',
   tampesteri: 'Tampere', tre: 'Tampere', tammerfors: 'Tampere',
-  tku: 'Turku', abo: 'Turku',
+  tku: 'Turku', abo: 'Turku', turu: 'Turku', lahde: 'Lahti', lahte: 'Lahti', // astevaihtelun vartalot (turussa, lahdessa)
   rova: 'Rovaniemi', roi: 'Rovaniemi',
   jkl: 'Jyväskylä', jyska: 'Jyväskylä', jyskä: 'Jyväskylä',
   lappee: 'Lappeenranta', villmanstrand: 'Lappeenranta',
@@ -144,6 +144,9 @@ export const CASE_SUFFIXES = [
 ];
 
 /** Puhekielen paikkapäätteet ("Turus", "Oulust", "Tampereel", "Rovaniemelt"). Vain isolla alkukirjaimella kirjoitetuille sanoille. */
+/** Pienellä alkukirjaimella kirjoitettu sana tulkitaan paikaksi vain paikallissijoissa; genetiivi/partitiivi ("lapsen", "kotona") vaatisi isoa alkukirjainta. */
+export const LOCATIVE_SUFFIXES = ['issa', 'issä', 'ista', 'istä', 'illa', 'illä', 'ille', 'ilta', 'iltä', 'ssa', 'ssä', 'sta', 'stä', 'lla', 'llä', 'lta', 'ltä', 'lle', 'iin', 'hin', 'seen', 'uun', 'oon', 'aan', 'ään', 'yyn', 'öön'];
+
 export const COLLOQ_SUFFIXES = ['st', 'lt', 's', 'l'];
 
 export const lower = (s) => String(s).toLocaleLowerCase('fi-FI');
@@ -214,12 +217,12 @@ export function findOffline(word) {
     let score = -1;
     if (w === c.key) score = 1000;
     else {
-      const sufs = capital ? [...CASE_SUFFIXES.map(fold), ...COLLOQ_SUFFIXES] : CASE_SUFFIXES.map(fold);
+      const sufs = capital ? [...CASE_SUFFIXES.map(fold), ...COLLOQ_SUFFIXES] : LOCATIVE_SUFFIXES.map(fold);
       for (const suf of sufs) {
         if (w.length - suf.length < 3 || !w.endsWith(suf)) continue;
         const stem = w.slice(0, -suf.length);
         const cp = commonPrefix(stem, c.key);
-        if (cp < Math.max(3, c.key.length - 2)) continue;
+        if (cp < Math.max(3, c.key.length - (c.key.length <= 5 ? 1 : 2))) continue;
         if (stem.length > c.key.length + 2 || stem.length < c.key.length - 3) continue;
         score = Math.max(score, cp * 10 - Math.abs(stem.length - c.key.length) - (COLLOQ_SUFFIXES.includes(suf) ? 1 : 0));
       }
