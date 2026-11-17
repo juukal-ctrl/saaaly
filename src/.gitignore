@@ -1,0 +1,7 @@
+# Generoidut tiedostot (tehdään komennolla: node tools/build.mjs)
+/saaaly.js
+/esikatselu.html
+/dist/
+/julkaise/
+__pycache__/
+node_modules/

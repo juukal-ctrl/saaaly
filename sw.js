@@ -1,22 +1,27 @@
-// sw.js: pitää sovelluksen kuoren saatavilla ilman verkkoa. Verkko ensin, välimuisti varana,
-// joten uusi versio tulee käyttöön heti kun se on julkaistu. Sää- ja tekoälykutsut eivät kulje tämän kautta.
+// sw.js: pitää sovelluksen kuoren saatavilla ilman verkkoa. Verkko ensin (enintään 3 s), välimuisti varana,
+// joten uusi versio tulee käyttöön heti kun se on julkaistu eikä hidas verkko viivytä käynnistystä.
+// Sää- ja tekoälykutsut eivät kulje tämän kautta. Käännös korvaa BUILD-tunnuksen (tools/build.mjs).
 
-const CACHE = 'saaaly-shell-v1';
-const SHELL = ['./', 'index.html', 'saaaly.js', 'app.css', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
+const BUILD = '1271d665fc';
+const CACHE = 'saaaly-' + BUILD;
+const SHELL = ['./', 'index.html', 'crash.js', 'saaaly.js', 'app.css', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
+const NET_TIMEOUT_MS = 3000;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE)
-      .then((cache) => Promise.allSettled(SHELL.map((url) => cache.add(new Request(url, { cache: 'reload' })))))
-      .then(() => self.skipWaiting()),
+    (async () => {
+      const cache = await caches.open(CACHE);
+      // addAll on atomista: jos yksikin tiedosto puuttuu, asennus epäonnistuu ja vanha versio jää käyttöön (ei osittaista kuorta).
+      await cache.addAll(SHELL.map((url) => new Request(url, { cache: 'reload' })));
+      await self.skipWaiting();
+    })(),
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
-      for (const key of await caches.keys()) if (key !== CACHE) await caches.delete(key);
+      for (const key of await caches.keys()) if (key.startsWith('saaaly-') && key !== CACHE) await caches.delete(key);
       await self.clients.claim();
     })(),
   );
@@ -27,18 +32,30 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // rajapintakutsut menevät suoraan verkkoon
+  if (url.pathname.endsWith('/version.json')) return; // versiotarkistus kysytään aina verkosta
   event.respondWith(networkFirst(req));
 });
 
 async function networkFirst(req) {
   const cache = await caches.open(CACHE);
+  let res = null;
   try {
-    const res = await fetch(req, { cache: 'no-cache' });
-    if (res.ok) cache.put(req, res.clone());
-    return res;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), NET_TIMEOUT_MS);
+    try {
+      res = await fetch(req, { cache: 'no-cache', signal: ctl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
-    const hit = (await cache.match(req, { ignoreSearch: true })) || (req.mode === 'navigate' ? await cache.match('index.html') : null);
-    if (hit) return hit;
-    return new Response('Ei verkkoyhteyttä', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+    res = null; // ei verkkoa tai liian hidas
   }
+  if (res && res.ok) {
+    cache.put(req, res.clone());
+    return res;
+  }
+  // Verkko ei toimi tai palautti virheen (404, 5xx): tallennettu kopio on parempi kuin virhesivu.
+  const hit = (await cache.match(req, { ignoreSearch: true })) || (req.mode === 'navigate' ? await cache.match('index.html') : null);
+  if (hit) return hit;
+  return res || new Response('Ei verkkoyhteyttä', { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8' } });
 }
