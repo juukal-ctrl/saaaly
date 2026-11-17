@@ -12,13 +12,13 @@ import { RANGES as MG_RANGES } from './meteogram.js';
 import { aiSettings, effectiveMode, shortReason, explain, chat, listModels, pickFlash, generate, textOf, compactForecast, placeLabel } from './ai.js';
 import { answerQuestion } from './answer.js';
 import { verdict } from './advice.js';
-import { fetchNowcast, summarizeNowcast } from './nowcast.js';
+import { fetchNowcast, summarizeNowcast, nowcastUrl } from './nowcast.js';
 import { createGuard, runSource, memoryStorage, sourceLine } from './sources.js';
-import { fetchWarnings, officialRows, inFinland } from './warnings.js';
+import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.js';
 import { makeDemoFetch } from './demo.js';
 import { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
@@ -235,8 +235,9 @@ async function refreshWarnings({ ignoreAge = false } = {}) {
   if (!ignoreAge && state.warn.at && now - state.warn.at < WARN_TTL) return;
   warnBusy = true;
   try {
-    const r = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn }), { now });
-    if (r.value) state.warn = { raw: r.value.alerts, at: now };
+    const r = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn, now }), { now });
+    // Vanhentunut peili (value null) ei ole virhe, mutta uutta tietoa ei ole: edellinen lista jää voimaan ja seuraavaa hakua odotetaan normaalisti
+    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now };
   } finally {
     warnBusy = false;
   }
@@ -1194,7 +1195,7 @@ async function probeSources(push, p, t) {
     const s = summarizeNowcast(r.value, t);
     push(`  ✓ Tutkaennuste (MET Norway) ${ms} ms, ${r.value.steps.length} askelta${s.ok ? `: ${s.line}` : ''}`);
   } else if ('value' in r) push(`  – Tutkaennuste: ei kata tätä paikkaa (${r.reason})`);
-  else if (r.error) push(`  ✗ Tutkaennuste: ${r.error instanceof TypeError ? 'yhteys epäonnistui (verkko tai selaimen CORS-esto)' : r.error.message}`);
+  else if (r.error) push(`  ✗ Tutkaennuste: ${await explainFetchError(r.error, nowcastUrl(p.lat, p.lon))}`);
   else push(`  – Tutkaennuste: ohitettu (${r.skipped})`);
   if (!inFinland(p.lat, p.lon)) return push('  – Viralliset varoitukset: koskevat vain Suomea');
   const t1 = performance.now();
@@ -1202,9 +1203,32 @@ async function probeSources(push, p, t) {
   const wms = Math.round(performance.now() - t1);
   if (w.value) {
     state.warn = { raw: w.value.alerts, at: t };
-    push(`  ✓ Viralliset varoitukset (Ilmatieteen laitos) ${wms} ms, ${w.value.alerts.length} voimassa tai tulossa koko maassa, ${officialRows(w.value.alerts, p.lat, p.lon, t).length} tällä paikalla`);
-  } else if (w.error) push(`  ✗ Viralliset varoitukset: ${w.error instanceof TypeError ? 'yhteys epäonnistui (verkko tai selaimen CORS-esto)' : w.error.message}`);
+    push(`  ✓ Viralliset varoitukset (Ilmatieteen laitos, GitHub-peilin kautta) ${wms} ms, ${w.value.note}; ${officialRows(w.value.alerts, p.lat, p.lon, t).length} tällä paikalla`);
+  } else if ('value' in w) push(`  – Viralliset varoitukset: ${w.reason}`);
+  else if (w.error) push(`  ✗ Viralliset varoitukset: ${await explainFetchError(w.error, MIRROR_URL)}`);
   else push(`  – Viralliset varoitukset: ohitettu (${w.skipped})`);
+}
+
+/**
+ * Selittää, miksi haku epäonnistui. Selain ei kerro CORS-estoa verkkovirheestä (molemmat ovat TypeError), joten asia selvitetään erikseen:
+ * no-cors-haku onnistuu, jos palvelu vastaa mutta ei salli lukemista (CORS), ja selaimen tietoturvailmoitus kertoo, jos CSP esti haun.
+ */
+async function explainFetchError(err, url) {
+  if (!(err instanceof TypeError)) return err?.message || String(err);
+  let csp = '';
+  const onViolation = (ev) => {
+    csp = `${ev.violatedDirective || 'connect-src'}${ev.blockedURI ? ` esti ${ev.blockedURI}` : ''}`;
+  };
+  document.addEventListener('securitypolicyviolation', onViolation);
+  try {
+    await fetchFn(url, { mode: 'no-cors', cache: 'no-store' });
+    return 'palvelu vastaa, mutta selain ei anna sovelluksen lukea vastausta (palvelu ei salli hakua selaimesta, CORS)';
+  } catch {
+    await new Promise((r) => setTimeout(r, 60)); // tietoturvailmoitus saapuu tapahtumana hieman haun hylkäämisen jälkeen
+    return csp ? `selaimen tietoturvapolitiikka (CSP) esti haun (${csp})` : 'palveluun ei saatu yhteyttä (verkko, DNS tai palvelu ei vastaa)';
+  } finally {
+    document.removeEventListener('securitypolicyviolation', onViolation);
+  }
 }
 
 async function copyDiag() {
@@ -1491,5 +1515,5 @@ async function boot() {
   setTimeout(checkForUpdate, 4000, { force: true });
 }
 
-globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate };
+globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError };
 boot();

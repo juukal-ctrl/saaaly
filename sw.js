@@ -2,7 +2,7 @@
 // joten uusi versio tulee käyttöön heti kun se on julkaistu eikä hidas verkko viivytä käynnistystä.
 // Sää- ja tekoälykutsut eivät kulje tämän kautta. Käännös korvaa BUILD-tunnuksen (tools/build.mjs).
 
-const BUILD = '1271d665fc';
+const BUILD = '49e58f41a5';
 const CACHE = 'saaaly-' + BUILD;
 const SHELL = ['./', 'index.html', 'crash.js', 'saaaly.js', 'app.css', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 const NET_TIMEOUT_MS = 3000;

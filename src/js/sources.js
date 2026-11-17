@@ -18,7 +18,7 @@ export const SOURCE_INFO = {
     provider: 'Ilmatieteen laitos',
     url: 'https://www.ilmatieteenlaitos.fi/varoitukset',
     license: 'CC BY 4.0',
-    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle.',
+    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle. Haetaan GitHubin kautta, koska Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua.',
   },
   air: {
     name: 'Ilmanlaatu ja siitepöly',

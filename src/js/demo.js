@@ -4,6 +4,7 @@
 import { FI_CITIES, haversineKm } from './geo.js';
 import { sunPosition } from './sun.js';
 import { localNow, zonedToUtcMs, clamp } from './util.js';
+import { parseCapFeed, buildMirror } from './warnings.js';
 
 function rng(seed) {
   let a = seed >>> 0;
@@ -139,7 +140,7 @@ const DEMO_WARNINGS = {
   snow: ['Liukkausvaroitus', 'Moderate', 'yellow', 'Tiet ja kevyen liikenteen väylät voivat olla erittäin liukkaita.'],
 };
 
-/** CAP-muotoinen synteettinen varoitussyöte (Atom) Varsinais-Suomen alueelle. Vain ukkos- ja lumiskenaariossa on varoitus; muuten syöte on tyhjä. */
+/** CAP-muotoinen synteettinen varoitussyöte (Atom) Varsinais-Suomen alueelle; demo muuttaa sen peiliksi kuten oikea peilityökalu. Vain ukkos- ja lumiskenaariossa on varoitus; muuten syöte on tyhjä. */
 export function syntheticWarningsFeed({ nowMs = Date.now(), scenario = 'mixed' } = {}) {
   const d = DEMO_WARNINGS[scenario];
   const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z');
@@ -180,8 +181,9 @@ export function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
     if (url.hostname === 'api.met.no' && url.pathname.includes('/nowcast/')) {
       return json(syntheticNowcast({ lat: +url.searchParams.get('lat'), lon: +url.searchParams.get('lon'), nowMs: nowMs ?? Date.now(), scenario }));
     }
-    if (url.hostname === 'alerts.fmi.fi') {
-      return new Response(syntheticWarningsFeed({ nowMs: nowMs ?? Date.now(), scenario }), { status: 200, headers: { 'content-type': 'application/atom+xml' } });
+    if (url.hostname === 'raw.githubusercontent.com' && url.pathname.includes('/warnings-data/')) {
+      const now = nowMs ?? Date.now();
+      return json(buildMirror(parseCapFeed(syntheticWarningsFeed({ nowMs: now, scenario })).alerts, now)); // sama muoto kuin GitHub Actionsin tekemä peili
     }
     if (url.hostname === 'geocoding-api.open-meteo.com') {
       const q = (url.searchParams.get('name') || '').toLowerCase();

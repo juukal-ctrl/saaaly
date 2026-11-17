@@ -1,15 +1,17 @@
 // warnings.js: Ilmatieteen laitoksen viralliset säävaroitukset (CAP 1.2 -syöte, alerts.fmi.fi).
-// Syöte on koko Suomen kattava: se ladataan sellaisenaan ja vaikuttavat varoitukset valitaan laitteella pisteen ja monikulmion leikkauksella,
-// joten sijaintia ei lähetetä mihinkään. Lähde on lisä: jos se ei vastaa tai selain estää haun (CORS ei ole varmistettu), sovellus ei näytä virhettä.
-// Atom-syötteen CAP voi olla upotettuna, tekstinä <content>-elementin sisällä tai vain linkkinä; kaikki kolme tuetaan.
+// Selain ei voi hakea syötettä suoraan, koska palvelu ei salli sitä (CORS). Siksi GitHub Actions hakee syötteen itse (tools/mirror-warnings.mjs),
+// tiivistää sen ja tallentaa repon haaraan warnings-data, josta sovellus lukee sen (MIRROR_URL). Syöte on koko Suomen kattava:
+// vaikuttavat varoitukset valitaan laitteella pisteen ja monikulmion leikkauksella, joten sijaintia ei lähetetä mihinkään.
+// Lähde on lisä: jos peili ei vastaa tai on vanhentunut, sovellus ei näytä virhettä (sources.js).
+// Atom-syötteen CAP voi olla upotettuna, tekstinä <content>-elementin sisällä tai vain linkkinä; kaikki kolme tuetaan (peilityökalu käyttää näitä).
 // XML luetaan pienellä omalla jäsentimellä (DOMParser ei ole Nodessa, ja jäsentimen pitää olla testattavissa ilman selainta).
 
 import { defaultFetch, localNow } from './util.js';
 import { timedRequest } from './sources.js';
 
-export const FEED_URL = 'https://alerts.fmi.fi/cap/feed/atom_fi-FI.xml';
+export const MIRROR_URL = 'https://raw.githubusercontent.com/juukal-ctrl/saaaly/warnings-data/warnings.json';
 export const FMI_WARNINGS_PAGE = 'https://www.ilmatieteenlaitos.fi/varoitukset';
-const MAX_XML = 3_000_000;
+const MAX_XML = 16_000_000; // oikea syöte sisältää kolmikielisiä monikulmioita ja voi olla useita megatavuja
 const MAX_DEPTH = 64;
 
 // ---------- XML ----------
@@ -207,30 +209,111 @@ export function officialRows(list, lat, lon, nowMs, max = 3) {
     });
 }
 
+// ---------- Peili ----------
+
+const MIRROR_VERSION = 1;
+const MIRROR_MAX_AGE = 6 * 3600000; // tätä vanhempaa peiliä ei käytetä: varoitus on voinut tulla sen jälkeen
+const MAX_JSON = 2_000_000;
+const MAX_ALERTS = 200;
+const MAX_AREAS = 40;
+const MAX_POLYS = 40;
+const MAX_RING = 5000;
+const SEVERITIES = new Set(['Extreme', 'Severe', 'Moderate', 'Minor', 'Unknown']);
+const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+const r3 = (n) => Math.round(n * 1000) / 1000; // 0,001 asteen tarkkuus (noin 100 m) riittää varoitusalueille ja pienentää tiedostoa
+
+/** Tiivis, selaimelle sopiva muoto: sama kuin parseCapFeedin rivit, mutta pyöristetyin koordinaatein ja lyhennetyin tekstein. */
+export function buildMirror(alerts, nowMs = Date.now()) {
+  const slim = (a) => ({
+    id: str(a.id, 120),
+    event: str(a.event, 120),
+    severity: a.severity,
+    color: str(a.color, 20),
+    headline: str(a.headline, 200),
+    description: str(a.description, 800),
+    instruction: str(a.instruction, 800),
+    onset: Number.isFinite(a.onset) ? a.onset : null,
+    expires: a.expires,
+    areas: a.areas.map((ar) => ({ desc: str(ar.desc, 120), polys: ar.polys.map((ring) => ring.map(([la, lo]) => [r3(la), r3(lo)])) })),
+  });
+  return {
+    v: MIRROR_VERSION,
+    source: 'alerts.fmi.fi',
+    fetchedAt: new Date(nowMs).toISOString(),
+    alerts: alerts
+      .filter((a) => Number.isFinite(a.expires) && a.expires > nowMs - 3600000 && a.areas.length)
+      .sort((a, b) => (RANK[b.severity] || 0) - (RANK[a.severity] || 0) || (a.onset || 0) - (b.onset || 0))
+      .slice(0, MAX_ALERTS) // vakavimmat säilyvät, jos varoituksia on poikkeuksellisen paljon
+      .map(slim),
+  };
+}
+
+function cleanRing(r) {
+  if (!Array.isArray(r) || r.length < 3 || r.length > MAX_RING) return null;
+  for (const p of r) {
+    // Suomi ja sen merialueet; muu kertoo rikkinäisestä tai väärästä aineistosta
+    if (!Array.isArray(p) || p.length !== 2 || typeof p[0] !== 'number' || typeof p[1] !== 'number' || !(p[0] >= 50 && p[0] <= 75 && p[1] >= 10 && p[1] <= 40)) return null;
+  }
+  return r.map(([la, lo]) => [la, lo]);
+}
+
+const fmtStamp = (ms) => {
+  const t = stamp(ms);
+  return `${t.label} klo ${t.hour}`;
+};
+
+/**
+ * Tarkistaa peilin ja palauttaa { ok:true, alerts, fetchedAt, note } tai { ok:false, reason }, kun peili on liian vanha.
+ * Heittää, jos muoto ei täsmää. Aineisto ei ole luotettua: jokainen kenttä tarkistetaan ja rajataan, jotta rikkinäinen tiedosto ei kaada näkymää.
+ */
+export function parseMirror(data, nowMs = Date.now()) {
+  if (!data || typeof data !== 'object' || data.v !== MIRROR_VERSION || !Array.isArray(data.alerts)) throw new Error('Varoitukset: peilin muoto ei täsmää');
+  const at = Date.parse(data.fetchedAt);
+  if (!Number.isFinite(at)) throw new Error('Varoitukset: peilin aikaleima puuttuu');
+  if (nowMs - at > MIRROR_MAX_AGE) return { ok: false, reason: `peili on vanhentunut (päivitetty ${fmtStamp(at)})` };
+  const alerts = [];
+  for (const a of data.alerts.slice(0, MAX_ALERTS)) {
+    if (!a || typeof a !== 'object' || typeof a.expires !== 'number' || !Number.isFinite(a.expires)) continue;
+    const areas = (Array.isArray(a.areas) ? a.areas : [])
+      .slice(0, MAX_AREAS)
+      .map((ar) => ({ desc: str(ar?.desc, 120), polys: (Array.isArray(ar?.polys) ? ar.polys : []).slice(0, MAX_POLYS).map(cleanRing).filter(Boolean) }))
+      .filter((ar) => ar.polys.length);
+    if (!areas.length) continue;
+    alerts.push({
+      id: str(a.id, 120),
+      event: str(a.event, 120),
+      severity: SEVERITIES.has(a.severity) ? a.severity : '',
+      color: str(a.color, 20),
+      headline: str(a.headline, 200),
+      description: str(a.description, 800),
+      instruction: str(a.instruction, 800),
+      onset: typeof a.onset === 'number' && Number.isFinite(a.onset) ? a.onset : 0,
+      expires: a.expires,
+      areas,
+    });
+  }
+  return { ok: true, alerts, fetchedAt: at, note: `${alerts.length} voimassa tai tulossa koko maassa, peili päivitetty ${fmtStamp(at)}` };
+}
+
 // ---------- Haku ----------
 
 /**
- * Hakee syötteen ja palauttaa { ok:true, alerts, links:n }. Heittää verkko-, HTTP- ja rakennevirheistä (kutsuja suojaa ne sources.js:llä).
- * Ei lisää omia otsikoita (ei CORS-esitarkistusta). Jos merkinnät vain linkittävät CAP-tiedostoihin, haetaan enintään maxLinks kappaletta.
+ * Hakee peilin ja palauttaa { ok:true, alerts, fetchedAt, note } (tai { ok:false, reason }, kun peili on vanhentunut).
+ * Heittää verkko-, HTTP- ja rakennevirheistä (kutsuja suojaa ne sources.js:llä). Ei lisää omia otsikoita, joten CORS-esitarkistusta ei tarvita.
  */
-export async function fetchWarnings({ fetchFn = defaultFetch, timeoutMs = 8000, signal = null, lang = 'fi-FI', maxLinks = 8 } = {}) {
+export async function fetchWarnings({ fetchFn = defaultFetch, timeoutMs = 8000, signal = null, now = Date.now() } = {}) {
   const opts = { timeoutMs, signal, label: 'Varoitukset' };
   const text = (res) => {
-    if (!res.ok) throw Object.assign(new Error(`Varoitukset: HTTP ${res.status}`), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error(res.status === 404 ? 'Varoitukset: peiliä ei löytynyt (GitHub Actions -ajo ei ole vielä luonut sitä)' : `Varoitukset: HTTP ${res.status}`), { status: res.status });
     return res.text();
   };
-  const feed = parseCapFeed(await timedRequest(fetchFn, FEED_URL, {}, opts, text), lang);
-  const alerts = [...feed.alerts];
-  if (!alerts.length && feed.links.length) {
-    const parts = await Promise.allSettled(feed.links.slice(0, maxLinks).map((u) => timedRequest(fetchFn, u, {}, opts, text)));
-    for (const p of parts) {
-      if (p.status !== 'fulfilled') continue;
-      try {
-        alerts.push(...parseCapAlerts(p.value, lang));
-      } catch {
-        /* huono liite ei kaada muita */
-      }
-    }
+  const body = await timedRequest(fetchFn, MIRROR_URL, {}, opts, text);
+  if (body.length > MAX_JSON) throw new Error('Varoitukset: peili on liian suuri');
+  let data;
+  try {
+    data = JSON.parse(body);
+  } catch {
+    throw new Error('Varoitukset: peili ei ole luettavaa JSONia');
   }
-  return { ok: true, alerts, links: feed.links.length };
+  return parseMirror(data, now);
 }

@@ -5488,7 +5488,7 @@ const SOURCE_INFO = {
     provider: 'Ilmatieteen laitos',
     url: 'https://www.ilmatieteenlaitos.fi/varoitukset',
     license: 'CC BY 4.0',
-    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle.',
+    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle. Haetaan GitHubin kautta, koska Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua.',
   },
   air: {
     name: 'Ilmanlaatu ja siitepöly',
@@ -5759,17 +5759,19 @@ return { NOWCAST_BASE, WET_MMH, STALE_MIN, nowcastUrl, parseNowcast, intensityWo
 // ---- warnings.js ----
 __m['warnings'] = (() => {
 // warnings.js: Ilmatieteen laitoksen viralliset säävaroitukset (CAP 1.2 -syöte, alerts.fmi.fi).
-// Syöte on koko Suomen kattava: se ladataan sellaisenaan ja vaikuttavat varoitukset valitaan laitteella pisteen ja monikulmion leikkauksella,
-// joten sijaintia ei lähetetä mihinkään. Lähde on lisä: jos se ei vastaa tai selain estää haun (CORS ei ole varmistettu), sovellus ei näytä virhettä.
-// Atom-syötteen CAP voi olla upotettuna, tekstinä <content>-elementin sisällä tai vain linkkinä; kaikki kolme tuetaan.
+// Selain ei voi hakea syötettä suoraan, koska palvelu ei salli sitä (CORS). Siksi GitHub Actions hakee syötteen itse (tools/mirror-warnings.mjs),
+// tiivistää sen ja tallentaa repon haaraan warnings-data, josta sovellus lukee sen (MIRROR_URL). Syöte on koko Suomen kattava:
+// vaikuttavat varoitukset valitaan laitteella pisteen ja monikulmion leikkauksella, joten sijaintia ei lähetetä mihinkään.
+// Lähde on lisä: jos peili ei vastaa tai on vanhentunut, sovellus ei näytä virhettä (sources.js).
+// Atom-syötteen CAP voi olla upotettuna, tekstinä <content>-elementin sisällä tai vain linkkinä; kaikki kolme tuetaan (peilityökalu käyttää näitä).
 // XML luetaan pienellä omalla jäsentimellä (DOMParser ei ole Nodessa, ja jäsentimen pitää olla testattavissa ilman selainta).
 
 const { defaultFetch, localNow } = __m['util'];
 const { timedRequest } = __m['sources'];
 
-const FEED_URL = 'https://alerts.fmi.fi/cap/feed/atom_fi-FI.xml';
+const MIRROR_URL = 'https://raw.githubusercontent.com/juukal-ctrl/saaaly/warnings-data/warnings.json';
 const FMI_WARNINGS_PAGE = 'https://www.ilmatieteenlaitos.fi/varoitukset';
-const MAX_XML = 3_000_000;
+const MAX_XML = 16_000_000; // oikea syöte sisältää kolmikielisiä monikulmioita ja voi olla useita megatavuja
 const MAX_DEPTH = 64;
 
 // ---------- XML ----------
@@ -5967,34 +5969,115 @@ function officialRows(list, lat, lon, nowMs, max = 3) {
     });
 }
 
+// ---------- Peili ----------
+
+const MIRROR_VERSION = 1;
+const MIRROR_MAX_AGE = 6 * 3600000; // tätä vanhempaa peiliä ei käytetä: varoitus on voinut tulla sen jälkeen
+const MAX_JSON = 2_000_000;
+const MAX_ALERTS = 200;
+const MAX_AREAS = 40;
+const MAX_POLYS = 40;
+const MAX_RING = 5000;
+const SEVERITIES = new Set(['Extreme', 'Severe', 'Moderate', 'Minor', 'Unknown']);
+const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+const r3 = (n) => Math.round(n * 1000) / 1000; // 0,001 asteen tarkkuus (noin 100 m) riittää varoitusalueille ja pienentää tiedostoa
+
+/** Tiivis, selaimelle sopiva muoto: sama kuin parseCapFeedin rivit, mutta pyöristetyin koordinaatein ja lyhennetyin tekstein. */
+function buildMirror(alerts, nowMs = Date.now()) {
+  const slim = (a) => ({
+    id: str(a.id, 120),
+    event: str(a.event, 120),
+    severity: a.severity,
+    color: str(a.color, 20),
+    headline: str(a.headline, 200),
+    description: str(a.description, 800),
+    instruction: str(a.instruction, 800),
+    onset: Number.isFinite(a.onset) ? a.onset : null,
+    expires: a.expires,
+    areas: a.areas.map((ar) => ({ desc: str(ar.desc, 120), polys: ar.polys.map((ring) => ring.map(([la, lo]) => [r3(la), r3(lo)])) })),
+  });
+  return {
+    v: MIRROR_VERSION,
+    source: 'alerts.fmi.fi',
+    fetchedAt: new Date(nowMs).toISOString(),
+    alerts: alerts
+      .filter((a) => Number.isFinite(a.expires) && a.expires > nowMs - 3600000 && a.areas.length)
+      .sort((a, b) => (RANK[b.severity] || 0) - (RANK[a.severity] || 0) || (a.onset || 0) - (b.onset || 0))
+      .slice(0, MAX_ALERTS) // vakavimmat säilyvät, jos varoituksia on poikkeuksellisen paljon
+      .map(slim),
+  };
+}
+
+function cleanRing(r) {
+  if (!Array.isArray(r) || r.length < 3 || r.length > MAX_RING) return null;
+  for (const p of r) {
+    // Suomi ja sen merialueet; muu kertoo rikkinäisestä tai väärästä aineistosta
+    if (!Array.isArray(p) || p.length !== 2 || typeof p[0] !== 'number' || typeof p[1] !== 'number' || !(p[0] >= 50 && p[0] <= 75 && p[1] >= 10 && p[1] <= 40)) return null;
+  }
+  return r.map(([la, lo]) => [la, lo]);
+}
+
+const fmtStamp = (ms) => {
+  const t = stamp(ms);
+  return `${t.label} klo ${t.hour}`;
+};
+
+/**
+ * Tarkistaa peilin ja palauttaa { ok:true, alerts, fetchedAt, note } tai { ok:false, reason }, kun peili on liian vanha.
+ * Heittää, jos muoto ei täsmää. Aineisto ei ole luotettua: jokainen kenttä tarkistetaan ja rajataan, jotta rikkinäinen tiedosto ei kaada näkymää.
+ */
+function parseMirror(data, nowMs = Date.now()) {
+  if (!data || typeof data !== 'object' || data.v !== MIRROR_VERSION || !Array.isArray(data.alerts)) throw new Error('Varoitukset: peilin muoto ei täsmää');
+  const at = Date.parse(data.fetchedAt);
+  if (!Number.isFinite(at)) throw new Error('Varoitukset: peilin aikaleima puuttuu');
+  if (nowMs - at > MIRROR_MAX_AGE) return { ok: false, reason: `peili on vanhentunut (päivitetty ${fmtStamp(at)})` };
+  const alerts = [];
+  for (const a of data.alerts.slice(0, MAX_ALERTS)) {
+    if (!a || typeof a !== 'object' || typeof a.expires !== 'number' || !Number.isFinite(a.expires)) continue;
+    const areas = (Array.isArray(a.areas) ? a.areas : [])
+      .slice(0, MAX_AREAS)
+      .map((ar) => ({ desc: str(ar?.desc, 120), polys: (Array.isArray(ar?.polys) ? ar.polys : []).slice(0, MAX_POLYS).map(cleanRing).filter(Boolean) }))
+      .filter((ar) => ar.polys.length);
+    if (!areas.length) continue;
+    alerts.push({
+      id: str(a.id, 120),
+      event: str(a.event, 120),
+      severity: SEVERITIES.has(a.severity) ? a.severity : '',
+      color: str(a.color, 20),
+      headline: str(a.headline, 200),
+      description: str(a.description, 800),
+      instruction: str(a.instruction, 800),
+      onset: typeof a.onset === 'number' && Number.isFinite(a.onset) ? a.onset : 0,
+      expires: a.expires,
+      areas,
+    });
+  }
+  return { ok: true, alerts, fetchedAt: at, note: `${alerts.length} voimassa tai tulossa koko maassa, peili päivitetty ${fmtStamp(at)}` };
+}
+
 // ---------- Haku ----------
 
 /**
- * Hakee syötteen ja palauttaa { ok:true, alerts, links:n }. Heittää verkko-, HTTP- ja rakennevirheistä (kutsuja suojaa ne sources.js:llä).
- * Ei lisää omia otsikoita (ei CORS-esitarkistusta). Jos merkinnät vain linkittävät CAP-tiedostoihin, haetaan enintään maxLinks kappaletta.
+ * Hakee peilin ja palauttaa { ok:true, alerts, fetchedAt, note } (tai { ok:false, reason }, kun peili on vanhentunut).
+ * Heittää verkko-, HTTP- ja rakennevirheistä (kutsuja suojaa ne sources.js:llä). Ei lisää omia otsikoita, joten CORS-esitarkistusta ei tarvita.
  */
-async function fetchWarnings({ fetchFn = defaultFetch, timeoutMs = 8000, signal = null, lang = 'fi-FI', maxLinks = 8 } = {}) {
+async function fetchWarnings({ fetchFn = defaultFetch, timeoutMs = 8000, signal = null, now = Date.now() } = {}) {
   const opts = { timeoutMs, signal, label: 'Varoitukset' };
   const text = (res) => {
-    if (!res.ok) throw Object.assign(new Error(`Varoitukset: HTTP ${res.status}`), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error(res.status === 404 ? 'Varoitukset: peiliä ei löytynyt (GitHub Actions -ajo ei ole vielä luonut sitä)' : `Varoitukset: HTTP ${res.status}`), { status: res.status });
     return res.text();
   };
-  const feed = parseCapFeed(await timedRequest(fetchFn, FEED_URL, {}, opts, text), lang);
-  const alerts = [...feed.alerts];
-  if (!alerts.length && feed.links.length) {
-    const parts = await Promise.allSettled(feed.links.slice(0, maxLinks).map((u) => timedRequest(fetchFn, u, {}, opts, text)));
-    for (const p of parts) {
-      if (p.status !== 'fulfilled') continue;
-      try {
-        alerts.push(...parseCapAlerts(p.value, lang));
-      } catch {
-        /* huono liite ei kaada muita */
-      }
-    }
+  const body = await timedRequest(fetchFn, MIRROR_URL, {}, opts, text);
+  if (body.length > MAX_JSON) throw new Error('Varoitukset: peili on liian suuri');
+  let data;
+  try {
+    data = JSON.parse(body);
+  } catch {
+    throw new Error('Varoitukset: peili ei ole luettavaa JSONia');
   }
-  return { ok: true, alerts, links: feed.links.length };
+  return parseMirror(data, now);
 }
-return { FEED_URL, FMI_WARNINGS_PAGE, parseXml, parseCapAlerts, parseCapFeed, inFinland, inPoly, warningsAt, whenText, officialRows, fetchWarnings };
+return { MIRROR_URL, FMI_WARNINGS_PAGE, parseXml, parseCapAlerts, parseCapFeed, inFinland, inPoly, warningsAt, whenText, officialRows, buildMirror, parseMirror, fetchWarnings };
 })();
 
 // ---- demo.js ----
@@ -6005,6 +6088,7 @@ __m['demo'] = (() => {
 const { FI_CITIES, haversineKm } = __m['geo'];
 const { sunPosition } = __m['sun'];
 const { localNow, zonedToUtcMs, clamp } = __m['util'];
+const { parseCapFeed, buildMirror } = __m['warnings'];
 
 function rng(seed) {
   let a = seed >>> 0;
@@ -6140,7 +6224,7 @@ const DEMO_WARNINGS = {
   snow: ['Liukkausvaroitus', 'Moderate', 'yellow', 'Tiet ja kevyen liikenteen väylät voivat olla erittäin liukkaita.'],
 };
 
-/** CAP-muotoinen synteettinen varoitussyöte (Atom) Varsinais-Suomen alueelle. Vain ukkos- ja lumiskenaariossa on varoitus; muuten syöte on tyhjä. */
+/** CAP-muotoinen synteettinen varoitussyöte (Atom) Varsinais-Suomen alueelle; demo muuttaa sen peiliksi kuten oikea peilityökalu. Vain ukkos- ja lumiskenaariossa on varoitus; muuten syöte on tyhjä. */
 function syntheticWarningsFeed({ nowMs = Date.now(), scenario = 'mixed' } = {}) {
   const d = DEMO_WARNINGS[scenario];
   const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z');
@@ -6181,8 +6265,9 @@ function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
     if (url.hostname === 'api.met.no' && url.pathname.includes('/nowcast/')) {
       return json(syntheticNowcast({ lat: +url.searchParams.get('lat'), lon: +url.searchParams.get('lon'), nowMs: nowMs ?? Date.now(), scenario }));
     }
-    if (url.hostname === 'alerts.fmi.fi') {
-      return new Response(syntheticWarningsFeed({ nowMs: nowMs ?? Date.now(), scenario }), { status: 200, headers: { 'content-type': 'application/atom+xml' } });
+    if (url.hostname === 'raw.githubusercontent.com' && url.pathname.includes('/warnings-data/')) {
+      const now = nowMs ?? Date.now();
+      return json(buildMirror(parseCapFeed(syntheticWarningsFeed({ nowMs: now, scenario })).alerts, now)); // sama muoto kuin GitHub Actionsin tekemä peili
     }
     if (url.hostname === 'geocoding-api.open-meteo.com') {
       const q = (url.searchParams.get('name') || '').toLowerCase();
@@ -6882,14 +6967,14 @@ const { RANGES: MG_RANGES } = __m['meteogram'];
 const { aiSettings, effectiveMode, shortReason, explain, chat, listModels, pickFlash, generate, textOf, compactForecast, placeLabel } = __m['ai'];
 const { answerQuestion } = __m['answer'];
 const { verdict } = __m['advice'];
-const { fetchNowcast, summarizeNowcast } = __m['nowcast'];
+const { fetchNowcast, summarizeNowcast, nowcastUrl } = __m['nowcast'];
 const { createGuard, runSource, memoryStorage, sourceLine } = __m['sources'];
-const { fetchWarnings, officialRows, inFinland } = __m['warnings'];
+const { fetchWarnings, officialRows, inFinland, MIRROR_URL } = __m['warnings'];
 const { makeDemoFetch } = __m['demo'];
 const { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
 
-const VERSION = '0.3.0';
-const BUILD = '1271d665fc'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
+const VERSION = '0.3.1';
+const BUILD = '49e58f41a5'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
 // ---------- Ympäristö ----------
@@ -7105,8 +7190,9 @@ async function refreshWarnings({ ignoreAge = false } = {}) {
   if (!ignoreAge && state.warn.at && now - state.warn.at < WARN_TTL) return;
   warnBusy = true;
   try {
-    const r = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn }), { now });
-    if (r.value) state.warn = { raw: r.value.alerts, at: now };
+    const r = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn, now }), { now });
+    // Vanhentunut peili (value null) ei ole virhe, mutta uutta tietoa ei ole: edellinen lista jää voimaan ja seuraavaa hakua odotetaan normaalisti
+    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now };
   } finally {
     warnBusy = false;
   }
@@ -8064,7 +8150,7 @@ async function probeSources(push, p, t) {
     const s = summarizeNowcast(r.value, t);
     push(`  ✓ Tutkaennuste (MET Norway) ${ms} ms, ${r.value.steps.length} askelta${s.ok ? `: ${s.line}` : ''}`);
   } else if ('value' in r) push(`  – Tutkaennuste: ei kata tätä paikkaa (${r.reason})`);
-  else if (r.error) push(`  ✗ Tutkaennuste: ${r.error instanceof TypeError ? 'yhteys epäonnistui (verkko tai selaimen CORS-esto)' : r.error.message}`);
+  else if (r.error) push(`  ✗ Tutkaennuste: ${await explainFetchError(r.error, nowcastUrl(p.lat, p.lon))}`);
   else push(`  – Tutkaennuste: ohitettu (${r.skipped})`);
   if (!inFinland(p.lat, p.lon)) return push('  – Viralliset varoitukset: koskevat vain Suomea');
   const t1 = performance.now();
@@ -8072,9 +8158,32 @@ async function probeSources(push, p, t) {
   const wms = Math.round(performance.now() - t1);
   if (w.value) {
     state.warn = { raw: w.value.alerts, at: t };
-    push(`  ✓ Viralliset varoitukset (Ilmatieteen laitos) ${wms} ms, ${w.value.alerts.length} voimassa tai tulossa koko maassa, ${officialRows(w.value.alerts, p.lat, p.lon, t).length} tällä paikalla`);
-  } else if (w.error) push(`  ✗ Viralliset varoitukset: ${w.error instanceof TypeError ? 'yhteys epäonnistui (verkko tai selaimen CORS-esto)' : w.error.message}`);
+    push(`  ✓ Viralliset varoitukset (Ilmatieteen laitos, GitHub-peilin kautta) ${wms} ms, ${w.value.note}; ${officialRows(w.value.alerts, p.lat, p.lon, t).length} tällä paikalla`);
+  } else if ('value' in w) push(`  – Viralliset varoitukset: ${w.reason}`);
+  else if (w.error) push(`  ✗ Viralliset varoitukset: ${await explainFetchError(w.error, MIRROR_URL)}`);
   else push(`  – Viralliset varoitukset: ohitettu (${w.skipped})`);
+}
+
+/**
+ * Selittää, miksi haku epäonnistui. Selain ei kerro CORS-estoa verkkovirheestä (molemmat ovat TypeError), joten asia selvitetään erikseen:
+ * no-cors-haku onnistuu, jos palvelu vastaa mutta ei salli lukemista (CORS), ja selaimen tietoturvailmoitus kertoo, jos CSP esti haun.
+ */
+async function explainFetchError(err, url) {
+  if (!(err instanceof TypeError)) return err?.message || String(err);
+  let csp = '';
+  const onViolation = (ev) => {
+    csp = `${ev.violatedDirective || 'connect-src'}${ev.blockedURI ? ` esti ${ev.blockedURI}` : ''}`;
+  };
+  document.addEventListener('securitypolicyviolation', onViolation);
+  try {
+    await fetchFn(url, { mode: 'no-cors', cache: 'no-store' });
+    return 'palvelu vastaa, mutta selain ei anna sovelluksen lukea vastausta (palvelu ei salli hakua selaimesta, CORS)';
+  } catch {
+    await new Promise((r) => setTimeout(r, 60)); // tietoturvailmoitus saapuu tapahtumana hieman haun hylkäämisen jälkeen
+    return csp ? `selaimen tietoturvapolitiikka (CSP) esti haun (${csp})` : 'palveluun ei saatu yhteyttä (verkko, DNS tai palvelu ei vastaa)';
+  } finally {
+    document.removeEventListener('securitypolicyviolation', onViolation);
+  }
 }
 
 async function copyDiag() {
@@ -8361,7 +8470,7 @@ async function boot() {
   setTimeout(checkForUpdate, 4000, { force: true });
 }
 
-globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate };
+globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError };
 boot();
 })();
 })();

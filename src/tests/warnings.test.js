@@ -1,35 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseXml, parseCapAlerts, parseCapFeed, inPoly, warningsAt, whenText, officialRows, fetchWarnings, FEED_URL } from '../js/warnings.js';
-
-const NOW = Date.parse('2026-11-17T12:00:00+02:00'); // tiistai
-const HOUR = 3600000;
-
-// Turku (60.45, 22.27) ja Oulu (65.01, 25.47) ovat omissa monikulmioissaan; Helsinki (60.17, 24.94) kummankin ulkopuolella
-const TURKU_POLY = '60.2,21.8 60.7,21.8 60.7,22.8 60.2,22.8 60.2,21.8';
-const OULU_POLY = '64.8,25.0 65.2,25.0 65.2,26.0 64.8,26.0 64.8,25.0';
-const TURKU = [60.45, 22.27];
-const OULU = [65.01, 25.47];
-const HELSINKI = [60.17, 24.94];
-
-const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z');
-
-function info(lang, { event, severity, onset, expires, area, poly, color = 'yellow' }) {
-  return `<info><language>${lang}</language><category>Met</category><event>${event}</event><urgency>Future</urgency><severity>${severity}</severity><certainty>Likely</certainty>
-    <onset>${iso(onset)}</onset><expires>${iso(expires)}</expires><headline>${event} ${area}</headline><description>Kuvaus: ${event} &amp; puuskia &lt;20 m/s.</description><instruction>Varaudu.</instruction>
-    <parameter><valueName>color</valueName><value>${color}</value></parameter>
-    <area><areaDesc>${area}</areaDesc><polygon>${poly}</polygon></area></info>`;
-}
-
-function cap(o) {
-  const { id = 'id1', status = 'Actual', msgType = 'Alert', refs = '', ns = 'xmlns' } = o;
-  return `<alert ${ns}="urn:oasis:names:tc:emergency:cap:1.2"><identifier>${id}</identifier><sender>fmi</sender><sent>${iso(NOW - HOUR)}</sent><status>${status}</status><msgType>${msgType}</msgType><scope>Public</scope>${refs ? `<references>${refs}</references>` : ''}
-    ${info('fi-FI', { ...o, event: o.event || 'Tuulivaroitus' })}${info('sv-FI', { ...o, event: 'Vindvarning' })}${info('en-GB', { ...o, event: 'Wind warning' })}</alert>`;
-}
-
-const defaults = (extra) => ({ severity: 'Moderate', onset: NOW - HOUR, expires: NOW + 6 * HOUR, area: 'Varsinais-Suomi', poly: TURKU_POLY, ...extra });
-const atom = (entries) => `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Varoitukset</title>${entries.join('')}</feed>`;
-const entry = (inner, link = '') => `<entry><id>e</id><title>Varoitus</title>${link}<content type="text/xml">${inner}</content></entry>`;
+import { parseXml, parseCapAlerts, parseCapFeed, inPoly, warningsAt, whenText, officialRows, fetchWarnings, buildMirror, parseMirror, MIRROR_URL } from '../js/warnings.js';
+import { NOW, HOUR, TURKU_POLY, OULU_POLY, TURKU, OULU, HELSINKI, iso, cap, defaults, atom, entry } from './cap-fixtures.js';
 
 test('parseXml: entiteetit, CDATA, molemmat lainausmerkit, itsesulkeutuvat elementit, kommentit ja nimiavaruuden etuliitteet', () => {
   const r = parseXml(`<?xml version="1.0"?><!DOCTYPE x><!-- kommentti --><a:root xmlns:a="u" k='1' l="2"><a:t>x &amp; y &lt; &#65;&#x42;</a:t><c><![CDATA[<raw & text>]]></c><e/></a:root>`);
@@ -43,7 +15,7 @@ test('parseXml: entiteetit, CDATA, molemmat lainausmerkit, itsesulkeutuvat eleme
 
 test('parseXml: rikkinäinen XML heittää', () => {
   for (const bad of ['<a><b></a></b>', '<a>', '</a>', '<a>1 < 2</a>', '', null]) assert.throws(() => parseXml(bad), /XML ei jäsenny/, String(bad));
-  assert.throws(() => parseXml('<a>' + 'x'.repeat(3_100_000) + '</a>'), /XML ei jäsenny/);
+  assert.throws(() => parseXml('<a>' + 'x'.repeat(16_100_000) + '</a>'), /XML ei jäsenny/);
   assert.throws(() => parseXml('<a>'.repeat(80) + '</a>'.repeat(80)), /XML ei jäsenny/);
 });
 
@@ -100,33 +72,121 @@ test('Cancel, Update ja muut tilat: peruttu, korvattu ja testiviesti jäävät p
   assert.deepEqual(parseCapAlerts(feed).map((a) => a.id), ['new']);
 });
 
-test('linkkimerkinnät: osoitteet kerätään ja fetchWarnings hakee ne (enintään maxLinks)', async () => {
+test('linkkimerkinnät: CAP-tiedostojen osoitteet kerätään, ja upotettu sisältö luetaan suoraan', () => {
   const links = Array.from({ length: 5 }, (_, i) => `https://alerts.fmi.fi/cap/2026/11-17/${i}.xml`);
   const feed = atom(links.map((h, i) => `<entry><id>${i}</id><title>t</title><link rel="alternate" type="application/cap+xml" href="${h}"/></entry>`));
   assert.equal(parseCapFeed(feed).alerts.length, 0);
   assert.deepEqual(parseCapFeed(feed).links, links);
-  const calls = [];
-  const fetchFn = async (url, init) => {
-    calls.push([url, init]);
-    const body = url === FEED_URL ? feed : cap(defaults({ id: url.slice(-5) }));
-    return { ok: true, status: 200, text: async () => body };
-  };
-  const r = await fetchWarnings({ fetchFn, maxLinks: 3 });
-  assert.equal(r.ok, true);
-  assert.equal(r.alerts.length, 3);
-  assert.equal(calls.length, 4); // syöte + 3 liitettä
-  for (const [, init] of calls) assert.deepEqual(Object.keys(init), ['signal'], 'ei omia otsikoita (CORS-esitarkistus)');
+  const both = atom([entry(cap(defaults({ id: 'a1' })), '<link rel="alternate" type="application/cap+xml" href="https://alerts.fmi.fi/cap/x.xml"/>')]);
+  assert.equal(parseCapFeed(both).alerts.length, 1);
+  assert.equal(parseCapFeed(both).links.length, 1);
 });
 
-test('fetchWarnings: upotettu sisältö ei hae liitteitä; HTTP-virhe ja rikkinäinen XML heitetään', async () => {
-  const ok = atom([entry(cap(defaults({ id: 'a1' })), '<link rel="alternate" type="application/cap+xml" href="https://alerts.fmi.fi/cap/x.xml"/>')]);
-  let n = 0;
-  const r = await fetchWarnings({ fetchFn: async () => (n++, { ok: true, status: 200, text: async () => ok }) });
+// ---------- peili ----------
+
+const alertsOf = (...os) => parseCapAlerts(atom(os.map((o) => entry(cap(o)))));
+const reply = (body, status = 200) => async (url, init) => ({ ok: status < 400, status, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)), url, init });
+
+test('buildMirror: pyöristää koordinaatit, järjestää vakavimmat ensin ja pudottaa jo päättyneet', () => {
+  const alerts = alertsOf(
+    defaults({ id: 'y', severity: 'Moderate', poly: '60.123456,21.987654 60.7,21.8 60.7,22.8 60.123456,21.987654' }),
+    defaults({ id: 'o', severity: 'Severe' }),
+    defaults({ id: 'old', expires: NOW - 2 * HOUR }),
+  );
+  const m = buildMirror(alerts, NOW);
+  assert.equal(m.v, 1);
+  assert.equal(Date.parse(m.fetchedAt), NOW);
+  assert.deepEqual(m.alerts.map((a) => a.id), ['o', 'y']); // Severe ensin; päättynyt (yli tunti sitten) pois
+  assert.deepEqual(m.alerts[1].areas[0].polys[0][0], [60.123, 21.988]);
+  assert.ok(JSON.stringify(m).length < 2000, 'tiivis muoto');
+});
+
+test('buildMirror: enintään 200 varoitusta, vakavimmat säilyvät', () => {
+  const many = Array.from({ length: 230 }, (_, i) => ({ ...alertsOf(defaults({ id: 'x' }))[0], id: `m${i}`, severity: i === 229 ? 'Extreme' : 'Moderate' }));
+  const m = buildMirror(many, NOW);
+  assert.equal(m.alerts.length, 200);
+  assert.equal(m.alerts[0].id, 'm229');
+});
+
+test('parseMirror: täysi kierros buildMirrorista, ja officialRows toimii sen tuloksella', () => {
+  const m = buildMirror(alertsOf(defaults({ id: 'a1', event: 'Tuulivaroitus' }), defaults({ id: 'a2', severity: 'Severe', area: 'Pohjois-Pohjanmaa', poly: OULU_POLY })), NOW);
+  const r = parseMirror(JSON.parse(JSON.stringify(m)), NOW + 10 * 60000);
+  assert.equal(r.ok, true);
+  assert.equal(r.alerts.length, 2);
+  assert.match(r.note, /2 voimassa tai tulossa koko maassa, peili päivitetty ti 17\.11\. klo 12/);
+  const rows = officialRows(r.alerts, ...TURKU, NOW);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].title, 'Tuulivaroitus');
+  assert.equal(officialRows(r.alerts, ...HELSINKI, NOW).length, 0);
+});
+
+test('parseMirror: väärä muoto heittää, liian vanha peili ei kelpaa', () => {
+  const good = buildMirror(alertsOf(defaults({ id: 'a1' })), NOW);
+  for (const bad of [null, 'x', [], {}, { ...good, v: 2 }, { ...good, alerts: 'ei' }, { ...good, fetchedAt: 'eilen' }, { ...good, fetchedAt: undefined }]) assert.throws(() => parseMirror(bad, NOW), /Varoitukset: peilin/, JSON.stringify(bad)?.slice(0, 40));
+  const stale = parseMirror(good, NOW + 7 * HOUR);
+  assert.equal(stale.ok, false);
+  assert.match(stale.reason, /vanhentunut \(päivitetty ti 17\.11\. klo 12\)/);
+  assert.equal(parseMirror(good, NOW + 5 * HOUR).ok, true);
+  assert.equal(parseMirror({ ...good, alerts: [] }, NOW).alerts.length, 0, 'tyhjä peili on kelvollinen: ei voimassa olevia varoituksia');
+});
+
+test('parseMirror: vihamielinen tai rikkinäinen aineisto siivotaan eikä kaada', () => {
+  const ring = [[60.2, 21.8], [60.7, 21.8], [60.7, 22.8]];
+  const ok = { id: 'ok', event: 'E', severity: 'Severe', onset: NOW, expires: NOW + HOUR, areas: [{ desc: 'A', polys: [ring] }] };
+  const hostile = [
+    null,
+    'merkkijono',
+    { ...ok, id: 'ei-expires', expires: null },
+    { ...ok, id: 'expires-teksti', expires: '2026-11-17' },
+    { ...ok, id: 'ei-alueita', areas: [] },
+    { ...ok, id: 'ei-alueita2', areas: 'x' },
+    { ...ok, id: 'rengas-liian-lyhyt', areas: [{ desc: 'A', polys: [[[60, 21], [61, 21]]] }] },
+    { ...ok, id: 'piste-ulkona', areas: [{ desc: 'A', polys: [[[60, 21], [61, 21], [999, 22]]] }] },
+    { ...ok, id: 'piste-teksti', areas: [{ desc: 'A', polys: [[[60, 21], [61, 21], ['62', '22']]] }] },
+    { ...ok, id: 'x'.repeat(500), event: 42, severity: 'Hirveä', headline: { a: 1 }, description: 'd'.repeat(5000), onset: 'huomenna' },
+  ];
+  const r = parseMirror({ v: 1, fetchedAt: iso(NOW), alerts: [ok, ...hostile] }, NOW);
+  assert.equal(r.ok, true);
+  assert.equal(r.alerts.length, 2);
+  assert.equal(r.alerts[0].id, 'ok');
+  const last = r.alerts[1];
+  assert.equal(last.id.length, 120);
+  assert.equal(last.event, '');
+  assert.equal(last.severity, '');
+  assert.equal(last.headline, '');
+  assert.equal(last.description.length, 800);
+  assert.equal(last.onset, 0);
+  const huge = Array.from({ length: 500 }, (_, i) => ({ ...ok, id: `h${i}` }));
+  assert.equal(parseMirror({ v: 1, fetchedAt: iso(NOW), alerts: huge }, NOW).alerts.length, 200);
+});
+
+test('fetchWarnings: hakee peilin ilman omia otsikoita (ei CORS-esitarkistusta) ja palauttaa huomautuksen', async () => {
+  const calls = [];
+  const m = buildMirror(alertsOf(defaults({ id: 'a1' })), NOW);
+  const fetchFn = async (url, init) => (calls.push([url, init]), reply(m)(url, init));
+  const r = await fetchWarnings({ fetchFn, now: NOW + 60000 });
+  assert.equal(r.ok, true);
   assert.equal(r.alerts.length, 1);
-  assert.equal(n, 1);
-  await assert.rejects(fetchWarnings({ fetchFn: async () => ({ ok: false, status: 503, text: async () => '' }) }), (e) => e.status === 503);
-  await assert.rejects(fetchWarnings({ fetchFn: async () => ({ ok: true, status: 200, text: async () => '<feed><entry></feed>' }) }), /XML ei jäsenny/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], MIRROR_URL);
+  assert.deepEqual(Object.keys(calls[0][1]), ['signal'], 'ei omia otsikoita');
+  assert.match(MIRROR_URL, /^https:\/\/raw\.githubusercontent\.com\/juukal-ctrl\/saaaly\/warnings-data\/warnings\.json$/);
+});
+
+test('fetchWarnings: 404 kertoo ettei peiliä ole vielä, muut virheet heitetään sellaisenaan', async () => {
+  await assert.rejects(fetchWarnings({ fetchFn: reply('', 404) }), (e) => e.status === 404 && /peiliä ei löytynyt/.test(e.message));
+  await assert.rejects(fetchWarnings({ fetchFn: reply('', 503) }), (e) => e.status === 503 && /HTTP 503/.test(e.message));
+  await assert.rejects(fetchWarnings({ fetchFn: reply('<html>ei json</html>') }), /ei ole luettavaa JSONia/);
+  await assert.rejects(fetchWarnings({ fetchFn: reply('{"v":2}') }), /peilin muoto/);
+  await assert.rejects(fetchWarnings({ fetchFn: reply(' '.repeat(2_000_001)) }), /liian suuri/);
   await assert.rejects(fetchWarnings({ fetchFn: async () => Promise.reject(new TypeError('Failed to fetch')) }), /Failed to fetch/);
+});
+
+test('fetchWarnings: vanhentunut peili ei ole virhe vaan { ok:false, reason }', async () => {
+  const m = buildMirror(alertsOf(defaults({ id: 'a1' })), NOW);
+  const r = await fetchWarnings({ fetchFn: reply(m), now: NOW + 8 * HOUR });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /vanhentunut/);
 });
 
 test('fetchWarnings: aikakatkaisu ja peruutus', async () => {

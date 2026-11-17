@@ -88,7 +88,7 @@ def gemini_route(route):
 def other_route(route):
     route.fulfill(status=403, headers=CORS, body='{"error":{"message":"estetty testissä"}}')
 
-DATA_RX = re.compile(r'https://(api\.open-meteo\.com|geocoding-api\.open-meteo\.com|api\.bigdatacloud\.net|api\.met\.no|alerts\.fmi\.fi)/')
+DATA_RX = re.compile(r'https://(api\.open-meteo\.com|geocoding-api\.open-meteo\.com|api\.bigdatacloud\.net|api\.met\.no|raw\.githubusercontent\.com)/')
 
 def install(ctx):
     ctx.route(DATA_RX, data_route)
@@ -423,7 +423,7 @@ with sync_playwright() as pw:
         page.click('[data-act=diag]')
         expect(page.locator('#diag')).to_contain_text('Valmis.', timeout=20000)
         txt = page.inner_text('#diag')
-        for part in ('✓ ECMWF', '✓ DMI', 'Yhdistelmä nyt:', 'Paikkahaku: ✓', 'Oma vastausmoottori: ✓', 'Gemini: ✓', '✓ Tutkaennuste (MET Norway)', '✓ Viralliset varoitukset (Ilmatieteen laitos)'):
+        for part in ('✓ ECMWF', '✓ DMI', 'Yhdistelmä nyt:', 'Paikkahaku: ✓', 'Oma vastausmoottori: ✓', 'Gemini: ✓', '✓ Tutkaennuste (MET Norway)', '✓ Viralliset varoitukset (Ilmatieteen laitos, GitHub-peilin kautta)'):
             assert part in txt, f'puuttuu: {part}\n{txt[:600]}'
         page.click('.sheet-head [data-act=close]')
     check('diagnostiikka listaa mallit, yhdistelmän, palvelut, oman vastausmoottorin ja Geminin', t_diag)
@@ -572,7 +572,7 @@ with sync_playwright() as pw:
         # sama tunnus ei näytä ilmoitusta
         page5.unroute('**/version.json')
         build = page5.evaluate('window.__saaaly.BUILD')
-        page5.route('**/version.json', lambda r: r.fulfill(status=200, headers=CORS, body=json.dumps({'version': '0.3.0', 'build': build})))
+        page5.route('**/version.json', lambda r: r.fulfill(status=200, headers=CORS, body=json.dumps({'version': '0.3.1', 'build': build})))
         page5.evaluate("document.querySelector('#update').hidden = true")
         page5.evaluate('window.__saaaly.checkForUpdate({ force: true })')
         page5.wait_for_timeout(400)
@@ -635,12 +635,59 @@ with sync_playwright() as pw:
         expect(page6.locator('#diag')).to_contain_text('Valmis.', timeout=20000)
         expect(page6.locator('#diag')).to_contain_text('Valinnaiset lähteet')
         expect(page6.locator('#diag')).to_contain_text('✗ Tutkaennuste', timeout=20000)
-        expect(page6.locator('#diag')).to_contain_text('CORS')
+        expect(page6.locator('#diag')).to_contain_text('palveluun ei saatu yhteyttä')  # sekä CORS- että no-cors-haku hylättiin: ei palvelua
     check('diagnostiikka kertoo estetyn lähteen syyn', t_src_diag)
     ctx6.close()
 
+    # Virheellinen peili: lähde vastaa, mutta sisältö ei kelpaa. Käyttäjälle ei näy mitään, diagnostiikka kertoo syyn.
+    ctx8, page8 = new_page(browser)
+    ctx8.route(re.compile(r'https://raw\.githubusercontent\.com/'), lambda r: r.fulfill(status=200, headers=CORS, body='{"v":1}'))
+    def t_bad_mirror():
+        page8.goto(BASE)
+        ready(page8)
+        expect(page8.locator('.temp')).to_be_visible()
+        assert page8.locator('#banner').is_hidden(), 'virheellinen peili ei saa näkyä käyttäjälle ilmoituksena'
+        assert page8.locator('#alerts .alert.off').count() == 0
+        page8.click('[data-act=open-settings]')
+        page8.click('[data-act=diag]')
+        expect(page8.locator('#diag')).to_contain_text('Valmis.', timeout=20000)
+        expect(page8.locator('#diag')).to_contain_text('✗ Viralliset varoitukset: Varoitukset: peilin muoto ei täsmää')
+    check('virheellinen varoituspeili ei näy käyttäjälle, diagnostiikka kertoo syyn', t_bad_mirror)
+
+    def t_explain_csp():
+        # osoite, jota tietoturvapolitiikka (CSP) ei salli: selain esti haun ennen verkkoa
+        msg = page8.evaluate("window.__saaaly.explainFetchError(new TypeError('Failed to fetch'), 'https://example.org/ei-sallittu')")
+        assert 'tietoturvapolitiikka' in msg and 'connect-src' in msg, msg
+        assert page8.evaluate("window.__saaaly.explainFetchError(new Error('oma virhe'), 'https://x.example/')") == 'oma virhe'
+    check('virheen selitys tunnistaa tietoturvapolitiikan (CSP) eston', t_explain_csp)
+    ctx8.close()
+
+    # CORS-esto oikealla toisella alkuperällä: palvelin vastaa mutta ei lähetä Access-Control-Allow-Origin-otsikkoa (kuten Ilmatieteen laitoksen syöte).
+    # Playwrightin route.fulfill ei valvo CORSia, joten tarvitaan oikea toinen palvelin; CSP ohitetaan, ettei se peitä CORS-tilannetta.
+    class NoCors(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            self.send_response(200); self.send_header('content-type', 'text/plain'); self.end_headers(); self.wfile.write(b'ok')
+    other = http.server.ThreadingHTTPServer(('127.0.0.1', 0), NoCors)
+    threading.Thread(target=other.serve_forever, daemon=True).start()
+    import socket
+    sock = socket.socket(); sock.bind(('127.0.0.1', 0)); dead_port = sock.getsockname()[1]; sock.close()  # portti, jossa ei kuuntele kukaan
+    ctx9 = browser.new_context(bypass_csp=True, viewport={'width': 412, 'height': 915}, locale='fi-FI', timezone_id='Europe/Helsinki')
+    install(ctx9)
+    page9 = ctx9.new_page()
+    def t_explain_cors():
+        page9.goto(BASE)
+        page9.wait_for_function("() => window.__saaaly && window.__saaaly.explainFetchError")
+        cors = page9.evaluate(f"window.__saaaly.explainFetchError(new TypeError('Failed to fetch'), 'http://127.0.0.1:{other.server_address[1]}/x')")
+        assert 'CORS' in cors and 'palvelu vastaa' in cors, cors
+        down = page9.evaluate(f"window.__saaaly.explainFetchError(new TypeError('Failed to fetch'), 'http://127.0.0.1:{dead_port}/x')")
+        assert 'palveluun ei saatu yhteyttä' in down, down
+    check('virheen selitys erottaa CORS-eston (palvelin vastaa) ja puuttuvan yhteyden', t_explain_cors)
+    ctx9.close()
+    other.shutdown()
+
     ctx7, page7 = new_page(browser)
-    ctx7.route(re.compile(r'https://alerts\.fmi\.fi/'), lambda r: r.fulfill(status=200, headers={**CORS, 'content-type': 'application/atom+xml'}, body=mock_data(r.request.url, 'thunder')['body']))
+    ctx7.route(re.compile(r'https://raw\.githubusercontent\.com/'), lambda r: r.fulfill(status=200, headers=CORS, body=mock_data(r.request.url, 'thunder')['body']))
     def t_official():
         page7.goto(BASE)
         ready(page7)

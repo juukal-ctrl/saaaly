@@ -78,7 +78,7 @@ const CSP_CONNECT = [
   'https://nominatim.openstreetmap.org',
   'https://generativelanguage.googleapis.com',
   'https://api.met.no',
-  'https://alerts.fmi.fi',
+  'https://raw.githubusercontent.com', // varoitusten peili (haara warnings-data), ks. js/warnings.js
 ];
 const CSP = [
   "default-src 'none'",

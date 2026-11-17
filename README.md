@@ -1,8 +1,10 @@
-# SääÄly – AI Weather (testiversio 0.3.0)
+# SääÄly – AI Weather (testiversio 0.3.1)
 
 Sääsovellus, joka hakee ennusteen usealta säämallilta (ECMWF, MET Norway, DWD ICON, Météo-France, UK Met Office, NOAA GFS, Kanadan GEM ja kokeiluna Ilmatieteen laitos), yhdistää ne **koodilla** yhdeksi tunti- ja päiväennusteeksi ja antaa **tekoälyn** (Gemini) selittää sään valitulle ajalle ja paikalle. Mukana on chat, jolla voi kysyä säästä suomeksi, myös toisen paikkakunnan säästä.
 
 **Chat vastaa sovelluksen omalla datalla.** Se toimii ilman Gemini-avainta: sovelluksen oma vastausmoottori laskee vastauksen siitä datasta, jonka sovellus on kerännyt eri säämalleilta (yhdistelmäennuste ja jokaisen mallin omat luvut). Gemini on valinnainen lisä, ja senkin voi rajata käyttämään vain sovelluksen dataa. Jokaisen vastauksen alla lukee, mistä se tuli.
+
+**Uutta versiossa 0.3.1:** viralliset Ilmatieteen laitoksen varoitukset toimivat nyt oikeasti. Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua (puhelimen diagnostiikka osoitti sen), joten GitHub hakee varoitukset itse neljännestunnin välein ja sovellus lukee valmiin tiivistelmän (ks. kohta *Varoituspeili*). Diagnostiikka kertoo nyt, johtuuko vika CORS-esteestä, tietoturvapolitiikasta vai puuttuvasta yhteydestä. Lisäksi Gemini-avaimen kenttä tarkistaa avaimen ja kertoo, jos tallennus ei onnistu.
 
 **Uutta versiossa 0.3.0** (koko lista: `CHANGELOG.md`): sääkaavio (lämpötila, sade, tuuli ja aurinko yhdessä kuvassa, 24 h / 48 h / 7 pv), tutkapohjainen lähiennuste ("sade alkaa noin 15 min päästä"), viralliset Ilmatieteen laitoksen varoitukset (kun lähde vastaa), aiempaa paljon parempi suomen ymmärrys chatissa (arkikieli, kirjoitusvirheet, englanti, uusia aiheita), sovelluksen oma "Uusi versio saatavilla" -ilmoitus, akkua säästävä taivasanimaatio, kaatumissuojaus ja tietoturvapolitiikka (CSP).
 
@@ -121,13 +123,13 @@ Ilman avainta etusivun selityskortti näyttää koodilla laaditun suomenkielisen
 | Lisää Gemini-avain ja vaihda chatin tila (*Oma laskenta*, *Gemini + data*, *Gemini vapaa*) | Alla oleva lähdemerkintä muuttuu. Oma laskenta ei kutsu Geminiä lainkaan |
 | Sammuta verkko hetkeksi ja kysy Gemini-tilassa | Vastaus tulee silti, alla lukee *Gemini ei vastannut (ei verkkoyhteyttä)* ja että vastasi sovelluksen oma laskenta |
 
-Jos jokin ei toimi: **Asetukset → Aja diagnostiikka → Kopioi raportti** ja liitä raportti Claudelle. Raportti kertoo mallikohtaisesti, vastaako palvelu, mitä lämpötilaa kukin malli antaa juuri nyt ja toimiiko Gemini. Raportin ensimmäisellä rivillä on version numero (nyt 0.3.0), ja siinä näkyy myös, toimiiko sovelluksen oma vastausmoottori. Raportin lopussa on osio **Valinnaiset lähteet**: siinä näet, vastaako tutkaennuste (MET Norway) ja Ilmatieteen laitoksen varoitussyöte juuri sinun puhelimessasi. Selain voi estää nämä yhteydet (CORS), eikä sitä voi tarkistaa muualta kuin oikealla laitteella. Jos ne on estetty, sovellus toimii ilman niitä.
+Jos jokin ei toimi: **Asetukset → Aja diagnostiikka → Kopioi raportti** ja liitä raportti Claudelle. Raportti kertoo mallikohtaisesti, vastaako palvelu, mitä lämpötilaa kukin malli antaa juuri nyt ja toimiiko Gemini. Raportin ensimmäisellä rivillä on version numero (nyt 0.3.1), ja siinä näkyy myös, toimiiko sovelluksen oma vastausmoottori. Raportin lopussa on osio **Valinnaiset lähteet**: siinä näet, vastaako tutkaennuste (MET Norway) ja varoituspeili juuri sinun puhelimessasi, ja jos ei, miksi (palvelu vastaa mutta ei salli selaimen lukea sitä, tietoturvapolitiikka esti haun, ei yhteyttä tai peiliä ei ole vielä tehty). Selain voi estää yhteyden (CORS), eikä sitä voi tarkistaa muualta kuin oikealla laitteella. Jos lähde ei toimi, sovellus toimii ilman sitä.
 
 ## 5. Mitä tässä versiossa ei vielä ole
 
 - **Valokuvamaiset aluetunnelmakuvat** (suurkaupunki ja maaseutu, vuodenajan mukaan). Taustana on nyt koodilla piirretty animoitu taivas: aurinko, kuu oikeassa vaiheessa, tähdet, pilvet, sade, lumi, ukkonen ja sumu. Kuvat ovat seuraava vaihe.
 - **Ilmatieteen laitoksen havainnot** ennusteen korjaajana. Jos mallit poikkeavat toistuvasti havainnoista, lisätään havaintopohjainen korjaus.
-- **Tutkaennuste ja viralliset varoitukset ovat varmistamattomia.** Niiden toimivuus riippuu siitä, sallivatko palvelut haut suoraan selaimesta. Sovellus kokeilee ja hiljenee, jos ei onnistu (ei virheilmoituksia, uusi yritys 15 min, 1 h, 6 h ja 24 h päästä). Tulos näkyy Tietoja-näkymässä ja diagnostiikassa.
+- **Valinnaiset lähteet voivat hiljentyä.** Tutkaennuste (MET Norway) toimii puhelimessa suoraan. Varoitukset kulkevat GitHub-peilin kautta. Jos lähde ei vastaa, sovellus hiljenee (ei virheilmoituksia, uusi yritys 15 min, 1 h, 6 h ja 24 h päästä). Tulos näkyy Tietoja-näkymässä ja diagnostiikassa.
 - **Oikea Android-sovellus ja widget** (Play-kauppa). Suunnitelma perustuu widget-kyselyn vastauksiin. Nykyinen asennettava verkkosovellus toimii aloitusnäytöltä kuin sovellus, mutta se ei voi tarjota Androidin widgetiä.
 - **Chatin oma vastausmoottori ei ole tekoäly.** Se tunnistaa suomenkielisen kysymyksen aiheen, ajankohdan ja paikan säännöillä. Epätavallisesti muotoiltu kysymys voi jäädä ymmärtämättä, jolloin se kertoo, mitä osaa vastata. Gemini-tilat ymmärtävät vapaamuotoisemmin.
 - Ilmatieteen laitoksen oma malli ei ole Open-Meteon tarjoamien mallien joukossa (`fmi_seamless`-tunnusta ei ole), joten sovellus ei käytä sitä. Suomen tarkimmat mallit ovat MET Nordic ja ECMWF; virallinen ennuste ja varoitukset löytyvät ilmatieteenlaitos.fi:stä.
@@ -144,18 +146,28 @@ Sovellus ei käytä omaa palvelinta, mainoksia, analytiikkaa eikä seurantaa. Se
 | `geocoding-api.open-meteo.com` | Paikkahaku | Hakusana |
 | `api.bigdatacloud.net`, `nominatim.openstreetmap.org` | Paikan nimi sijainnista (jälkimmäinen varalla) | Koordinaatit |
 | `api.met.no` | Tutkaennuste (valinnainen) | Sijainti pyöristettynä kahteen desimaaliin |
-| `alerts.fmi.fi` | Viralliset varoitukset (valinnainen) | Ei mitään: koko maan syöte ladataan ja oma alue valitaan laitteella |
+| `raw.githubusercontent.com` | Viralliset varoitukset (valinnainen): repon haarassa `warnings-data` oleva peili Ilmatieteen laitoksen syötteestä | Ei sijaintia: koko maan varoitukset ladataan ja oma alue valitaan laitteella. GitHub näkee vain IP-osoitteesi, kuten muutkin palvelut |
 | `generativelanguage.googleapis.com` | Gemini (valinnainen, vain jos lisäät avaimen) | Kysymys ja sovelluksen säädata |
 
 Paikka, asetukset ja välimuisti tallentuvat vain tämän laitteen selaimeen. Gemini-avainta ei koskaan laiteta tiedostoihin.
 
+## Varoituspeili (GitHub Actions)
+
+Ilmatieteen laitoksen varoitussyöte (`alerts.fmi.fi`) ei salli selaimen suoraa hakua (CORS), joten sovellus ei voi lukea sitä itse. Siksi repossa on ajo `.github/workflows/mirror-warnings.yml`: GitHub hakee syötteen neljännestunnin välein, `src/tools/mirror-warnings.mjs` tiivistää sen (suomenkielinen teksti, koordinaatit 0,001 asteen tarkkuudella) ja tulos tallentuu repon haaraan `warnings-data` tiedostoksi `warnings.json`. Sovellus lukee sen osoitteesta `raw.githubusercontent.com/juukal-ctrl/saaaly/warnings-data/warnings.json` ja valitsee omaa paikkaa koskevat varoitukset laitteella. Haara tehdään joka kerta yhdeksi uudeksi commitiksi, joten historia ei kasva.
+
+- **Viive:** noin 5–30 minuuttia (ajastus ja GitHubin välimuisti). Varoitukset annetaan yleensä tuntikausia etukäteen, joten tämä riittää, mutta äkillisessä tilanteessa katso ilmatieteenlaitos.fi.
+- **Jos varoitukset eivät näy:** Asetukset → Aja diagnostiikka → *Valinnaiset lähteet* kertoo syyn. "Peiliä ei löytynyt" tarkoittaa, ettei ajo ole vielä käynyt: avaa repon **Actions**-välilehti → *Peilaa säävaroitukset* → **Run workflow**. Yli kuusi tuntia vanhaa peiliä sovellus ei käytä.
+- **Ajo katoaa 60 päivän hiljaisuuden jälkeen:** GitHub poistaa ajastetut ajot käytöstä, jos repossa ei ole ollut toimintaa 60 päivään. Käynnistä ajo silloin samasta paikasta.
+- Ajo ei epäonnistu, vaikka Ilmatieteen laitoksen palvelu olisi alhaalla, joten GitHub ei lähetä toistuvia virheviestejä. Syy näkyy ajon lokissa varoituksena. Edellinen peili jää silloin voimaan.
+- Tämä on väliaikainen ratkaisu verkkosovellukselle. Oikea Android-sovellus voi hakea syötteen suoraan, eikä tarvitse peiliä.
+
 ## Kehittäjälle
 
 ```
-node --test tests/*.test.js            # yksikkötestit (178 kpl, noin 3 s)
+node --test tests/*.test.js            # yksikkötestit (191 kpl, noin 3 s)
 node tools/build.mjs                   # kokoaa js/-moduulit tiedostoksi saaaly.js ja tekee esikatselun sekä julkaise/-kansion
 node tools/publish.mjs                 # kopioi julkaise/-kansion tiedostot repon juureen (vain repossa, src/-kansiosta ajettuna)
-python3 tools/e2e.py                   # selaintestit (40 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages (vaatii Pythonin Playwrightin ja Chromiumin)
+python3 tools/e2e.py                   # selaintestit (43 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages (vaatii Pythonin Playwrightin ja Chromiumin)
 python3 tools/shot.py kuva.png "?demo=rain&at=2026-10-14T14:04:00%2B03:00"   # kuvakaappaus esimerkkitilasta (dev-palvelin: python3 -m http.server 8765 --bind 127.0.0.1)
 E2E_TARGET=root python3 tools/e2e.py   # sama lähdekansiolle sellaisenaan
 ```
