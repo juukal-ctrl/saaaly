@@ -72,7 +72,7 @@ Kun saat päivityksen: avaa `github.com/juukal-ctrl/saaaly/upload/main`, valitse
 
 ### Jos uusi versio ei toimi: paluu edelliseen
 
-Julkaisu merkitään git-tunnisteella (`v0.3.0`; edellinen oli `v0.2.0`). Paluu: avaa `github.com/juukal-ctrl/saaaly/releases`, valitse edellinen versio, lataa sen tiedostot ja vie ne uudelleen julkaisuun. Tai pyydä Claudea tekemään paluu.
+Edellinen toimiva versio 0.2.0 on tallessa repon haarassa `release-0.2.0`. Paluu: lataa sen tiedostot osoitteesta `github.com/juukal-ctrl/saaaly/archive/refs/heads/release-0.2.0.zip`, pura zip ja vie tiedostot uudelleen julkaisuun (`github.com/juukal-ctrl/saaaly/upload/main`). Nopeampaa: pyydä Claudea tekemään paluu.
 
 ### Tietokoneelta
 
