@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { parseXml, parseCapAlerts, parseCapFeed, inPoly, warningsAt, whenText, officialRows, fetchWarnings, buildMirror, parseMirror, MIRROR_URL } from '../js/warnings.js';
 import { NOW, HOUR, TURKU_POLY, OULU_POLY, TURKU, OULU, HELSINKI, iso, cap, defaults, atom, entry } from './cap-fixtures.js';
 
@@ -160,6 +161,36 @@ test('parseMirror: vihamielinen tai rikkinäinen aineisto siivotaan eikä kaada'
   assert.equal(parseMirror({ v: 1, fetchedAt: iso(NOW), alerts: huge }, NOW).alerts.length, 200);
 });
 
+test('parseMirror: oikean aineiston kokoluokka mahtuu rajoihin (kymmeniä alueita, tuhansia pisteitä per rengas)', () => {
+  const ring = (n) => Array.from({ length: n }, (_, i) => [60 + (i % 100) / 100, 22 + Math.floor(i / 100) / 100]);
+  const a = (id) => ({ id, event: 'Liikennesää', severity: 'Moderate', onset: NOW, expires: NOW + HOUR, areas: Array.from({ length: 60 }, (_, k) => ({ desc: `Kunta ${k}`, polys: [ring(3000), ring(10)] })) });
+  const r = parseMirror({ v: 1, fetchedAt: new Date(NOW).toISOString(), alerts: [a('x'), a('y')] }, NOW);
+  assert.equal(r.alerts.length, 2);
+  assert.equal(r.alerts[0].areas.length, 60);
+  assert.equal(r.alerts[0].areas[59].polys[0].length, 3000);
+});
+
+test('oikea aineisto (Ilmatieteen laitos 17.11.2026, yksinkertaistettu): peili luetaan ja paikat osuvat oikein', () => {
+  const real = JSON.parse(readFileSync(new URL('./fixtures/real-mirror-2026-11-17.json', import.meta.url), 'utf8'));
+  const now = Date.parse(real.fetchedAt) + 5 * 60000;
+  const r = parseMirror(real, now);
+  assert.equal(r.ok, true);
+  assert.equal(r.alerts.length, 3);
+  assert.deepEqual(r.alerts.map((a) => a.event), ['Tuulivaroitus merelle', 'Liikennesää', 'Liikennesää']);
+  assert.ok(r.alerts.every((a) => a.severity === 'Moderate' && a.color === 'yellow' && a.description.length > 20));
+  const at = (lat, lon) => officialRows(r.alerts, lat, lon, now);
+  assert.deepEqual(at(...TURKU), [], 'Turussa ei varoitusta');
+  assert.deepEqual(at(...HELSINKI), []);
+  const oulu = at(65.01, 25.47);
+  assert.equal(oulu.length, 1);
+  assert.equal(oulu[0].title, 'Liikennesää');
+  assert.match(oulu[0].when, /^Pohjois-Pohjanmaa · /);
+  assert.match(oulu[0].text, /Liikennesää: /);
+  assert.equal(at(69.9, 27.0).length, 1, 'Utsjoki (Lappi)');
+  // kaksi aluetta käänteisessä [lon, lat]-järjestyksessä ei saa osua: varmistaa, että koordinaattijärjestys on [lat, lon]
+  assert.equal(warningsAt(r.alerts, 25.47, 65.01, now).length, 0);
+});
+
 test('fetchWarnings: hakee peilin ilman omia otsikoita (ei CORS-esitarkistusta) ja palauttaa huomautuksen', async () => {
   const calls = [];
   const m = buildMirror(alertsOf(defaults({ id: 'a1' })), NOW);
@@ -178,7 +209,7 @@ test('fetchWarnings: 404 kertoo ettei peiliä ole vielä, muut virheet heitetä�
   await assert.rejects(fetchWarnings({ fetchFn: reply('', 503) }), (e) => e.status === 503 && /HTTP 503/.test(e.message));
   await assert.rejects(fetchWarnings({ fetchFn: reply('<html>ei json</html>') }), /ei ole luettavaa JSONia/);
   await assert.rejects(fetchWarnings({ fetchFn: reply('{"v":2}') }), /peilin muoto/);
-  await assert.rejects(fetchWarnings({ fetchFn: reply(' '.repeat(2_000_001)) }), /liian suuri/);
+  await assert.rejects(fetchWarnings({ fetchFn: reply(' '.repeat(6_000_001)) }), /liian suuri/);
   await assert.rejects(fetchWarnings({ fetchFn: async () => Promise.reject(new TypeError('Failed to fetch')) }), /Failed to fetch/);
 });
 

@@ -13,7 +13,7 @@ import { parseCapFeed, parseCapAlerts, buildMirror } from '../js/warnings.js';
 
 export const FEED_URL = 'https://alerts.fmi.fi/cap/feed/atom_fi-FI.xml';
 const MAX_BYTES = 15_000_000;
-const MAX_OUT = 1_800_000; // sovellus hylkää yli 2 Mt:n peilin
+const MAX_OUT = 5_000_000; // sovellus hylkää yli 6 Mt:n peilin (js/warnings.js: MAX_JSON)
 
 async function get(url, label) {
   const res = await fetch(url, {

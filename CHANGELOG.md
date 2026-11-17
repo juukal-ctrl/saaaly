@@ -5,6 +5,7 @@
 Korjaukset
 
 - **Viralliset varoitukset toimivat nyt.** Puhelimen diagnostiikka osoitti, ettei Ilmatieteen laitoksen syöte (`alerts.fmi.fi`) salli selaimen suoraa hakua. GitHub Actions hakee syötteen itse neljännestunnin välein (`.github/workflows/mirror-warnings.yml`, `tools/mirror-warnings.mjs`) ja tallentaa tiivistelmän haaraan `warnings-data`; sovellus lukee sen osoitteesta `raw.githubusercontent.com` (CSP päivitetty) ja valitsee oman alueen laitteella. Peili tarkistetaan tarkasti (muoto, koordinaattirajat, koot), yli kuusi tuntia vanhaa ei käytetä, ja tyhjää peiliä ei kirjoiteta, jos syötteen muoto näyttää muuttuneen.
+- Peili on testattu oikealla Ilmatieteen laitoksen aineistolla (17.11.2026: 7 varoitusta, 590 kt; liikennesää- ja merituulivaroituksia). Koko-, alue- ja pistemäärärajat mitoitettiin sen mukaan reilusti yläkanttiin, ja testeissä on pieni oikea näyte.
 - **Diagnostiikka erottaa vian syyn**: palvelu vastaa mutta selain ei saa lukea sitä (CORS), tietoturvapolitiikka (CSP) esti haun, ei yhteyttä, HTTP-virhe tai virheellinen peili.
 - Gemini-avaimen kenttä: avain tarkistetaan (välilyönti ja erikoismerkit eivät tallennu), tallennuksen epäonnistuminen kerrotaan, kenttä ei ole salasanakenttä, ja tekoälyvastausten välimuisti on rajattu 50 vastaukseen.
 

@@ -213,11 +213,13 @@ export function officialRows(list, lat, lon, nowMs, max = 3) {
 
 const MIRROR_VERSION = 1;
 const MIRROR_MAX_AGE = 6 * 3600000; // tätä vanhempaa peiliä ei käytetä: varoitus on voinut tulla sen jälkeen
-const MAX_JSON = 2_000_000;
+// Rajat on mitoitettu oikeasta aineistosta (17.11.2026: 7 varoitusta, enintään 35 aluetta ja 2177 pistettä per rengas, yhteensä 590 kt) reilusti yläkanttiin.
+// Liikennesää-varoituksissa on kuntakohtaisia alueita kymmeniä, ja laajassa ilmiössä varoituksia on moninkertaisesti.
+const MAX_JSON = 6_000_000;
 const MAX_ALERTS = 200;
-const MAX_AREAS = 40;
-const MAX_POLYS = 40;
-const MAX_RING = 5000;
+const MAX_AREAS = 500;
+const MAX_POLYS = 50;
+const MAX_RING = 20000;
 const SEVERITIES = new Set(['Extreme', 'Severe', 'Moderate', 'Minor', 'Unknown']);
 const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
 const r3 = (n) => Math.round(n * 1000) / 1000; // 0,001 asteen tarkkuus (noin 100 m) riittää varoitusalueille ja pienentää tiedostoa
