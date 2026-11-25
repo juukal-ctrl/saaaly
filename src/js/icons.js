@@ -134,5 +134,6 @@ export function icon3dKey(sym, isDay = true) {
 export function icon3d(sym, isDay = true, size = 48) {
   const heavy = sym === 'rain_heavy' || sym === 'snow_heavy' ? ' wx3-heavy' : '';
   const fog = sym === 'fog' ? '<i class="wx3-fog"></i>' : '';
-  return `<span class="wx3 wx-${icon3dKey(sym, isDay)}${heavy}" style="--s:${size}px" aria-hidden="true">${fog}</span>`;
+  const st = size ? ` style="--s:${size}px"` : ''; // 0 = koko tulee ympäröivästä CSS-muuttujasta
+  return `<span class="wx3 wx-${icon3dKey(sym, isDay)}${heavy}"${st} aria-hidden="true">${fog}</span>`;
 }

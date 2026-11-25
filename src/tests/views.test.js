@@ -138,3 +138,22 @@ test('tuntinauha käyttää 3D-kuvakkeita', () => {
   const fc = blendForecast(results());
   assert.match(hourlyHtml({ fc, nowMs: NOW, sel: { type: 'now' } }), /class="wx3 wx-/);
 });
+
+import { trackHtml } from '../js/views.js';
+
+test('tuntirata: 12 tuntia, jokaisella oma paikka, kuvake ja lämpötila', () => {
+  const fc = blendForecast(results());
+  const html = trackHtml({ fc, nowMs: NOW, sel: { type: 'now' } });
+  assert.equal((html.match(/class="th(?: th-big)?"/g) || []).length, 12);
+  assert.equal((html.match(/class="th-ic"/g) || []).length, 12);
+  assert.equal((html.match(/class="td"/g) || []).length, 12);
+  assert.match(html, /data-act="now"[^>]*aria-pressed="true"/);
+  assert.match(html, />nyt</);
+});
+
+test('tuntirata: valittu tunti näkyy painettuna ja valinta toimii napautuksella', () => {
+  const fc = blendForecast(results());
+  const iso = fc.hours.find((h) => h.t > '2026-10-14T20:00').t;
+  const html = trackHtml({ fc, nowMs: NOW, sel: { type: 'hour', iso } });
+  assert.match(html, new RegExp(`data-act="hour" data-iso="${iso}" aria-pressed="true"`));
+});

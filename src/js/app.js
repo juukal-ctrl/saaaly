@@ -16,9 +16,9 @@ import { fetchNowcast, summarizeNowcast, nowcastUrl } from './nowcast.js';
 import { createGuard, runSource, memoryStorage, sourceLine } from './sources.js';
 import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.js';
 import { makeDemoFetch } from './demo.js';
-import { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
+import { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, verdictMoreHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
@@ -58,6 +58,9 @@ const el = {
   hero: $('#hero'),
   heroRest: $('#heroRest'),
   verdict: $('#verdict'),
+  verdictMore: $('#verdictMore'),
+  stage: $('#stage'),
+  track: $('#track'),
   ai: $('#ai'),
   forecast: $('#forecast'),
   hourly: $('#hourly'),
@@ -165,6 +168,13 @@ function renderAi() {
   patch('ai', el.ai, aiHtml({ fc: state.fc, nowMs: nowMs(), sel: state.sel, ai: state.ai, hasKey: keyOn(), mode: aiMode() }));
 }
 
+/** Päivän ääriarvot pienenä lisärivinä etusivun lisähuomioissa. */
+function rangeText(fc, now) {
+  const { local } = nowPosition(fc, now);
+  const d = fc.days.find((x) => x.date === local.date) || fc.days[0];
+  return d ? `tänään ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}` : '';
+}
+
 /** Vastauskaista ja huomiot: laskenta neuvomoduulissa, tässä vain piirretään. */
 function renderAdvice(fc, now) {
   let v = null;
@@ -176,7 +186,9 @@ function renderAdvice(fc, now) {
     v = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
   }
   el.verdict.hidden = !v;
-  patch('verdict', el.verdict, v ? verdictHtml({ v, nowcastLine: state.nowcast?.ok && v.win?.kind !== 'tomorrow' ? state.nowcast.line : '' }) : '');
+  patch('verdict', el.verdict, v ? verdictHtml({ v }) : '');
+  el.verdictMore.hidden = !v;
+  patch('verdictMore', el.verdictMore, v ? verdictMoreHtml({ v, range: rangeText(fc, now), nowcastLine: state.nowcast?.ok && v.win?.kind !== 'tomorrow' ? state.nowcast.line : '' }) : '');
   const html = v ? alertsHtml({ alerts: v.alerts, official: state.official, officialState: officialState(now) }) : '';
   el.alerts.hidden = !html;
   patch('alerts', el.alerts, html);
@@ -361,6 +373,10 @@ function renderAll() {
   renderWelcome();
   if (!state.fc) {
     patch('hero', el.hero, state.error ? problemHtml(state.error) : SKELETON);
+    el.stage.classList.add('stage-off');
+    el.track.hidden = true;
+    patch('track', el.track, '');
+    el.verdictMore.hidden = true;
     el.verdict.hidden = true;
     el.alerts.hidden = true;
     el.heroRest.hidden = true;
@@ -374,6 +390,9 @@ function renderAll() {
   const now = nowMs();
   const { fc, sel } = state;
   patch('hero', el.hero, heroHtml({ fc, nowMs: now }));
+  el.stage.classList.remove('stage-off');
+  el.track.hidden = false;
+  patch('track', el.track, trackHtml({ fc, nowMs: now, sel }));
   el.heroRest.hidden = false;
   patch(
     'heroRest',

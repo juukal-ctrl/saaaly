@@ -2,10 +2,10 @@
 // joten uusi versio tulee käyttöön heti kun se on julkaistu eikä hidas verkko viivytä käynnistystä.
 // Sää- ja tekoälykutsut eivät kulje tämän kautta. Käännös korvaa BUILD-tunnuksen (tools/build.mjs).
 
-const BUILD = '0c5fe1a9eb';
+const BUILD = 'c26610ab45';
 const CACHE = 'saaaly-' + BUILD;
 const SHELL = ['./', 'index.html', 'crash.js', 'saaaly.js', 'app.css', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png',
-  'wx-d-cloud.webp', 'wx-d-part.webp', 'wx-d-part_cloud.webp', 'wx-d-part_sun.webp', 'wx-d-rain.webp', 'wx-d-snow.webp', 'wx-d-storm.webp', 'wx-d-sun.webp', 'wx-n-cloud.webp', 'wx-n-moon.webp', 'wx-n-moonpart.webp', 'wx-n-rain.webp', 'wx-n-snow.webp', 'wx-n-storm.webp'];
+  'wx-d-cloud.webp', 'wx-d-part.webp', 'wx-d-part_cloud.webp', 'wx-d-part_sun.webp', 'wx-d-rain.webp', 'wx-d-snow.webp', 'wx-d-storm.webp', 'wx-d-sun.webp', 'wx-n-cloud.webp', 'wx-n-moon.webp', 'wx-n-moonpart.webp', 'wx-n-rain.webp', 'wx-n-snow.webp', 'wx-n-storm.webp', 'trk-d.webp', 'trk-n.webp'];
 const NET_TIMEOUT_MS = 3000;
 
 self.addEventListener('install', (event) => {

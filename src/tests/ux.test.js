@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { verdict, verdictWindow } from '../js/advice.js';
-import { alertsHtml, verdictHtml, CHAT_CHIPS } from '../js/views.js';
+import { alertsHtml, verdictHtml, verdictMoreHtml, CHAT_CHIPS } from '../js/views.js';
 import { findOffline } from '../js/gazetteer.js';
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -40,10 +40,17 @@ test('Tänään/Huomenna pakottaa ikkunan', () => {
   assert.ok(CHAT_CHIPS.includes('Mitä pukisin huomenna?'));
 });
 
-test('vastauskaistalla tutkalause on ruudukon jälkeen', () => {
+test('etusivun lause: iso sateenvarjolause, takkirivi ja valinta ilman laatikoita; tutkalause ja huomiot erillään', () => {
   const v = verdict(mkFc(48), at(13, 0), { month: 10 });
-  const html = verdictHtml({ v, nowcastLine: 'Tutkan mukaan ei sadetta' });
-  assert.ok(html.indexOf('class="vgrid"') < html.indexOf('class="vnow"'));
+  const html = verdictHtml({ v });
+  assert.match(html, /class="vsay"/);
+  assert.match(html, /class="vcoat"/);
+  assert.match(html, /data-act="vday"/);
+  assert.doesNotMatch(html, /vgrid|vcell/);
+  const more = verdictMoreHtml({ v, nowcastLine: 'Tutkan mukaan ei sadetta', range: 'tänään ylin +5°, alin +1°' });
+  assert.match(more, /class="vnow"/);
+  assert.match(more, /tänään ylin/);
+  assert.doesNotMatch(html, /Tutkan mukaan/);
 });
 
 test('huomiokaista: vakavin näkyy, loput tiivistettynä; tuntematon varoitustila kerrotaan', () => {

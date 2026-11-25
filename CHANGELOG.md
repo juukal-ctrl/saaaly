@@ -1,5 +1,11 @@
 # Muutosloki
 
+## 0.5.0 – Uusi etusivu
+
+- **Etusivu rakennettu uudelleen**: iso lihavoitu lämpötila, pehmeä 3D-kuvake, iso sateenvarjolause ja pieni takkirivi ilman laatikoita. Tänään/Huomenna-valinta on lauseen alla.
+- **Kromirata**: seuraavat 12 tuntia kulkevat radalla, ja jokaisella tunnilla on oma sääobjekti, lämpötila ja kellonaika. Tunnin voi napauttaa. Yöllä rata ja tausta ovat tummat.
+- Mitoitus skaalautuu ruudun leveyden mukaan (360–480 px). Tutkalause, lisähuomiot ja päivän ääriarvot ovat hiljaisena osiona radan alla.
+
 ## 0.4.0 – Pehmeä pastelliteema ja päivän tuntiennuste
 
 - **Uusi ulkoasu**: päivällä ja aamu- ja ilta-auringossa taivas on pastellinen (persikka, vaaleanpunainen, laventeli, taivaansininen) ja teksti tumma indigo; yöllä tumma teema säilyy. Teema vaihtuu auringon korkeuden mukaan ja myös selaimen teemaväri seuraa sitä. Sade ei harmauta vaaleaa taivasta kokonaan.

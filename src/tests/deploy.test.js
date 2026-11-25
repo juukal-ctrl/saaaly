@@ -10,7 +10,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const site = join(root, 'julkaise');
 const HINT = ' (aja: node tools/build.mjs)';
 const EXPECTED = ['index.html', 'crash.js', 'saaaly.js', 'app.css', 'sw.js', 'version.json', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
-const WX = 'd-cloud d-part d-part_cloud d-part_sun d-rain d-snow d-storm d-sun n-cloud n-moon n-moonpart n-rain n-snow n-storm'.split(' ').map((n) => `wx-${n}.webp`);
+const WX = 'd-cloud d-part d-part_cloud d-part_sun d-rain d-snow d-storm d-sun n-cloud n-moon n-moonpart n-rain n-snow n-storm'.split(' ').map((n) => `wx-${n}.webp`).concat(['trk-d.webp', 'trk-n.webp']);
 EXPECTED.push(...WX);
 
 const read = (name) => readFileSync(join(site, name), 'utf8');

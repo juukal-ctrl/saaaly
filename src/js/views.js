@@ -94,7 +94,7 @@ function sunLine(fc, localDate) {
   return txt;
 }
 
-/** Sankarin yläosa: lämpötila, symboli, tila ja päivän ääriarvot. Vastauskaista tulee heti sen alle. */
+/** Sankarin yläosa: iso lämpötila, 3D-kuvake, tuntuu kuin, tila ja päivän ääriarvot. Sijoittelu: app.css, .stage. */
 export function heroHtml({ fc, nowMs }) {
   const { idx, frac, local } = nowPosition(fc, nowMs);
   const s = snapshot(fc, idx, frac);
@@ -102,13 +102,12 @@ export function heroHtml({ fc, nowMs }) {
   const t = fmtTemp(s.temp);
   const feelsDiff = Math.abs(s.feels - s.temp) >= 2 ? `, tuntuu kuin ${fmtTemp(s.feels)}` : '';
   return `
-    <div class="hero-main">
-      <div class="temp" aria-hidden="true">${/^[+−]/.test(t) ? `<span class="t-sign">${esc(t[0])}</span>` : ''}<span class="t-num">${esc(t.replace(/^[+−]/, '').slice(0, -1))}</span><span class="t-deg">°</span></div>
-      <div class="hero-icon">${icon3d(s.sym, s.isDay, 128)}</div>
-    </div>
+    <div class="temp" aria-hidden="true">${/^[+−]/.test(t) ? `<span class="t-sign">${esc(t[0])}</span>` : ''}<span class="t-num">${esc(t.replace(/^[+−]/, '').slice(0, -1))}</span><span class="t-deg">°</span></div>
+    <div class="hero-icon">${icon3d(s.sym, s.isDay, 0)}</div>
     <p class="sr-only">Sää nyt: ${esc(fmtTemp(s.temp))}${esc(feelsDiff)}, ${esc(SYMBOLS[s.sym].toLowerCase())}.</p>
-    <div class="cond" aria-hidden="true">${esc(SYMBOLS[s.sym])}</div>
-    <div class="range">Tänään ylin ${esc(fmtTemp(day.tmax))}, alin ${esc(fmtTemp(day.tmin))}</div>`;
+    <div class="st-f1" aria-hidden="true">tuntuu kuin ${esc(fmtTemp(s.feels))}</div>
+    <div class="st-f2 cond" aria-hidden="true">${esc(SYMBOLS[s.sym].toLowerCase())} · ${fmtNum(s.wind)} m/s</div>
+    <div class="st-f3 range">Tänään ylin ${esc(fmtTemp(day.tmax))}, alin ${esc(fmtTemp(day.tmin))}</div>`;
 }
 
 /** Sankarin alaosa: tuntuu kuin, tuuli, sade, ennusteen luotettavuus, lisätiedot ja päivitysaika. */
@@ -186,26 +185,61 @@ export function alertsHtml({ alerts = [], official = [], officialState = 'ok' })
 const ROW_GLYPH = { slippery: 'ice', wind: 'wind', uv: 'uv', frost: 'frost', fog: 'fog' };
 
 /** Vastauskaista: takki ja sateenvarjo isoina, loput kapeina riveinä. nowcastLine: tutkaennusteen lause tai ''. */
-export function verdictHtml({ v, nowcastLine = '' }) {
-  const [coat, umb, ...rest] = v.chips;
+const sentence = (t) => {
+  const x = String(t || '').trim();
+  return x ? cap(x).replace(/[.!?]*$/, '.') : '';
+};
+
+/** Etusivun iso lause: sateenvarjo, sen tarkennus ja takki. Ei laatikoita. */
+export function verdictHtml({ v }) {
+  const [coat, umb] = v.chips;
   const tomorrow = v.win.kind === 'tomorrow';
   const coatSub = [coat.sub, ...(coat.extras || [])].filter(Boolean).join(' · ');
-  const umbGlyph = umb.kind === 'rain' ? GLYPH.umbrella : GLYPH.snow;
   const askCoat = tomorrow ? 'Mitä pukisin huomenna?' : 'Mitä pukisin tänään?';
   const askRain = tomorrow ? 'Sataako huomenna?' : 'Sataako tänään?';
+  const sub = String(umb.sub || '').split(' · ')[0];
+  return `
+    <button class="vsay" type="button" data-act="ask-open" data-q="${esc(askRain)}"><b>${esc(sentence(umb.text))}</b>${sub ? `<span>${esc(sentence(sub))}</span>` : ''}</button>
+    <button class="vcoat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${esc([coat.text, coatSub].filter(Boolean).join(' · '))}</button>
+    <div class="vbar"><div class="modebar v-seg" role="group" aria-label="Ajankohta"><button class="seg" type="button" data-act="vday" data-day="today" aria-pressed="${!tomorrow}">Tänään</button><button class="seg" type="button" data-act="vday" data-day="tomorrow" aria-pressed="${tomorrow}">Huomenna</button></div><span class="vcap">${esc(v.win.caption)}</span></div>`;
+}
+
+/** Etusivun hiljaiset lisäyksiä: tutkalause ja lisähuomiot radan alla. */
+export function verdictMoreHtml({ v, nowcastLine = '', range = '' }) {
+  const rest = v.chips.slice(2);
   const rows = rest
     .map((c) => `<li class="vrow ${esc(c.level)}">${GLYPH[ROW_GLYPH[c.key]] || SVG.info}<span><b>${esc(c.text)}</b>${c.sub ? `<small>${esc(c.sub)}</small>` : ''}</span></li>`)
     .join('');
   return `
-    <div class="row between v-head"><h2 class="label">Mitä päälle ja mukaan</h2><div class="modebar v-seg" role="group" aria-label="Ajankohta"><button class="seg" type="button" data-act="vday" data-day="today" aria-pressed="${!tomorrow}">Tänään</button><button class="seg" type="button" data-act="vday" data-day="tomorrow" aria-pressed="${tomorrow}">Huomenna</button></div></div>
-    <p class="fine v-cap">${esc(v.win.caption)}</p>
-    <div class="vgrid">
-      <button class="vcell coat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${GLYPH.coat}<span><b>${esc(coat.text)}</b><small>${esc(coatSub)}</small></span></button>
-      <button class="vcell umb ${esc(umb.level)}" type="button" data-act="ask-open" data-q="${esc(askRain)}">${umbGlyph}<span><b>${esc(umb.text)}</b><small>${esc(umb.sub)}</small></span></button>
-    </div>
+    <p class="fine vmore-top">${esc([v.win.caption, range].filter(Boolean).join(' · '))}</p>
     ${nowcastLine ? `<p class="vnow" role="status" aria-live="polite">${GLYPH.radar}<span>${esc(nowcastLine)}</span></p>` : ''}
     ${rows ? `<ul class="vrows">${rows}</ul>` : ''}
     <p class="fine">SääÄlyn oma arvio mallidatasta, ei virallinen ohje.</p>`;
+}
+
+// ---------- Tuntirata ----------
+
+// Radan tuntipaikat (esirenderöidyn radan kuvassa, 412 x 750 -yksikön alue): q = merkin keskipiste, d = piste radan vieressä, c = kuvakkeen keskipiste.
+const TRACK = [{"c": [377.7, 158.4], "q": [377.7, 204.4], "d": [356.4, 187.1]}, {"c": [290.7, 295.7], "q": [290.7, 341.7], "d": [316.6, 273.3]}, {"c": [361.3, 384.6], "q": [361.3, 430.6], "d": [326.8, 364.4]}, {"c": [243.1, 431.9], "q": [243.1, 477.9], "d": [238.7, 399.1]}, {"c": [173.4, 436.7], "q": [173.4, 482.7], "d": [162.7, 404.8]}, {"c": [32.8, 329.8], "q": [32.8, 375.8], "d": [67.6, 389.9]}, {"c": [117.9, 457.0], "q": [117.9, 503.0], "d": [87.1, 480.0]}, {"c": [62.9, 596.6], "q": [62.9, 642.6], "d": [88.8, 570.3]}, {"c": [171.0, 622.5], "q": [171.0, 668.5], "d": [176.4, 589.8]}, {"c": [236.6, 635.3], "q": [236.6, 681.3], "d": [250.2, 604.0]}, {"c": [380.0, 540.7], "q": [380.0, 586.7], "d": [345.0, 602.9]}, {"c": [291.0, 670.5], "q": [291.0, 716.5], "d": [313.9, 692.1]}];
+const TRACK_ICON_W = 68;
+const pct = (v, total) => `${((v / total) * 100).toFixed(2)}%`;
+
+/** Seuraavat 12 tuntia kromiradalla: jokaisella tunnilla oma paikka, sääkuvake, lämpötila ja kellonaika. */
+export function trackHtml({ fc, nowMs, sel }) {
+  const { idx } = nowPosition(fc, nowMs);
+  const out = [];
+  TRACK.forEach((pt, i) => {
+    const h = fc.hours[idx + i];
+    if (!h) return;
+    const first = i === 0;
+    const pressed = first ? sel.type === 'now' : sel.type === 'hour' && sel.iso === h.t;
+    const act = first ? 'now' : 'hour';
+    const label = `${weekday(h.t.slice(0, 10))} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`;
+    out.push(`<i class="td" style="left:${pct(pt.d[0], 412)};top:${pct(pt.d[1], 750)}"></i>`);
+    out.push(`<span class="th-ic" style="left:${pct(pt.c[0], 412)};top:${pct(pt.c[1], 750)};--s:${((TRACK_ICON_W / 412) * 100).toFixed(2)}cqw">${icon3d(h.sym, h.isDay, 0)}</span>`);
+    out.push(`<button class="th th-big" type="button" style="left:${pct(pt.q[0], 412)};top:${pct(pt.q[1], 750)}" data-act="${act}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(label)}"><b>${esc(fmtTemp(h.temp))}</b><span>${first ? 'nyt' : `klo ${hh(h.t)}`}</span></button>`);
+  });
+  return `<div class="trk-img" aria-hidden="true"></div>${out.join('')}`;
 }
 
 // ---------- Tekoälykortti ----------
