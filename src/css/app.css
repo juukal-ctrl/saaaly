@@ -2137,3 +2137,288 @@ input.secret {
 .v-cap {
   margin: 4px 0 8px;
 }
+
+/* ---------- Pehmeä teema: 3D-kuvakkeet, kromiraita ja vaalea päivätaivas ---------- */
+
+.wx3 {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: var(--s, 48px);
+  height: var(--s, 48px);
+  background: center / contain no-repeat;
+  filter: drop-shadow(0 4px 6px rgba(40, 30, 110, 0.22));
+  vertical-align: middle;
+}
+
+.hero-icon .wx3 {
+  filter: drop-shadow(0 12px 16px rgba(40, 30, 110, 0.26));
+  animation: wx-bob 9s ease-in-out infinite;
+}
+
+@keyframes wx-bob {
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-icon .wx3 {
+    animation: none;
+  }
+}
+
+.wx-d-sun { background-image: url(../icons/wx-d-sun.webp); }
+.wx-d-part_sun { background-image: url(../icons/wx-d-part_sun.webp); }
+.wx-d-part { background-image: url(../icons/wx-d-part.webp); }
+.wx-d-part_cloud { background-image: url(../icons/wx-d-part_cloud.webp); }
+.wx-d-cloud { background-image: url(../icons/wx-d-cloud.webp); }
+.wx-d-rain { background-image: url(../icons/wx-d-rain.webp); }
+.wx-d-snow { background-image: url(../icons/wx-d-snow.webp); }
+.wx-d-storm { background-image: url(../icons/wx-d-storm.webp); }
+.wx-n-moon { background-image: url(../icons/wx-n-moon.webp); }
+.wx-n-moonpart { background-image: url(../icons/wx-n-moonpart.webp); }
+.wx-n-cloud { background-image: url(../icons/wx-n-cloud.webp); }
+.wx-n-rain { background-image: url(../icons/wx-n-rain.webp); }
+.wx-n-snow { background-image: url(../icons/wx-n-snow.webp); }
+.wx-n-storm { background-image: url(../icons/wx-n-storm.webp); }
+
+/* Sumu: pilven alle pehmeät helmiäisraidat */
+.wx3-fog::before,
+.wx3-fog::after {
+  content: '';
+  position: absolute;
+  left: 18%;
+  right: 12%;
+  height: 7%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.95), rgba(214, 200, 255, 0.9), rgba(255, 255, 255, 0.95));
+  box-shadow: 0 2px 4px rgba(60, 40, 150, 0.2);
+}
+
+.wx3-fog::before {
+  bottom: 22%;
+}
+
+.wx3-fog::after {
+  bottom: 8%;
+  left: 28%;
+  right: 4%;
+}
+
+.hero-icon .wx3 {
+  --s: clamp(96px, 30vw, 128px);
+}
+
+.temp {
+  font-weight: 600;
+}
+
+/* Tuntinauha: kromiraita kulkee ruutujen alla ja vierii niiden mukana */
+.strip {
+  padding-bottom: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 45%, rgba(110, 90, 200, 0.3)) left bottom 8px / 100% 6px no-repeat local,
+    linear-gradient(90deg, #b6d3ff, #e6c3f7, #ffd1df, #c3f0e3, #b6d3ff, #e6c3f7, #ffd1df, #c3f0e3) left bottom 8px / 100% 6px no-repeat local;
+  background-attachment: local;
+}
+
+/* Päivän tunnit päiväennusteen alla */
+.hint {
+  margin: -2px 0 6px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.day {
+  grid-template-columns: 72px 46px minmax(0, 1fr) 46px 18px;
+  gap: 8px;
+}
+
+.day-c {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.7;
+  transition: transform 0.2s;
+}
+
+.day[aria-expanded='true'] .day-c {
+  transform: rotate(180deg);
+}
+
+.day-hours {
+  margin: 2px 0 8px;
+  padding: 10px 4px 2px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.1);
+  animation: dh-in 0.22s ease-out;
+}
+
+@keyframes dh-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .day-hours {
+    animation: none;
+  }
+}
+
+.dh-sum {
+  margin: 0 10px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.dstrip {
+  margin: 4px 0 0;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.dstrip .hr {
+  min-width: 54px;
+  padding-top: 10px;
+}
+
+/* Vaalea päivätaivas: tumma indigoteksti ja valkoiset lasipinnat */
+body.light {
+  color-scheme: light;
+  --night: #ffffff; /* täytetyillä painikkeilla (indigo) teksti on valkoinen */
+  --frost: #241d52;
+  --ink-2: rgba(36, 29, 82, 0.92);
+  --ink-3: rgba(36, 29, 82, 0.78);
+  --glass: rgba(255, 255, 255, 0.5);
+  --glass-hi: rgba(255, 255, 255, 0.6);
+  --line: rgba(60, 45, 130, 0.16);
+  --ice: #2f4fb0;
+  --dusk: #935300;
+  --moss: #17724a;
+  --ember: #b3362b;
+  --sheet: #f4eeff;
+  background: #e8dcfb;
+}
+
+body.light .hero,
+body.light .hero-main {
+  text-shadow: none;
+}
+
+body.light .hero-icon .wx3 {
+  filter: drop-shadow(0 14px 16px rgba(80, 60, 170, 0.28));
+}
+
+body.light .banner,
+body.light .problem {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+body.light .hr[aria-pressed='true'],
+body.light .day[aria-pressed='true'] {
+  border-color: rgba(90, 70, 190, 0.35);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+body.light .day-hours {
+  background: rgba(255, 255, 255, 0.34);
+}
+
+body.light .track {
+  background: rgba(60, 45, 130, 0.14);
+}
+
+body.light .fill {
+  background: linear-gradient(90deg, #8fb9ff, #d9b5f5, #ffc6a8);
+}
+
+body.light .ai {
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+body.light .mg-tx { fill: rgba(36, 29, 82, 0.85); }
+body.light .mg-ytx { fill: rgba(36, 29, 82, 0.85); stroke: rgba(255, 255, 255, 0.7); }
+body.light .mg-axd { fill: #241d52; }
+body.light .mg-ext { fill: #241d52; stroke: rgba(255, 255, 255, 0.75); }
+body.light .mg-pv { fill: #2f4fb0; }
+body.light .mg-grid { stroke: rgba(60, 45, 130, 0.14); }
+body.light .mg-zero { stroke: #5a7fe0; }
+body.light .mg-day { stroke: rgba(60, 45, 130, 0.22); }
+body.light .mg-night { fill: rgba(60, 45, 130, 0.12); }
+body.light .mg-band { fill: rgba(255, 255, 255, 0.55); }
+body.light .mg-line { stroke: #3b2f8f; }
+body.light .mg-dot { fill: #fff; stroke: #3b2f8f; }
+body.light .mg-now { stroke: #3b2f8f; }
+body.light .mg-rain { fill: #5b86e8; }
+body.light .mg-hi { fill: rgba(91, 134, 232, 0.35); }
+body.light .mg-snowbar { stroke: #6a72c8; }
+body.light .mg-snow-bg { fill: rgba(255, 255, 255, 0.6); }
+body.light .mg-snow-dot { fill: #6a72c8; }
+body.light .mg-pat-bg { fill: rgba(91, 134, 232, 0.3); }
+body.light .mg-pat-fg { fill: #5b86e8; }
+body.light .mg-arrow.mg-w0 { fill: #6a72c8; }
+body.light .mg-arrow.mg-w1 { fill: #3b2f8f; }
+body.light .mg-arrow.mg-w2 { fill: #935300; }
+body.light .mg-arrow.mg-w3 { fill: #b3362b; }
+body.light .mg-wv.mg-w2 { fill: #935300; }
+body.light .mg-wv.mg-w3 { fill: #b3362b; }
+body.light .mg-cur { stroke: #3b2f8f; }
+body.light .mg-curdot { fill: #fff; stroke: #3b2f8f; }
+
+body.light .scrim {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 40%, rgba(255, 255, 255, 0.1));
+}
+
+body.light .sheet-backdrop {
+  background: rgba(46, 34, 110, 0.32);
+}
+
+body.light .cond,
+body.light .range,
+body.light .hero .meta {
+  background: none;
+}
+
+body.light .modebar {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+body.light .seg:not([aria-pressed='true']):active {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+body.light .alert {
+  border-color: rgba(60, 45, 130, 0.55);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+body.light .alert.sev-yellow { border-color: #d6a400; }
+body.light .alert.sev-orange { border-color: #d46f00; }
+body.light .alert.sev-red { border-color: #d63636; }
+
+body.light .ask-btn {
+  border-color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 10px 30px rgba(80, 60, 170, 0.22);
+}
+
+body.light .ptr {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(60, 45, 130, 0.2);
+}
+
+body.light .vcell {
+  background: rgba(255, 255, 255, 0.34);
+  border-color: rgba(60, 45, 130, 0.12);
+}
+
+body.light .sheet-panel {
+  border-color: rgba(60, 45, 130, 0.14);
+}

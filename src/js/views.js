@@ -3,7 +3,7 @@
 
 import { escapeHtml as esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, cap, mdToHtml, zonedToUtcMs, localNow } from './util.js';
 import { SYMBOLS, nowPosition, snapshot, modelRows, confidence, describeNow, describeDay, describeHour, popText } from './blend.js';
-import { icon } from './icons.js';
+import { icon, icon3d } from './icons.js';
 import { meteogram, RANGES } from './meteogram.js';
 import { sunEvents, dayLengthMs } from './sun.js';
 import { placeSubtitle } from './geo.js';
@@ -104,7 +104,7 @@ export function heroHtml({ fc, nowMs }) {
   return `
     <div class="hero-main">
       <div class="temp" aria-hidden="true">${/^[+−]/.test(t) ? `<span class="t-sign">${esc(t[0])}</span>` : ''}<span class="t-num">${esc(t.replace(/^[+−]/, '').slice(0, -1))}</span><span class="t-deg">°</span></div>
-      <div class="hero-icon">${icon(s.sym, s.isDay, 104)}</div>
+      <div class="hero-icon">${icon3d(s.sym, s.isDay, 128)}</div>
     </div>
     <p class="sr-only">Sää nyt: ${esc(fmtTemp(s.temp))}${esc(feelsDiff)}, ${esc(SYMBOLS[s.sym].toLowerCase())}.</p>
     <div class="cond" aria-hidden="true">${esc(SYMBOLS[s.sym])}</div>
@@ -310,13 +310,30 @@ export function hourlyHtml({ fc, nowMs, sel }) {
     const act = first ? 'now' : 'hour';
     const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
     return `<button class="hr" type="button" data-act="${act}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`${weekday(date)} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`)}">
-      <span class="hr-d">${esc(flag)}</span><span class="hr-t">${first ? 'Nyt' : hh(h.t)}</span>${icon(h.sym, h.isDay, 30)}
+      <span class="hr-d">${esc(flag)}</span><span class="hr-t">${first ? 'Nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 46)}
       <span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></button>`;
   });
   return `<h2 class="label">Seuraavat tunnit</h2><div class="strip" id="strip">${cells.join('')}</div>`;
 }
 
-export function dailyHtml({ fc, nowMs, sel }) {
+/** Yhden päivän tuntiruudut: tälle päivälle jäljellä olevat tunnit (tänään) tai koko päivä. */
+function dayHoursHtml({ fc, nowMs, sel, day }) {
+  const { idx, local } = nowPosition(fc, nowMs);
+  const hours = fc.hours.filter((h, i) => h.t.slice(0, 10) === day.date && (day.date !== local.date || i >= idx));
+  if (!hours.length) return '';
+  const wind = Math.max(...hours.map((h) => h.wind || 0));
+  const bits = [`ylin ${fmtTemp(day.tmax)}, alin ${fmtTemp(day.tmin)}`, day.precip >= 0.1 ? `sadetta ${fmtMm(day.precip)}` : 'ei merkittävää sadetta', `tuulta enintään ${fmtNum(wind)} m/s`];
+  const cells = hours.map((h) => {
+    const pressed = sel.type === 'hour' && sel.iso === h.t;
+    const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
+    return `<button class="hr" type="button" data-act="hour" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`)}">
+      <span class="hr-t">${hh(h.t)}</span>${icon3d(h.sym, h.isDay, 46)}<span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></button>`;
+  });
+  return `<div class="day-hours" id="dh-${esc(day.date)}" role="region" aria-label="${esc(`Tuntiennuste ${weekday(day.date)} ${fmtDM(day.date)}`)}">
+    <p class="dh-sum">${esc(bits.join(' · '))}</p><div class="strip dstrip" data-date="${esc(day.date)}">${cells.join('')}</div></div>`;
+}
+
+export function dailyHtml({ fc, nowMs, sel, openDate = null }) {
   const today = nowPosition(fc, nowMs).local.date;
   const days = fc.days.slice(0, 7);
   const lo = Math.min(...days.map((d) => d.tmin));
@@ -326,13 +343,15 @@ export function dailyHtml({ fc, nowMs, sel }) {
     const left = ((d.tmin - lo) / span) * 100;
     const width = Math.max(5, ((d.tmax - d.tmin) / span) * 100);
     const label = d.date === today ? 'Tänään' : `${weekday(d.date)} ${fmtDM(d.date)}`;
+    const open = openDate === d.date;
     const pressed = sel.type === 'day' && sel.date === d.date;
-    return `<button class="day" type="button" data-act="day" data-date="${esc(d.date)}" aria-pressed="${pressed}" aria-label="${esc(`${label}, ${SYMBOLS[d.sym]}, ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}`)}">
-      <span class="day-n">${esc(label)}</span>${icon(d.sym, true, 30)}
+    const row = `<button class="day" type="button" data-act="day" data-date="${esc(d.date)}" aria-pressed="${pressed}" aria-expanded="${open}" aria-controls="dh-${esc(d.date)}" aria-label="${esc(`${label}, ${SYMBOLS[d.sym]}, ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}. ${open ? 'Piilota tunnit' : 'Näytä tunnit'}`)}">
+      <span class="day-n">${esc(label)}</span>${icon3d(d.sym, true, 46)}
       <span class="rng"><span class="lo">${esc(fmtTemp(d.tmin))}</span><span class="track"><span class="fill" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"></span></span><span class="hi">${esc(fmtTemp(d.tmax))}</span></span>
-      <span class="day-p">${d.precip >= 0.1 ? esc(fmtMm(d.precip)) : '–'}</span></button>`;
+      <span class="day-p">${d.precip >= 0.1 ? esc(fmtMm(d.precip)) : '–'}</span><svg class="day-c" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`;
+    return row + (open ? dayHoursHtml({ fc, nowMs, sel, day: d }) : '');
   });
-  return `<h2 class="label">${days.length} päivän ennuste</h2><div class="days">${rows.join('')}</div>`;
+  return `<h2 class="label">${days.length} päivän ennuste</h2><p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="days">${rows.join('')}</div>`;
 }
 
 // ---------- Mallivertailu ----------

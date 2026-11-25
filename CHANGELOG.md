@@ -1,5 +1,13 @@
 # Muutosloki
 
+## 0.4.0 – Pehmeä pastelliteema ja päivän tuntiennuste
+
+- **Uusi ulkoasu**: päivällä ja aamu- ja ilta-auringossa taivas on pastellinen (persikka, vaaleanpunainen, laventeli, taivaansininen) ja teksti tumma indigo; yöllä tumma teema säilyy. Teema vaihtuu auringon korkeuden mukaan ja myös selaimen teemaväri seuraa sitä. Sade ei harmauta vaaleaa taivasta kokonaan.
+- **3D-sääkuvakkeet**: aurinko, kuu, pilvet, sade, lumi ja ukkonen ovat pehmeitä helmiäisobjekteja (esirenderöidyt kuvat, toimivat ilman verkkoa). Käytössä sankarissa, tuntinauhassa ja päiväennusteessa; sumulle on oma raitakuvake. Sankarin kuvake kelluu hitaasti (ei, kun liikettä on vähennetty).
+- **Kromiraita** kulkee tuntinauhan ruutujen alla ja vierii niiden mukana.
+- **Päivän tunnit**: kun napautat päivää päiväennusteessa, sen tunnit avautuvat päivän alle (tänään nykyhetkestä alkaen, muut päivät klo 07 kohdalta). Tunnin valinta pitää päivän auki, uusi napautus sulkee sen. Napautus ei enää vie sivua tekoälykortille.
+- Muutokset käyttöliittymän katseluun: kaaviot, ilmoitukset, varoitukset, asetukset ja chat toimivat myös vaalealla teemalla.
+
 ## 0.3.2 – UI- ja UX-arvioiden korjaukset
 
 - Vastauskaista: takki ja sateenvarjo aina kahdessa sarakkeessa, tutkalause niiden alle; huomiokaista näyttää vakavimman täysrivinä ja loput yhtenä tiivistettynä rivinä. Vastaus mahtuu 360 px:n ruudulle.

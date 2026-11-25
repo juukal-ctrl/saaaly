@@ -1740,11 +1740,20 @@ const STOPS = [
   [-18, ['#03060f', '#060b1c', '#0a1330']],
   [-12, ['#060b1e', '#0d1735', '#17275a']],
   [-6, ['#101b45', '#2f3573', '#b55f6b']],
-  [-1, ['#1f3a78', '#6a5f9e', '#f0955c']],
-  [4, ['#264c8f', '#5a86c0', '#f0bd80']],
-  [12, ['#235aa0', '#4a80c4', '#8fb8e0']],
-  [35, ['#194f96', '#3f78bd', '#7fb0e0']],
+  [-5, ['#2a2f66', '#6a5a9c', '#d98a9a']],
+  [-2.5, ['#e8c5cf', '#d3b4e2', '#b8baf0']], // aamu/ilta: pastellinen persikka ja laventeli, vaalea jo ennen auringonnousua
+  [1, ['#f6cfc6', '#eabcd8', '#c9c4f2']],
+  [6, ['#ffe4cc', '#f6cae4', '#c7d3fb']],
+  [14, ['#fdebd3', '#e2cbfb', '#bcdcff']],
+  [35, ['#fdf0da', '#d8cdfb', '#b6ddff']],
 ].map(([alt, cols]) => [alt, cols.map((h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)])]);
+
+/** Onko taivas niin vaalea, että käyttöliittymän pitää käyttää tummaa tekstiä. */
+function isLightSky(altDeg) {
+  const c = skyColors(altDeg)[1];
+  const lin = (v) => ((v / 255) ** 2.2);
+  return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]) > 0.3;
+}
 
 const mix = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 const rgba = (c, a = 1) => `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${a})`;
@@ -1893,7 +1902,8 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     const cover = clamp(cur.cloud, 0, 1);
     const night = clamp((-alt - 3) / 10, 0, 1);
     const [top0, mid0, hor0] = skyColors(alt);
-    const gloom = clamp(cover * 0.55 + (cur.precip > 0.3 ? 0.18 : 0) + cur.thunder * 0.2 + cur.fog * 0.3, 0, 0.88);
+    const gloom0 = clamp(cover * 0.55 + (cur.precip > 0.3 ? 0.18 : 0) + cur.thunder * 0.2 + cur.fog * 0.3, 0, 0.88);
+    const gloom = isLightSky(alt) ? gloom0 * 0.55 : gloom0; // vaalea taivas pysyy pastellina myös sateella
     const top = greyer(top0, gloom);
     const mid = greyer(mid0, gloom);
     const hor = greyer(hor0, gloom * 0.9);
@@ -1902,7 +1912,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     g.addColorStop(0, rgba(top));
     g.addColorStop(0.45, rgba(mid));
     g.addColorStop(0.72, rgba(hor));
-    g.addColorStop(1, rgba(mix(hor, [0, 0, 0], 0.18)));
+    g.addColorStop(1, rgba(isLightSky(alt) ? mix(hor, [170, 150, 230], 0.14) : mix(hor, [0, 0, 0], 0.18)));
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
@@ -2010,7 +2020,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     const nr = Math.floor(cur.rainN);
     if (nr > 0) {
       const slant = clamp(cur.wind / 14, 0, 1) * 0.55 * -Math.sin((cur.windDir * Math.PI) / 180);
-      ctx.strokeStyle = night > 0.5 ? 'rgba(170,195,235,0.42)' : 'rgba(205,224,255,0.55)';
+      ctx.strokeStyle = night > 0.5 ? 'rgba(170,195,235,0.42)' : isLightSky(alt) ? 'rgba(84,100,196,0.5)' : 'rgba(205,224,255,0.55)';
       ctx.lineWidth = 1.2;
       ctx.lineCap = 'round';
       ctx.beginPath();
@@ -2153,7 +2163,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
   });
   return { set, resize, start, stop, poke, setAnimated, draw: () => draw(0), state: () => ({ ...cur }) };
 }
-return { skyColors, createSky };
+return { isLightSky, skyColors, createSky };
 })();
 
 // ---- meteogram.js ----
@@ -6430,7 +6440,39 @@ function glyph(sym, isDay) {
 function icon(sym, isDay = true, size = 48) {
   return `<svg class="wx" viewBox="0 0 64 64" width="${size}" height="${size}" aria-hidden="true" focusable="false">${glyph(sym, isDay)}</svg>`;
 }
-return { icon };
+
+// Pehmeät 3D-kuvakkeet (esirenderöidyt webp-kuvat, tyylit app.css:ssä). Pienemmät ruudut käyttävät samoja kuvia.
+const KEY3D = {
+  clear: ['sun', 'moon'],
+  mostly_clear: ['part_sun', 'moonpart'],
+  partly_cloudy: ['part', 'moonpart'],
+  mostly_cloudy: ['part_cloud', 'moonpart'],
+  overcast: ['cloud', 'cloud'],
+  fog: ['cloud', 'cloud'],
+  drizzle: ['rain', 'rain'],
+  rain_light: ['rain', 'rain'],
+  rain: ['rain', 'rain'],
+  rain_heavy: ['rain', 'rain'],
+  sleet: ['rain', 'rain'],
+  snow_light: ['snow', 'snow'],
+  snow: ['snow', 'snow'],
+  snow_heavy: ['snow', 'snow'],
+  thunder: ['storm', 'storm'],
+};
+
+/** Kuvakkeen avain 3D-kuvalle, esim. "d-sun" tai "n-moonpart". */
+function icon3dKey(sym, isDay = true) {
+  const k = KEY3D[sym] || KEY3D.overcast;
+  return (isDay ? 'd-' : 'n-') + k[isDay ? 0 : 1];
+}
+
+/** 3D-kuvake. Koko tulee CSS-muuttujasta, jotta tyylit pysyvät tiedostossa (ei sisäisiä kokoja merkkijonoissa). */
+function icon3d(sym, isDay = true, size = 48) {
+  const heavy = sym === 'rain_heavy' || sym === 'snow_heavy' ? ' wx3-heavy' : '';
+  const fog = sym === 'fog' ? '<i class="wx3-fog"></i>' : '';
+  return `<span class="wx3 wx-${icon3dKey(sym, isDay)}${heavy}" style="--s:${size}px" aria-hidden="true">${fog}</span>`;
+}
+return { icon, icon3dKey, icon3d };
 })();
 
 // ---- views.js ----
@@ -6440,7 +6482,7 @@ __m['views'] = (() => {
 
 const { escapeHtml: esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, cap, mdToHtml, zonedToUtcMs, localNow } = __m['util'];
 const { SYMBOLS, nowPosition, snapshot, modelRows, confidence, describeNow, describeDay, describeHour, popText } = __m['blend'];
-const { icon } = __m['icons'];
+const { icon, icon3d } = __m['icons'];
 const { meteogram, RANGES } = __m['meteogram'];
 const { sunEvents, dayLengthMs } = __m['sun'];
 const { placeSubtitle } = __m['geo'];
@@ -6541,7 +6583,7 @@ function heroHtml({ fc, nowMs }) {
   return `
     <div class="hero-main">
       <div class="temp" aria-hidden="true">${/^[+−]/.test(t) ? `<span class="t-sign">${esc(t[0])}</span>` : ''}<span class="t-num">${esc(t.replace(/^[+−]/, '').slice(0, -1))}</span><span class="t-deg">°</span></div>
-      <div class="hero-icon">${icon(s.sym, s.isDay, 104)}</div>
+      <div class="hero-icon">${icon3d(s.sym, s.isDay, 128)}</div>
     </div>
     <p class="sr-only">Sää nyt: ${esc(fmtTemp(s.temp))}${esc(feelsDiff)}, ${esc(SYMBOLS[s.sym].toLowerCase())}.</p>
     <div class="cond" aria-hidden="true">${esc(SYMBOLS[s.sym])}</div>
@@ -6747,13 +6789,30 @@ function hourlyHtml({ fc, nowMs, sel }) {
     const act = first ? 'now' : 'hour';
     const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
     return `<button class="hr" type="button" data-act="${act}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`${weekday(date)} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`)}">
-      <span class="hr-d">${esc(flag)}</span><span class="hr-t">${first ? 'Nyt' : hh(h.t)}</span>${icon(h.sym, h.isDay, 30)}
+      <span class="hr-d">${esc(flag)}</span><span class="hr-t">${first ? 'Nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 46)}
       <span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></button>`;
   });
   return `<h2 class="label">Seuraavat tunnit</h2><div class="strip" id="strip">${cells.join('')}</div>`;
 }
 
-function dailyHtml({ fc, nowMs, sel }) {
+/** Yhden päivän tuntiruudut: tälle päivälle jäljellä olevat tunnit (tänään) tai koko päivä. */
+function dayHoursHtml({ fc, nowMs, sel, day }) {
+  const { idx, local } = nowPosition(fc, nowMs);
+  const hours = fc.hours.filter((h, i) => h.t.slice(0, 10) === day.date && (day.date !== local.date || i >= idx));
+  if (!hours.length) return '';
+  const wind = Math.max(...hours.map((h) => h.wind || 0));
+  const bits = [`ylin ${fmtTemp(day.tmax)}, alin ${fmtTemp(day.tmin)}`, day.precip >= 0.1 ? `sadetta ${fmtMm(day.precip)}` : 'ei merkittävää sadetta', `tuulta enintään ${fmtNum(wind)} m/s`];
+  const cells = hours.map((h) => {
+    const pressed = sel.type === 'hour' && sel.iso === h.t;
+    const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
+    return `<button class="hr" type="button" data-act="hour" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`)}">
+      <span class="hr-t">${hh(h.t)}</span>${icon3d(h.sym, h.isDay, 46)}<span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></button>`;
+  });
+  return `<div class="day-hours" id="dh-${esc(day.date)}" role="region" aria-label="${esc(`Tuntiennuste ${weekday(day.date)} ${fmtDM(day.date)}`)}">
+    <p class="dh-sum">${esc(bits.join(' · '))}</p><div class="strip dstrip" data-date="${esc(day.date)}">${cells.join('')}</div></div>`;
+}
+
+function dailyHtml({ fc, nowMs, sel, openDate = null }) {
   const today = nowPosition(fc, nowMs).local.date;
   const days = fc.days.slice(0, 7);
   const lo = Math.min(...days.map((d) => d.tmin));
@@ -6763,13 +6822,15 @@ function dailyHtml({ fc, nowMs, sel }) {
     const left = ((d.tmin - lo) / span) * 100;
     const width = Math.max(5, ((d.tmax - d.tmin) / span) * 100);
     const label = d.date === today ? 'Tänään' : `${weekday(d.date)} ${fmtDM(d.date)}`;
+    const open = openDate === d.date;
     const pressed = sel.type === 'day' && sel.date === d.date;
-    return `<button class="day" type="button" data-act="day" data-date="${esc(d.date)}" aria-pressed="${pressed}" aria-label="${esc(`${label}, ${SYMBOLS[d.sym]}, ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}`)}">
-      <span class="day-n">${esc(label)}</span>${icon(d.sym, true, 30)}
+    const row = `<button class="day" type="button" data-act="day" data-date="${esc(d.date)}" aria-pressed="${pressed}" aria-expanded="${open}" aria-controls="dh-${esc(d.date)}" aria-label="${esc(`${label}, ${SYMBOLS[d.sym]}, ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}. ${open ? 'Piilota tunnit' : 'Näytä tunnit'}`)}">
+      <span class="day-n">${esc(label)}</span>${icon3d(d.sym, true, 46)}
       <span class="rng"><span class="lo">${esc(fmtTemp(d.tmin))}</span><span class="track"><span class="fill" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"></span></span><span class="hi">${esc(fmtTemp(d.tmax))}</span></span>
-      <span class="day-p">${d.precip >= 0.1 ? esc(fmtMm(d.precip)) : '–'}</span></button>`;
+      <span class="day-p">${d.precip >= 0.1 ? esc(fmtMm(d.precip)) : '–'}</span><svg class="day-c" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`;
+    return row + (open ? dayHoursHtml({ fc, nowMs, sel, day: d }) : '');
   });
-  return `<h2 class="label">${days.length} päivän ennuste</h2><div class="days">${rows.join('')}</div>`;
+  return `<h2 class="label">${days.length} päivän ennuste</h2><p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="days">${rows.join('')}</div>`;
 }
 
 // ---------- Mallivertailu ----------
@@ -7004,7 +7065,7 @@ const { fetchAll, summarizeErrors } = __m['weather'];
 const { blendForecast, nowPosition, snapshot } = __m['blend'];
 const { searchPlaces, reverseGeocode, getPosition, placeKey, haversineKm, FI_CITIES } = __m['geo'];
 const { sunPosition, moonInfo } = __m['sun'];
-const { createSky, skyColors } = __m['sky'];
+const { createSky, skyColors, isLightSky } = __m['sky'];
 const { RANGES: MG_RANGES } = __m['meteogram'];
 const { aiSettings, effectiveMode, shortReason, explain, chat, listModels, pickFlash, generate, textOf, compactForecast, placeLabel } = __m['ai'];
 const { answerQuestion } = __m['answer'];
@@ -7015,8 +7076,8 @@ const { fetchWarnings, officialRows, inFinland, MIRROR_URL } = __m['warnings'];
 const { makeDemoFetch } = __m['demo'];
 const { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
 
-const VERSION = '0.3.2';
-const BUILD = '641190df0f'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
+const VERSION = '0.4.0';
+const BUILD = '0c5fe1a9eb'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
 // ---------- Ympäristö ----------
@@ -7079,6 +7140,7 @@ const state = {
   manualLoad: false,
   error: '',
   sel: { type: 'now' },
+  dayOpen: null, // päivä, jonka tunnit näytetään päiväennusteen alla
   ai: { status: 'idle', text: '', error: '', fp: '' },
   refreshMin: REFRESH_OPTIONS.includes(savedRefresh) ? savedRefresh : 10,
   sheet: null,
@@ -7387,7 +7449,21 @@ function renderAll() {
     const next = $('#strip', el.hourly);
     if (next && left) next.scrollLeft = left;
   }
-  patch('daily', el.daily, dailyHtml({ fc, nowMs: now, sel }));
+  if (state.dayOpen && !fc.days.slice(0, 7).some((d) => d.date === state.dayOpen)) state.dayOpen = null;
+  const dayLeft = $('.dstrip', el.daily)?.scrollLeft || 0;
+  if (patch('daily', el.daily, dailyHtml({ fc, nowMs: now, sel, openDate: state.dayOpen }))) {
+    const ds = $('.dstrip', el.daily);
+    if (ds) {
+      if (dayLeft && ds.dataset.date === state.dayScrolled) ds.scrollLeft = dayLeft;
+      else {
+        // uusi päivä: aloita aamusta (tänään jo alkavasta tunnista)
+        const first = ds.querySelector('.hr');
+        const morning = ds.querySelector(`.hr[data-iso$="T07:00"]`);
+        ds.scrollLeft = morning && first ? Math.max(0, morning.offsetLeft - first.offsetLeft) : 0;
+        state.dayScrolled = ds.dataset.date;
+      }
+    }
+  }
   const wasOpen = $('.models-d', el.models)?.open;
   if (patch('models', el.models, modelsHtml({ results: state.results, fc, nowMs: now })) && wasOpen) $('.models-d', el.models).open = true;
 }
@@ -7450,6 +7526,9 @@ function initSky() {
 function setThemeColor(alt) {
   const c = skyColors(alt)[0].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
   el.theme?.setAttribute('content', '#' + c);
+  const light = isLightSky(alt);
+  document.body.classList.toggle('light', light);
+  el.theme?.parentNode?.querySelector('meta[name="color-scheme"]')?.setAttribute('content', light ? 'light' : 'dark');
 }
 
 function skyIdle() {
@@ -7638,6 +7717,7 @@ function setPlace(place) {
   state.results = null;
   state.error = '';
   state.sel = { type: 'now' };
+  state.dayOpen = null;
   state.ai = { status: 'idle', text: '', error: '', fp: '' };
   state.chatLast = null;
   setBanner(null);
@@ -7780,12 +7860,12 @@ async function runAi({ force = false } = {}) {
 }
 const runAiSoon = debounce(() => runAi(), 450);
 
-function select(sel) {
+function select(sel, { reveal = true } = {}) {
   state.sel = sel;
   renderAll();
   updateSky();
   syncAi();
-  if (sel.type !== 'now') revealAi();
+  if (reveal && sel.type !== 'now') revealAi();
 }
 
 function revealAi() {
@@ -8320,8 +8400,26 @@ const ACTIONS = {
   locate: () => locate(),
   refresh: () => load({ manual: true }),
   now: () => select({ type: 'now' }),
-  hour: (t) => select({ type: 'hour', iso: t.dataset.iso }),
-  day: (t) => select({ type: 'day', date: t.dataset.date }),
+  hour: (t) => select({ type: 'hour', iso: t.dataset.iso }, { reveal: !t.closest('.day-hours') }),
+  day: (t) => {
+    const date = t.dataset.date;
+    if (state.dayOpen === date) {
+      state.dayOpen = null;
+      select({ type: 'now' }, { reveal: false });
+    } else {
+      state.dayOpen = date;
+      state.dayScrolled = '';
+      select({ type: 'day', date }, { reveal: false });
+      requestAnimationFrame(() => {
+        const row = $(`.day[data-date="${CSS.escape(date)}"]`, el.daily);
+        const box = $('.day-hours', el.daily);
+        if (!row || !box) return;
+        const bottom = box.getBoundingClientRect().bottom;
+        const top = row.getBoundingClientRect().top;
+        if (bottom > innerHeight - 76 || top < 8) row.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      });
+    }
+  },
   vday: (t) => {
     state.vday = t.dataset.day === 'tomorrow' ? 'tomorrow' : 'today';
     if (state.fc) renderAdvice(state.fc, nowMs());

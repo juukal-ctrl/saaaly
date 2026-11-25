@@ -87,3 +87,54 @@ function meteoHtmlFor(fc) {
   const nowMs = Date.UTC(2026, 9, 14, 9, 30); // 12:30 Helsingin aikaa
   return meteoHtml({ fc: { ...fc, tz: 'Europe/Helsinki' }, nowMs, range: '24h', width: 360 });
 }
+
+import { dailyHtml, hourlyHtml } from '../js/views.js';
+import { icon3d, icon3dKey } from '../js/icons.js';
+import { SYMBOLS } from '../js/blend.js';
+
+test('päiväennuste: napautettu päivä avaa sen tunnit, sulkematon ei näytä niitä', () => {
+  const fc = blendForecast(results());
+  const closed = dailyHtml({ fc, nowMs: NOW, sel: { type: 'now' } });
+  assert.doesNotMatch(closed, /day-hours/);
+  assert.match(closed, /aria-expanded="false"/);
+  const date = fc.days[2].date;
+  const open = dailyHtml({ fc, nowMs: NOW, sel: { type: 'day', date }, openDate: date });
+  assert.match(open, new RegExp(`id="dh-${date}"`));
+  assert.match(open, /aria-expanded="true"/);
+  const cells = open.match(/class="hr"/g) || [];
+  assert.equal(cells.length, 24, 'tulevan päivän kaikki 24 tuntia');
+  assert.match(open, /data-act="hour" data-iso="[^"]+T07:00"/);
+});
+
+test('päiväennuste: tämän päivän tunnit alkavat nykyhetkestä', () => {
+  const fc = blendForecast(results());
+  const today = fc.days[0].date;
+  const open = dailyHtml({ fc, nowMs: NOW, sel: { type: 'day', date: today }, openDate: today });
+  const cells = open.match(/class="hr"/g) || [];
+  assert.ok(cells.length > 0 && cells.length < 24, `tänään jäljellä ${cells.length} tuntia`);
+  assert.doesNotMatch(open, /data-iso="[^"]+T0[0-9]:00"/, 'menneitä aamutunteja ei näytetä');
+});
+
+test('valittu tunti päivän sisällä näkyy painettuna', () => {
+  const fc = blendForecast(results());
+  const date = fc.days[1].date;
+  const iso = `${date}T12:00`;
+  const html = dailyHtml({ fc, nowMs: NOW, sel: { type: 'hour', iso }, openDate: date });
+  assert.match(html, new RegExp(`data-iso="${iso}" aria-pressed="true"`));
+});
+
+test('3D-kuvake: jokaiselle sääsymbolille on kuva päivällä ja yöllä', () => {
+  for (const sym of Object.keys(SYMBOLS)) {
+    for (const day of [true, false]) {
+      const key = icon3dKey(sym, day);
+      assert.match(key, /^[dn]-[a-z_]+$/, `${sym}/${day}`);
+      assert.match(icon3d(sym, day, 40), new RegExp(`wx-${key}`));
+    }
+  }
+  assert.match(icon3d('fog', true), /wx3-fog/);
+});
+
+test('tuntinauha käyttää 3D-kuvakkeita', () => {
+  const fc = blendForecast(results());
+  assert.match(hourlyHtml({ fc, nowMs: NOW, sel: { type: 'now' } }), /class="wx3 wx-/);
+});

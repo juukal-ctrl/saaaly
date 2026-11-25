@@ -7,7 +7,7 @@ import { fetchAll, summarizeErrors } from './weather.js';
 import { blendForecast, nowPosition, snapshot } from './blend.js';
 import { searchPlaces, reverseGeocode, getPosition, placeKey, haversineKm, FI_CITIES } from './geo.js';
 import { sunPosition, moonInfo } from './sun.js';
-import { createSky, skyColors } from './sky.js';
+import { createSky, skyColors, isLightSky } from './sky.js';
 import { RANGES as MG_RANGES } from './meteogram.js';
 import { aiSettings, effectiveMode, shortReason, explain, chat, listModels, pickFlash, generate, textOf, compactForecast, placeLabel } from './ai.js';
 import { answerQuestion } from './answer.js';
@@ -18,7 +18,7 @@ import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.j
 import { makeDemoFetch } from './demo.js';
 import { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 
-const VERSION = '0.3.2';
+const VERSION = '0.4.0';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
@@ -82,6 +82,7 @@ const state = {
   manualLoad: false,
   error: '',
   sel: { type: 'now' },
+  dayOpen: null, // päivä, jonka tunnit näytetään päiväennusteen alla
   ai: { status: 'idle', text: '', error: '', fp: '' },
   refreshMin: REFRESH_OPTIONS.includes(savedRefresh) ? savedRefresh : 10,
   sheet: null,
@@ -390,7 +391,21 @@ function renderAll() {
     const next = $('#strip', el.hourly);
     if (next && left) next.scrollLeft = left;
   }
-  patch('daily', el.daily, dailyHtml({ fc, nowMs: now, sel }));
+  if (state.dayOpen && !fc.days.slice(0, 7).some((d) => d.date === state.dayOpen)) state.dayOpen = null;
+  const dayLeft = $('.dstrip', el.daily)?.scrollLeft || 0;
+  if (patch('daily', el.daily, dailyHtml({ fc, nowMs: now, sel, openDate: state.dayOpen }))) {
+    const ds = $('.dstrip', el.daily);
+    if (ds) {
+      if (dayLeft && ds.dataset.date === state.dayScrolled) ds.scrollLeft = dayLeft;
+      else {
+        // uusi päivä: aloita aamusta (tänään jo alkavasta tunnista)
+        const first = ds.querySelector('.hr');
+        const morning = ds.querySelector(`.hr[data-iso$="T07:00"]`);
+        ds.scrollLeft = morning && first ? Math.max(0, morning.offsetLeft - first.offsetLeft) : 0;
+        state.dayScrolled = ds.dataset.date;
+      }
+    }
+  }
   const wasOpen = $('.models-d', el.models)?.open;
   if (patch('models', el.models, modelsHtml({ results: state.results, fc, nowMs: now })) && wasOpen) $('.models-d', el.models).open = true;
 }
@@ -453,6 +468,9 @@ function initSky() {
 function setThemeColor(alt) {
   const c = skyColors(alt)[0].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
   el.theme?.setAttribute('content', '#' + c);
+  const light = isLightSky(alt);
+  document.body.classList.toggle('light', light);
+  el.theme?.parentNode?.querySelector('meta[name="color-scheme"]')?.setAttribute('content', light ? 'light' : 'dark');
 }
 
 function skyIdle() {
@@ -641,6 +659,7 @@ function setPlace(place) {
   state.results = null;
   state.error = '';
   state.sel = { type: 'now' };
+  state.dayOpen = null;
   state.ai = { status: 'idle', text: '', error: '', fp: '' };
   state.chatLast = null;
   setBanner(null);
@@ -783,12 +802,12 @@ async function runAi({ force = false } = {}) {
 }
 const runAiSoon = debounce(() => runAi(), 450);
 
-function select(sel) {
+function select(sel, { reveal = true } = {}) {
   state.sel = sel;
   renderAll();
   updateSky();
   syncAi();
-  if (sel.type !== 'now') revealAi();
+  if (reveal && sel.type !== 'now') revealAi();
 }
 
 function revealAi() {
@@ -1323,8 +1342,26 @@ const ACTIONS = {
   locate: () => locate(),
   refresh: () => load({ manual: true }),
   now: () => select({ type: 'now' }),
-  hour: (t) => select({ type: 'hour', iso: t.dataset.iso }),
-  day: (t) => select({ type: 'day', date: t.dataset.date }),
+  hour: (t) => select({ type: 'hour', iso: t.dataset.iso }, { reveal: !t.closest('.day-hours') }),
+  day: (t) => {
+    const date = t.dataset.date;
+    if (state.dayOpen === date) {
+      state.dayOpen = null;
+      select({ type: 'now' }, { reveal: false });
+    } else {
+      state.dayOpen = date;
+      state.dayScrolled = '';
+      select({ type: 'day', date }, { reveal: false });
+      requestAnimationFrame(() => {
+        const row = $(`.day[data-date="${CSS.escape(date)}"]`, el.daily);
+        const box = $('.day-hours', el.daily);
+        if (!row || !box) return;
+        const bottom = box.getBoundingClientRect().bottom;
+        const top = row.getBoundingClientRect().top;
+        if (bottom > innerHeight - 76 || top < 8) row.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      });
+    }
+  },
   vday: (t) => {
     state.vday = t.dataset.day === 'tomorrow' ? 'tomorrow' : 'today';
     if (state.fc) renderAdvice(state.fc, nowMs());

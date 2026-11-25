@@ -107,7 +107,7 @@ console.log(`saaaly.js: ${order.length} moduulia, ${(bundle.length / 1024).toFix
 
 // ---- Yksitiedostoinen esikatselu (esimerkkidata, ei verkkoyhteyksiä) ----
 let html = readFileSync(join(root, 'index.html'), 'utf8');
-const css = readFileSync(join(root, 'css/app.css'), 'utf8');
+const css = readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/icons\/([\w-]+\.webp)\)/g, (m, f) => `url(data:image/webp;base64,${readFileSync(join(root, 'icons', f)).toString('base64')})`); // esikatselussa kuvat upotetaan sivuun
 const svgPath = join(root, 'icons/icon.svg');
 const svg = existsSync(svgPath) ? readFileSync(svgPath, 'utf8') : '';
 html = html
@@ -117,7 +117,7 @@ html = html
   .replace('<link rel="icon" href="icons/icon.svg" type="image/svg+xml">', () => (svg ? `<link rel="icon" href="data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}">` : ''))
   .replace('<script src="crash.js"></script>', () => `<script>\n${readFileSync(join(root, 'crash.js'), 'utf8')}</script>`)
   .replace('<script src="saaaly.js" defer></script>', () => `<script>window.SAAALY_DEMO = true;</script>\n<script>\n${bundle}</script>`);
-if (html.includes('saaaly.js"') || html.includes('css/app.css') || html.includes('src="crash.js"')) throw new Error('Esikatselun muunnos epäonnistui');
+for (const bad of ['saaaly.js"', 'css/app.css', 'src="crash.js"']) if (html.includes(bad)) throw new Error('Esikatselun muunnos epäonnistui: ' + bad);
 mkdirSync(join(root, 'dist'), { recursive: true });
 writeFileSync(join(root, 'dist/preview.html'), html);
 copyFileSync(join(root, 'dist/preview.html'), join(root, 'esikatselu.html')); // sama sivu zipin mukana, avattavissa tuplaklikkaamalla
@@ -152,7 +152,7 @@ console.log(`dist/preview.html: ${(html.length / 1024).toFixed(1)} kt`);
   copyFileSync(join(root, 'saaaly.js'), join(out, 'saaaly.js'));
   copyFileSync(join(root, 'crash.js'), join(out, 'crash.js'));
   writeFileSync(join(out, 'version.json'), JSON.stringify({ version: pkg.version, build: BUILD }) + '\n');
-  copyFileSync(join(root, 'css/app.css'), join(out, 'app.css'));
+  writeFileSync(join(out, 'app.css'), readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/icons\//g, 'url('));
   for (const f of readdirSync(join(root, 'icons'))) copyFileSync(join(root, 'icons', f), join(out, f));
   const files = readdirSync(out).sort();
   console.log(`julkaise/: ${files.length} tiedostoa (${files.join(', ')})`);

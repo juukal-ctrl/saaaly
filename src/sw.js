@@ -4,7 +4,8 @@
 
 const BUILD = '__BUILD__';
 const CACHE = 'saaaly-' + BUILD;
-const SHELL = ['./', 'index.html', 'crash.js', 'saaaly.js', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
+const SHELL = ['./', 'index.html', 'crash.js', 'saaaly.js', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
+  'icons/wx-d-cloud.webp', 'icons/wx-d-part.webp', 'icons/wx-d-part_cloud.webp', 'icons/wx-d-part_sun.webp', 'icons/wx-d-rain.webp', 'icons/wx-d-snow.webp', 'icons/wx-d-storm.webp', 'icons/wx-d-sun.webp', 'icons/wx-n-cloud.webp', 'icons/wx-n-moon.webp', 'icons/wx-n-moonpart.webp', 'icons/wx-n-rain.webp', 'icons/wx-n-snow.webp', 'icons/wx-n-storm.webp'];
 const NET_TIMEOUT_MS = 3000;
 
 self.addEventListener('install', (event) => {

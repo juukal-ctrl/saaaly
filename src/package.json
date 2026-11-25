@@ -1,6 +1,6 @@
 {
   "name": "saaaly",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "SääÄly – AI Weather: usean säämallin yhdistelmäennuste, chat sovelluksen omalla datalla ja tekoälyn selitys (PWA)",
   "private": true,
   "type": "module",

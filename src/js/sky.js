@@ -8,11 +8,20 @@ const STOPS = [
   [-18, ['#03060f', '#060b1c', '#0a1330']],
   [-12, ['#060b1e', '#0d1735', '#17275a']],
   [-6, ['#101b45', '#2f3573', '#b55f6b']],
-  [-1, ['#1f3a78', '#6a5f9e', '#f0955c']],
-  [4, ['#264c8f', '#5a86c0', '#f0bd80']],
-  [12, ['#235aa0', '#4a80c4', '#8fb8e0']],
-  [35, ['#194f96', '#3f78bd', '#7fb0e0']],
+  [-5, ['#2a2f66', '#6a5a9c', '#d98a9a']],
+  [-2.5, ['#e8c5cf', '#d3b4e2', '#b8baf0']], // aamu/ilta: pastellinen persikka ja laventeli, vaalea jo ennen auringonnousua
+  [1, ['#f6cfc6', '#eabcd8', '#c9c4f2']],
+  [6, ['#ffe4cc', '#f6cae4', '#c7d3fb']],
+  [14, ['#fdebd3', '#e2cbfb', '#bcdcff']],
+  [35, ['#fdf0da', '#d8cdfb', '#b6ddff']],
 ].map(([alt, cols]) => [alt, cols.map((h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)])]);
+
+/** Onko taivas niin vaalea, että käyttöliittymän pitää käyttää tummaa tekstiä. */
+export function isLightSky(altDeg) {
+  const c = skyColors(altDeg)[1];
+  const lin = (v) => ((v / 255) ** 2.2);
+  return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]) > 0.3;
+}
 
 const mix = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 const rgba = (c, a = 1) => `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${a})`;
@@ -161,7 +170,8 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     const cover = clamp(cur.cloud, 0, 1);
     const night = clamp((-alt - 3) / 10, 0, 1);
     const [top0, mid0, hor0] = skyColors(alt);
-    const gloom = clamp(cover * 0.55 + (cur.precip > 0.3 ? 0.18 : 0) + cur.thunder * 0.2 + cur.fog * 0.3, 0, 0.88);
+    const gloom0 = clamp(cover * 0.55 + (cur.precip > 0.3 ? 0.18 : 0) + cur.thunder * 0.2 + cur.fog * 0.3, 0, 0.88);
+    const gloom = isLightSky(alt) ? gloom0 * 0.55 : gloom0; // vaalea taivas pysyy pastellina myös sateella
     const top = greyer(top0, gloom);
     const mid = greyer(mid0, gloom);
     const hor = greyer(hor0, gloom * 0.9);
@@ -170,7 +180,7 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     g.addColorStop(0, rgba(top));
     g.addColorStop(0.45, rgba(mid));
     g.addColorStop(0.72, rgba(hor));
-    g.addColorStop(1, rgba(mix(hor, [0, 0, 0], 0.18)));
+    g.addColorStop(1, rgba(isLightSky(alt) ? mix(hor, [170, 150, 230], 0.14) : mix(hor, [0, 0, 0], 0.18)));
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
@@ -278,7 +288,7 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     const nr = Math.floor(cur.rainN);
     if (nr > 0) {
       const slant = clamp(cur.wind / 14, 0, 1) * 0.55 * -Math.sin((cur.windDir * Math.PI) / 180);
-      ctx.strokeStyle = night > 0.5 ? 'rgba(170,195,235,0.42)' : 'rgba(205,224,255,0.55)';
+      ctx.strokeStyle = night > 0.5 ? 'rgba(170,195,235,0.42)' : isLightSky(alt) ? 'rgba(84,100,196,0.5)' : 'rgba(205,224,255,0.55)';
       ctx.lineWidth = 1.2;
       ctx.lineCap = 'round';
       ctx.beginPath();

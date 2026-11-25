@@ -104,3 +104,35 @@ function glyph(sym, isDay) {
 export function icon(sym, isDay = true, size = 48) {
   return `<svg class="wx" viewBox="0 0 64 64" width="${size}" height="${size}" aria-hidden="true" focusable="false">${glyph(sym, isDay)}</svg>`;
 }
+
+// Pehmeät 3D-kuvakkeet (esirenderöidyt webp-kuvat, tyylit app.css:ssä). Pienemmät ruudut käyttävät samoja kuvia.
+const KEY3D = {
+  clear: ['sun', 'moon'],
+  mostly_clear: ['part_sun', 'moonpart'],
+  partly_cloudy: ['part', 'moonpart'],
+  mostly_cloudy: ['part_cloud', 'moonpart'],
+  overcast: ['cloud', 'cloud'],
+  fog: ['cloud', 'cloud'],
+  drizzle: ['rain', 'rain'],
+  rain_light: ['rain', 'rain'],
+  rain: ['rain', 'rain'],
+  rain_heavy: ['rain', 'rain'],
+  sleet: ['rain', 'rain'],
+  snow_light: ['snow', 'snow'],
+  snow: ['snow', 'snow'],
+  snow_heavy: ['snow', 'snow'],
+  thunder: ['storm', 'storm'],
+};
+
+/** Kuvakkeen avain 3D-kuvalle, esim. "d-sun" tai "n-moonpart". */
+export function icon3dKey(sym, isDay = true) {
+  const k = KEY3D[sym] || KEY3D.overcast;
+  return (isDay ? 'd-' : 'n-') + k[isDay ? 0 : 1];
+}
+
+/** 3D-kuvake. Koko tulee CSS-muuttujasta, jotta tyylit pysyvät tiedostossa (ei sisäisiä kokoja merkkijonoissa). */
+export function icon3d(sym, isDay = true, size = 48) {
+  const heavy = sym === 'rain_heavy' || sym === 'snow_heavy' ? ' wx3-heavy' : '';
+  const fog = sym === 'fog' ? '<i class="wx3-fog"></i>' : '';
+  return `<span class="wx3 wx-${icon3dKey(sym, isDay)}${heavy}" style="--s:${size}px" aria-hidden="true">${fog}</span>`;
+}

@@ -10,6 +10,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const site = join(root, 'julkaise');
 const HINT = ' (aja: node tools/build.mjs)';
 const EXPECTED = ['index.html', 'crash.js', 'saaaly.js', 'app.css', 'sw.js', 'version.json', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
+const WX = 'd-cloud d-part d-part_cloud d-part_sun d-rain d-snow d-storm d-sun n-cloud n-moon n-moonpart n-rain n-snow n-storm'.split(' ').map((n) => `wx-${n}.webp`);
+EXPECTED.push(...WX);
 
 const read = (name) => readFileSync(join(site, name), 'utf8');
 const names = () => readdirSync(site).sort();
@@ -33,8 +35,9 @@ test('julkaise/ vastaa lähdekansiota (ei vanhentuneita kopioita)', () => {
   const same = (a, b, label) => assert.ok(readFileSync(a).equals(readFileSync(b)), `${label} on vanhentunut${HINT}`);
   same(join(site, 'saaaly.js'), join(root, 'saaaly.js'), 'saaaly.js');
   same(join(site, 'crash.js'), join(root, 'crash.js'), 'crash.js');
-  same(join(site, 'app.css'), join(root, 'css/app.css'), 'app.css');
-  for (const f of ['icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png']) same(join(site, f), join(root, 'icons', f), f);
+  // julkaistussa tyylitiedostossa kuvapolut on litistetty (url(../icons/x) -> url(x))
+  assert.equal(read('app.css'), readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/icons\//g, 'url('), `app.css on vanhentunut${HINT}`);
+  for (const f of ['icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', ...WX]) same(join(site, f), join(root, 'icons', f), f);
   for (const f of ['index.html', 'manifest.webmanifest', 'sw.js']) {
     const built = read(f)
       .replace(/const BUILD = '[0-9a-f]{10}';/, "const BUILD = '__BUILD__';")
