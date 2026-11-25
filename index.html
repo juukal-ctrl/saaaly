@@ -24,11 +24,8 @@
   <h1 class="sr-only">SääÄly</h1>
   <header class="top">
     <button id="placeBtn" class="place" type="button" data-act="open-search" aria-haspopup="dialog" aria-label="Vaihda paikkakuntaa"></button>
-    <div class="top-actions">
-      <button class="icon-btn" type="button" data-act="locate" aria-label="Käytä sijaintiani"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
-      <button id="refreshBtn" class="icon-btn" type="button" data-act="refresh" aria-label="Päivitä sää"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 5.7"/><path d="M20 4v7h-7"/></svg></button>
-      <button class="icon-btn" type="button" data-act="open-settings" aria-label="Asetukset"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M18 7h2M4 17h2M11 17h9"/><circle cx="15.5" cy="7" r="2.3"/><circle cx="8.5" cy="17" r="2.3"/></svg></button>
-    </div>
+    <div id="hdSeg" class="modebar hd-seg" role="group" aria-label="Ajankohta"><button class="seg" type="button" data-act="vday" data-day="today" aria-pressed="true">Tänään</button><button class="seg" type="button" data-act="vday" data-day="tomorrow" aria-pressed="false">Huomenna</button></div>
+    <button class="menu-btn" type="button" data-act="open-settings" aria-label="Asetukset ja lisätoiminnot"><b></b></button>
   </header>
 
   <div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
@@ -48,6 +45,7 @@
     <section id="meteo" class="meteo" aria-label="Sääkaavio"></section>
     <section id="hourly" aria-label="Tuntiennuste"></section>
     <section id="daily" aria-label="Päiväennuste"></section>
+    <section id="certainty" class="cert" aria-label="Varmuus"></section>
     <section id="models" aria-label="Mallivertailu"></section>
   </div>
 
@@ -57,7 +55,7 @@
   </footer>
 </main>
 
-<div id="fab" class="askbar"><button class="ask-btn" type="button" data-act="open-chat" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg><span>Kysy SääÄlyltä…</span><svg class="go" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-3-7z"/></svg></button></div>
+<div id="fab" class="askbar"><button class="ask-btn" type="button" data-act="open-chat" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg><span>Kysy SääÄlyltä</span><svg class="go" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-3-7z"/></svg></button></div>
 
 <div id="ptr" class="ptr" aria-hidden="true" hidden><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.4 5.7"/><path d="M20 4v7h-7"/></svg></div>
 

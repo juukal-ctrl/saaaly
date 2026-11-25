@@ -53,6 +53,28 @@ function mulberry(seed) {
   };
 }
 
+
+// Konseptin väripaletit: [x, y, leveys, korkeus, väri, peittävyys] 412 x 915 -pohjalla. Kuudes kenttä on vain päiväpaletissa (muissa läpinäkyvä).
+const hex3 = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const PAL = {
+  aamu: [[190, -60, 380, 380, '#ffd58a', 0.95], [-110, 120, 340, 340, '#ffb0c4', 0.9], [110, 380, 380, 380, '#ffd9c6', 0.85], [-70, 620, 420, 360, '#b8dcff', 0.95], [250, 700, 240, 240, '#fff3c2', 0.9], [-30, -40, 220, 200, '#fff0b2', 0.6]],
+  paiva: [[200, -70, 360, 360, '#ffc4a6', 0.95], [-110, 150, 320, 320, '#ffaed2', 0.9], [110, 380, 380, 380, '#cdb5ff', 0.9], [-70, 620, 400, 360, '#a6d5ff', 0.95], [250, 700, 240, 240, '#bff3de', 0.9], [-30, -40, 220, 200, '#fff0b2', 0.9]],
+  ilta: [[190, -60, 380, 380, '#e6a6c8', 0.85], [-120, 140, 360, 360, '#a69be6', 0.9], [100, 400, 400, 400, '#8fa4e6', 0.9], [-70, 640, 420, 360, '#7fb0e8', 0.85], [250, 700, 240, 240, '#c9b8f2', 0.8], [-30, -40, 220, 200, '#f6c8d8', 0.5]],
+  yo: [[190, -60, 380, 380, '#6a4fd6', 0.75], [-120, 140, 360, 360, '#d05fb4', 0.55], [100, 420, 400, 400, '#3b55d6', 0.7], [-70, 640, 420, 360, '#1f8fd6', 0.6], [250, 700, 240, 240, '#2fd0c0', 0.35], [-30, -40, 220, 200, '#6a4fd6', 0.3]],
+};
+for (const k of Object.keys(PAL)) PAL[k] = PAL[k].map(([x, y, bw, bh, c, o]) => [x, y, bw, bh, hex3(c), o]);
+
+const blendPal = (a, b, t) => a.map((p, i) => [lerp(p[0], b[i][0], t), lerp(p[1], b[i][1], t), lerp(p[2], b[i][2], t), lerp(p[3], b[i][3], t), mix(p[4], b[i][4], t), lerp(p[5], b[i][5], t)]);
+
+/** Taustan värikentät auringon korkeuden mukaan: yö, aamu tai ilta (hämärä), päivä. */
+export function blobsFor(alt, morning) {
+  const dusk = morning ? PAL.aamu : PAL.ilta;
+  if (alt <= -8) return PAL.yo;
+  if (alt < 2) return blendPal(PAL.yo, dusk, (alt + 8) / 10);
+  if (alt < 18) return blendPal(dusk, PAL.paiva, (alt - 2) / 16);
+  return PAL.paiva;
+}
+
 const DEFAULT = { alt: 25, bearing: 180, cloud: 0.3, precip: 0, snow: 0, wind: 3, windDir: 225, thunder: 0, fog: 0, moonPhase: 0.5, moonAlt: -90, moonHA: 12 };
 const KEYS = Object.keys(DEFAULT);
 
@@ -81,15 +103,6 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
   const tgt = { ...DEFAULT };
 
   const rand = mulberry(20261014);
-  const stars = Array.from({ length: 140 }, () => ({ x: rand(), y: rand() * 0.66, r: 0.5 + rand() * 1.1, ph: rand() * 6.28 }));
-  const clouds = Array.from({ length: 12 }, (_, i) => ({
-    x: rand() * 1.4 - 0.2,
-    y: 0.05 + rand() * 0.5,
-    s: 0.75 + rand() * 0.9,
-    v: 0.5 + rand() * 0.9,
-    puffs: Array.from({ length: 6 }, (_, k) => ({ dx: (k - 2.5) * (30 + rand() * 14), dy: (rand() - 0.5) * 26 - Math.abs(k - 2.5) * 5, r: 46 + rand() * 36 })),
-    order: i,
-  }));
   const rain = Array.from({ length: 280 }, () => ({ x: rand(), y: rand(), v: 0.75 + rand() * 0.5, l: 0.6 + rand() * 0.8 }));
   const snow = Array.from({ length: 200 }, () => ({ x: rand(), y: rand(), v: 0.5 + rand() * 0.8, r: 1 + rand() * 2.2, ph: rand() * 6.28 }));
   const flash = { a: 0, next: 4, bolt: null };
@@ -141,133 +154,34 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     flash.a = Math.max(0, flash.a - dt * 3.5);
   }
 
-  function drawMoon(x, y, r, phase, a) {
-    const k = Math.cos(phase * 2 * Math.PI); // 1 uusi, -1 täysi
-    const lit = (1 - k) / 2;
-    const glow = ctx.createRadialGradient(x, y, 0, x, y, r * 6);
-    glow.addColorStop(0, `rgba(200,215,255,${((0.08 + 0.3 * lit) * a).toFixed(3)})`);
-    glow.addColorStop(1, 'rgba(200,215,255,0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(x - r * 6, y - r * 6, r * 12, r * 12);
-    ctx.save();
-    ctx.translate(x, y);
-    if (phase >= 0.5) ctx.scale(-1, 1); // vähenevä kuu: valaistu puoli vasemmalla
-    ctx.fillStyle = `rgba(120,132,170,${(0.22 * a).toFixed(3)})`; // varjopuoli
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, 6.2832);
-    ctx.fill();
-    ctx.fillStyle = `rgba(238,242,255,${a.toFixed(3)})`; // valaistu osa
-    ctx.beginPath();
-    ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, false);
-    ctx.ellipse(0, 0, Math.max(0.01, Math.abs(k)) * r, r, 0, Math.PI / 2, -Math.PI / 2, k > 0);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  }
-
   function draw(dt) {
     const alt = cur.alt;
     const cover = clamp(cur.cloud, 0, 1);
+    const gloom = clamp(cover * 0.35 + (cur.precip > 0.3 ? 0.2 : 0) + cur.thunder * 0.25 + cur.fog * 0.3, 0, 0.7);
     const night = clamp((-alt - 3) / 10, 0, 1);
-    const [top0, mid0, hor0] = skyColors(alt);
-    const gloom0 = clamp(cover * 0.55 + (cur.precip > 0.3 ? 0.18 : 0) + cur.thunder * 0.2 + cur.fog * 0.3, 0, 0.88);
-    const gloom = isLightSky(alt) ? gloom0 * 0.55 : gloom0; // vaalea taivas pysyy pastellina myös sateella
-    const top = greyer(top0, gloom);
-    const mid = greyer(mid0, gloom);
-    const hor = greyer(hor0, gloom * 0.9);
+    const light = clamp((alt + 8) / 10, 0, 1);
 
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, rgba(top));
-    g.addColorStop(0.45, rgba(mid));
-    g.addColorStop(0.72, rgba(hor));
-    g.addColorStop(1, rgba(isLightSky(alt) ? mix(hor, [170, 150, 230], 0.14) : mix(hor, [0, 0, 0], 0.18)));
-    ctx.fillStyle = g;
+    // Pohja ja liukuvat värikentät (konseptin aamu / päivä / ilta / yö)
+    ctx.fillStyle = rgba(mix([19, 15, 41], [252, 247, 255], light));
     ctx.fillRect(0, 0, w, h);
-
-    // Tähdet
-    const starVis = night * (1 - cover * 0.95) * (1 - cur.fog * 0.8);
-    if (starVis > 0.02) {
-      for (const s of stars) {
-        const tw = 0.55 + 0.45 * Math.sin(time * 1.3 + s.ph);
-        ctx.fillStyle = `rgba(235,240,255,${(starVis * tw).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.arc(s.x * w, s.y * h, s.r, 0, 6.2832);
-        ctx.fill();
-      }
-    }
-
-    // Kuu: oikea vaihe ja karkea asema (nousee idästä, laskee länteen)
-    if (alt < -2 && cur.moonAlt > -1) {
-      const mv = clamp((-alt - 2) / 6, 0, 1) * clamp((cur.moonAlt + 1) / 8, 0, 1) * (1 - cover * 0.9) * (1 - cur.fog * 0.7);
-      if (mv > 0.02) {
-        const mx = lerp(w * 0.16, w * 0.84, clamp((cur.moonHA + 6) / 12, 0, 1));
-        const my = lerp(h * 0.64, h * 0.1, clamp(cur.moonAlt / 50, 0, 1));
-        drawMoon(mx, my, 19, cur.moonPhase, mv);
-      }
-    }
-
-    // Aurinko
-    if (alt > -4) {
-      const vis = clamp((alt + 4) / 8, 0, 1) * (1 - cover * 0.82) * (1 - cur.fog * 0.6);
-      if (vis > 0.02) {
-        const horizonY = h * 0.64;
-        const sx = lerp(w * 0.14, w * 0.86, clamp((cur.bearing - 85) / 190, 0, 1));
-        const sy = alt >= 0 ? lerp(horizonY, h * 0.1, clamp(alt / 65, 0, 1)) : horizonY - alt * h * 0.012;
-        const warm = clamp(alt / 22, 0, 1);
-        const col = mix([255, 150, 80], [255, 238, 196], warm);
-        const R = Math.min(w, h) * (0.55 - warm * 0.15);
-        const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, R);
-        glow.addColorStop(0, rgba(col, 0.7 * vis));
-        glow.addColorStop(0.25, rgba(col, 0.25 * vis));
-        glow.addColorStop(1, rgba(col, 0));
-        ctx.fillStyle = glow;
-        ctx.fillRect(0, 0, w, h);
-        const disc = ctx.createRadialGradient(sx, sy, 0, sx, sy, 30);
-        disc.addColorStop(0, rgba([255, 255, 245], vis));
-        disc.addColorStop(0.7, rgba(col, vis));
-        disc.addColorStop(1, rgba(col, 0));
-        ctx.fillStyle = disc;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 30, 0, 6.2832);
-        ctx.fill();
-      }
-    }
-
-    // Pilvet
-    if (cover > 0.04) {
-      const light = clamp((alt + 8) / 22, 0, 1);
-      const dayCol = mix([236, 241, 249], hor0, 0.22);
-      const nightCol = [62, 71, 98];
-      const stormCol = [88, 98, 114];
-      const base = mix(mix(nightCol, dayCol, light), stormCol, clamp(cover * 0.45 + (cur.precip > 0.3 ? 0.3 : 0) + cur.thunder * 0.35, 0, 0.85));
-      const n = Math.max(1, Math.round(cover * clouds.length));
-      const alpha = clamp(0.3 + cover * 0.5, 0, 0.88);
-      const drift = Math.max(2, cur.wind * 1.6);
-      for (let i = 0; i < n; i++) {
-        const c = clouds[i];
-        const x = ((((c.x * w + time * drift * c.v) % (w * 1.5)) + w * 1.5) % (w * 1.5)) - w * 0.25;
-        const y = c.y * h;
-        for (const p of c.puffs) {
-          const px = x + p.dx * c.s;
-          const py = y + p.dy * c.s;
-          const pr = p.r * c.s;
-          const gr = ctx.createRadialGradient(px, py, 0, px, py, pr);
-          gr.addColorStop(0, rgba(base, alpha));
-          gr.addColorStop(0.55, rgba(base, alpha * 0.6));
-          gr.addColorStop(1, rgba(base, 0));
-          ctx.fillStyle = gr;
-          ctx.fillRect(px - pr, py - pr, pr * 2, pr * 2);
-        }
-      }
-      const layer = clamp((cover - 0.6) / 0.4, 0, 1);
-      if (layer > 0) {
-        const lg = ctx.createLinearGradient(0, 0, 0, h * 0.8);
-        lg.addColorStop(0, rgba(base, 0.62 * layer));
-        lg.addColorStop(1, rgba(base, 0.18 * layer));
-        ctx.fillStyle = lg;
-        ctx.fillRect(0, 0, w, h);
-      }
-    }
+    const blobs = blobsFor(alt, cur.bearing < 180);
+    const grey = mix([60, 55, 92], [206, 201, 226], light);
+    const sx = w / 412;
+    const sy = h / 915;
+    blobs.forEach(([x, y, bw, bh, col, o], i) => {
+      const dx = Math.sin(time * 0.045 * (1 + i * 0.27) + i * 2.1) * 22;
+      const dy = Math.cos(time * 0.037 * (1 + i * 0.21) + i * 1.3) * 22;
+      const cx = (x + bw / 2 + dx) * sx;
+      const cy = (y + bh / 2 + dy) * sy;
+      const r = (Math.max(bw, bh) / 2) * 1.2 * Math.max(sx, sy * 0.9);
+      const c = mix(col, grey, gloom * 0.55);
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, rgba(c, o));
+      g.addColorStop(0.5, rgba(c, o * 0.62));
+      g.addColorStop(1, rgba(c, 0));
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    });
 
     // Sumu
     if (cur.fog > 0.03) {

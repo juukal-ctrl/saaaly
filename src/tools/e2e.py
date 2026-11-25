@@ -162,8 +162,8 @@ with sync_playwright() as pw:
     check('nykyhetken lämpötila vastaa laskettua arvoa', t_temp)
 
     def t_hourly():
-        expect(page.locator('#strip .hr')).to_have_count(48)
-        expect(page.locator('#strip .hr').first).to_contain_text('Nyt')
+        expect(page.locator('#strip .hv')).to_have_count(24)
+        expect(page.locator('#strip .hv').first).to_contain_text('nyt')
         expect(page.locator('#daily .day')).to_have_count(7)
     check('tuntilista (48 h) ja päivälista (7 pv)', t_hourly)
 
@@ -207,9 +207,9 @@ with sync_playwright() as pw:
     check('päivän valinta päivittää selityskortin ja paluu "nyt"', t_day)
 
     def t_hour():
-        page.locator('#strip .hr').nth(5).click()
+        page.locator('#strip .hv').nth(5).click()
         expect(page.locator('#ai .chip-sm.active')).to_be_visible()
-        page.click('#strip .hr >> nth=0')
+        page.click('#strip .hv >> nth=0')
         expect(page.locator('#ai .chip-sm')).to_have_text('nyt')
     check('tunnin valinta', t_hour)
 
@@ -413,7 +413,9 @@ with sync_playwright() as pw:
     check('paikkahaku vaihtaa paikkakunnan ja tallentaa sen', t_search)
 
     def t_locate_btn():
-        page.click('[data-act=locate].icon-btn')
+        page.click('[data-act=open-settings]')
+        page.click('.quick [data-act=locate]')
+        page.keyboard.press('Escape')
         ready(page, 'Turku')
         expect(page.locator('#placeBtn .pin')).to_be_visible()
     check('"Käytä sijaintiani" -painike palaa omaan sijaintiin', t_locate_btn)
@@ -446,6 +448,7 @@ with sync_playwright() as pw:
 
     def t_refresh():
         n0 = len(net_log)
+        page.click('[data-act=open-settings]')
         page.click('#refreshBtn')
         page.wait_for_timeout(1500)
         assert len([u for u in net_log[n0:] if 'api.open-meteo.com' in u]) >= 7, 'päivitys ei hakenut malleja'

@@ -1,5 +1,13 @@
 # Muutosloki
 
+## 0.6.0 – Hyväksytty konsepti käyttöön
+
+- **Elävät pastellitaustat** aamulle, päivälle, illalle ja yölle (yö on violetti, ei lähes musta). Yläpalkissa on paikkapilleri, Tänään/Huomenna-valitsin ja valikkopainike; alalaidassa lasinen "Kysy SääÄlyltä" -pilleri. Päivitys ja "Käytä sijaintiani" ovat asetuksissa.
+- **Tunnit**: pystylista 24 tunnille, jossa jokaisella tunnilla on kuvake, lämpötila ja sateen todennäköisyyspalkki. Otsikko kertoo, milloin sade alkaa tai loppuu.
+- **Viikko**: kromikapselit lämpötilaväleille ja viikon yhteenveto otsikossa. Päivän napautus avaa edelleen sen tunnit.
+- **Varmuus**: helmirypäs näyttää, kuinka samaa mieltä säämallit ovat tänään ja huomenna.
+- Sateenvarjolause mahtuu kahdelle riville, ja radan tuntiobjektit on sijoiteltu uudelleen niin, etteivät ne peitä tekstiä.
+
 ## 0.5.0 – Uusi etusivu
 
 - **Etusivu rakennettu uudelleen**: iso lihavoitu lämpötila, pehmeä 3D-kuvake, iso sateenvarjolause ja pieni takkirivi ilman laatikoita. Tänään/Huomenna-valinta on lauseen alla.

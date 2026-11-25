@@ -1785,6 +1785,28 @@ function mulberry(seed) {
   };
 }
 
+
+// Konseptin väripaletit: [x, y, leveys, korkeus, väri, peittävyys] 412 x 915 -pohjalla. Kuudes kenttä on vain päiväpaletissa (muissa läpinäkyvä).
+const hex3 = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const PAL = {
+  aamu: [[190, -60, 380, 380, '#ffd58a', 0.95], [-110, 120, 340, 340, '#ffb0c4', 0.9], [110, 380, 380, 380, '#ffd9c6', 0.85], [-70, 620, 420, 360, '#b8dcff', 0.95], [250, 700, 240, 240, '#fff3c2', 0.9], [-30, -40, 220, 200, '#fff0b2', 0.6]],
+  paiva: [[200, -70, 360, 360, '#ffc4a6', 0.95], [-110, 150, 320, 320, '#ffaed2', 0.9], [110, 380, 380, 380, '#cdb5ff', 0.9], [-70, 620, 400, 360, '#a6d5ff', 0.95], [250, 700, 240, 240, '#bff3de', 0.9], [-30, -40, 220, 200, '#fff0b2', 0.9]],
+  ilta: [[190, -60, 380, 380, '#e6a6c8', 0.85], [-120, 140, 360, 360, '#a69be6', 0.9], [100, 400, 400, 400, '#8fa4e6', 0.9], [-70, 640, 420, 360, '#7fb0e8', 0.85], [250, 700, 240, 240, '#c9b8f2', 0.8], [-30, -40, 220, 200, '#f6c8d8', 0.5]],
+  yo: [[190, -60, 380, 380, '#6a4fd6', 0.75], [-120, 140, 360, 360, '#d05fb4', 0.55], [100, 420, 400, 400, '#3b55d6', 0.7], [-70, 640, 420, 360, '#1f8fd6', 0.6], [250, 700, 240, 240, '#2fd0c0', 0.35], [-30, -40, 220, 200, '#6a4fd6', 0.3]],
+};
+for (const k of Object.keys(PAL)) PAL[k] = PAL[k].map(([x, y, bw, bh, c, o]) => [x, y, bw, bh, hex3(c), o]);
+
+const blendPal = (a, b, t) => a.map((p, i) => [lerp(p[0], b[i][0], t), lerp(p[1], b[i][1], t), lerp(p[2], b[i][2], t), lerp(p[3], b[i][3], t), mix(p[4], b[i][4], t), lerp(p[5], b[i][5], t)]);
+
+/** Taustan värikentät auringon korkeuden mukaan: yö, aamu tai ilta (hämärä), päivä. */
+function blobsFor(alt, morning) {
+  const dusk = morning ? PAL.aamu : PAL.ilta;
+  if (alt <= -8) return PAL.yo;
+  if (alt < 2) return blendPal(PAL.yo, dusk, (alt + 8) / 10);
+  if (alt < 18) return blendPal(dusk, PAL.paiva, (alt - 2) / 16);
+  return PAL.paiva;
+}
+
 const DEFAULT = { alt: 25, bearing: 180, cloud: 0.3, precip: 0, snow: 0, wind: 3, windDir: 225, thunder: 0, fog: 0, moonPhase: 0.5, moonAlt: -90, moonHA: 12 };
 const KEYS = Object.keys(DEFAULT);
 
@@ -1813,15 +1835,6 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
   const tgt = { ...DEFAULT };
 
   const rand = mulberry(20261014);
-  const stars = Array.from({ length: 140 }, () => ({ x: rand(), y: rand() * 0.66, r: 0.5 + rand() * 1.1, ph: rand() * 6.28 }));
-  const clouds = Array.from({ length: 12 }, (_, i) => ({
-    x: rand() * 1.4 - 0.2,
-    y: 0.05 + rand() * 0.5,
-    s: 0.75 + rand() * 0.9,
-    v: 0.5 + rand() * 0.9,
-    puffs: Array.from({ length: 6 }, (_, k) => ({ dx: (k - 2.5) * (30 + rand() * 14), dy: (rand() - 0.5) * 26 - Math.abs(k - 2.5) * 5, r: 46 + rand() * 36 })),
-    order: i,
-  }));
   const rain = Array.from({ length: 280 }, () => ({ x: rand(), y: rand(), v: 0.75 + rand() * 0.5, l: 0.6 + rand() * 0.8 }));
   const snow = Array.from({ length: 200 }, () => ({ x: rand(), y: rand(), v: 0.5 + rand() * 0.8, r: 1 + rand() * 2.2, ph: rand() * 6.28 }));
   const flash = { a: 0, next: 4, bolt: null };
@@ -1873,133 +1886,34 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     flash.a = Math.max(0, flash.a - dt * 3.5);
   }
 
-  function drawMoon(x, y, r, phase, a) {
-    const k = Math.cos(phase * 2 * Math.PI); // 1 uusi, -1 täysi
-    const lit = (1 - k) / 2;
-    const glow = ctx.createRadialGradient(x, y, 0, x, y, r * 6);
-    glow.addColorStop(0, `rgba(200,215,255,${((0.08 + 0.3 * lit) * a).toFixed(3)})`);
-    glow.addColorStop(1, 'rgba(200,215,255,0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(x - r * 6, y - r * 6, r * 12, r * 12);
-    ctx.save();
-    ctx.translate(x, y);
-    if (phase >= 0.5) ctx.scale(-1, 1); // vähenevä kuu: valaistu puoli vasemmalla
-    ctx.fillStyle = `rgba(120,132,170,${(0.22 * a).toFixed(3)})`; // varjopuoli
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, 6.2832);
-    ctx.fill();
-    ctx.fillStyle = `rgba(238,242,255,${a.toFixed(3)})`; // valaistu osa
-    ctx.beginPath();
-    ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, false);
-    ctx.ellipse(0, 0, Math.max(0.01, Math.abs(k)) * r, r, 0, Math.PI / 2, -Math.PI / 2, k > 0);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  }
-
   function draw(dt) {
     const alt = cur.alt;
     const cover = clamp(cur.cloud, 0, 1);
+    const gloom = clamp(cover * 0.35 + (cur.precip > 0.3 ? 0.2 : 0) + cur.thunder * 0.25 + cur.fog * 0.3, 0, 0.7);
     const night = clamp((-alt - 3) / 10, 0, 1);
-    const [top0, mid0, hor0] = skyColors(alt);
-    const gloom0 = clamp(cover * 0.55 + (cur.precip > 0.3 ? 0.18 : 0) + cur.thunder * 0.2 + cur.fog * 0.3, 0, 0.88);
-    const gloom = isLightSky(alt) ? gloom0 * 0.55 : gloom0; // vaalea taivas pysyy pastellina myös sateella
-    const top = greyer(top0, gloom);
-    const mid = greyer(mid0, gloom);
-    const hor = greyer(hor0, gloom * 0.9);
+    const light = clamp((alt + 8) / 10, 0, 1);
 
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, rgba(top));
-    g.addColorStop(0.45, rgba(mid));
-    g.addColorStop(0.72, rgba(hor));
-    g.addColorStop(1, rgba(isLightSky(alt) ? mix(hor, [170, 150, 230], 0.14) : mix(hor, [0, 0, 0], 0.18)));
-    ctx.fillStyle = g;
+    // Pohja ja liukuvat värikentät (konseptin aamu / päivä / ilta / yö)
+    ctx.fillStyle = rgba(mix([19, 15, 41], [252, 247, 255], light));
     ctx.fillRect(0, 0, w, h);
-
-    // Tähdet
-    const starVis = night * (1 - cover * 0.95) * (1 - cur.fog * 0.8);
-    if (starVis > 0.02) {
-      for (const s of stars) {
-        const tw = 0.55 + 0.45 * Math.sin(time * 1.3 + s.ph);
-        ctx.fillStyle = `rgba(235,240,255,${(starVis * tw).toFixed(3)})`;
-        ctx.beginPath();
-        ctx.arc(s.x * w, s.y * h, s.r, 0, 6.2832);
-        ctx.fill();
-      }
-    }
-
-    // Kuu: oikea vaihe ja karkea asema (nousee idästä, laskee länteen)
-    if (alt < -2 && cur.moonAlt > -1) {
-      const mv = clamp((-alt - 2) / 6, 0, 1) * clamp((cur.moonAlt + 1) / 8, 0, 1) * (1 - cover * 0.9) * (1 - cur.fog * 0.7);
-      if (mv > 0.02) {
-        const mx = lerp(w * 0.16, w * 0.84, clamp((cur.moonHA + 6) / 12, 0, 1));
-        const my = lerp(h * 0.64, h * 0.1, clamp(cur.moonAlt / 50, 0, 1));
-        drawMoon(mx, my, 19, cur.moonPhase, mv);
-      }
-    }
-
-    // Aurinko
-    if (alt > -4) {
-      const vis = clamp((alt + 4) / 8, 0, 1) * (1 - cover * 0.82) * (1 - cur.fog * 0.6);
-      if (vis > 0.02) {
-        const horizonY = h * 0.64;
-        const sx = lerp(w * 0.14, w * 0.86, clamp((cur.bearing - 85) / 190, 0, 1));
-        const sy = alt >= 0 ? lerp(horizonY, h * 0.1, clamp(alt / 65, 0, 1)) : horizonY - alt * h * 0.012;
-        const warm = clamp(alt / 22, 0, 1);
-        const col = mix([255, 150, 80], [255, 238, 196], warm);
-        const R = Math.min(w, h) * (0.55 - warm * 0.15);
-        const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, R);
-        glow.addColorStop(0, rgba(col, 0.7 * vis));
-        glow.addColorStop(0.25, rgba(col, 0.25 * vis));
-        glow.addColorStop(1, rgba(col, 0));
-        ctx.fillStyle = glow;
-        ctx.fillRect(0, 0, w, h);
-        const disc = ctx.createRadialGradient(sx, sy, 0, sx, sy, 30);
-        disc.addColorStop(0, rgba([255, 255, 245], vis));
-        disc.addColorStop(0.7, rgba(col, vis));
-        disc.addColorStop(1, rgba(col, 0));
-        ctx.fillStyle = disc;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 30, 0, 6.2832);
-        ctx.fill();
-      }
-    }
-
-    // Pilvet
-    if (cover > 0.04) {
-      const light = clamp((alt + 8) / 22, 0, 1);
-      const dayCol = mix([236, 241, 249], hor0, 0.22);
-      const nightCol = [62, 71, 98];
-      const stormCol = [88, 98, 114];
-      const base = mix(mix(nightCol, dayCol, light), stormCol, clamp(cover * 0.45 + (cur.precip > 0.3 ? 0.3 : 0) + cur.thunder * 0.35, 0, 0.85));
-      const n = Math.max(1, Math.round(cover * clouds.length));
-      const alpha = clamp(0.3 + cover * 0.5, 0, 0.88);
-      const drift = Math.max(2, cur.wind * 1.6);
-      for (let i = 0; i < n; i++) {
-        const c = clouds[i];
-        const x = ((((c.x * w + time * drift * c.v) % (w * 1.5)) + w * 1.5) % (w * 1.5)) - w * 0.25;
-        const y = c.y * h;
-        for (const p of c.puffs) {
-          const px = x + p.dx * c.s;
-          const py = y + p.dy * c.s;
-          const pr = p.r * c.s;
-          const gr = ctx.createRadialGradient(px, py, 0, px, py, pr);
-          gr.addColorStop(0, rgba(base, alpha));
-          gr.addColorStop(0.55, rgba(base, alpha * 0.6));
-          gr.addColorStop(1, rgba(base, 0));
-          ctx.fillStyle = gr;
-          ctx.fillRect(px - pr, py - pr, pr * 2, pr * 2);
-        }
-      }
-      const layer = clamp((cover - 0.6) / 0.4, 0, 1);
-      if (layer > 0) {
-        const lg = ctx.createLinearGradient(0, 0, 0, h * 0.8);
-        lg.addColorStop(0, rgba(base, 0.62 * layer));
-        lg.addColorStop(1, rgba(base, 0.18 * layer));
-        ctx.fillStyle = lg;
-        ctx.fillRect(0, 0, w, h);
-      }
-    }
+    const blobs = blobsFor(alt, cur.bearing < 180);
+    const grey = mix([60, 55, 92], [206, 201, 226], light);
+    const sx = w / 412;
+    const sy = h / 915;
+    blobs.forEach(([x, y, bw, bh, col, o], i) => {
+      const dx = Math.sin(time * 0.045 * (1 + i * 0.27) + i * 2.1) * 22;
+      const dy = Math.cos(time * 0.037 * (1 + i * 0.21) + i * 1.3) * 22;
+      const cx = (x + bw / 2 + dx) * sx;
+      const cy = (y + bh / 2 + dy) * sy;
+      const r = (Math.max(bw, bh) / 2) * 1.2 * Math.max(sx, sy * 0.9);
+      const c = mix(col, grey, gloom * 0.55);
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, rgba(c, o));
+      g.addColorStop(0.5, rgba(c, o * 0.62));
+      g.addColorStop(1, rgba(c, 0));
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    });
 
     // Sumu
     if (cur.fog > 0.03) {
@@ -2163,7 +2077,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
   });
   return { set, resize, start, stop, poke, setAnimated, draw: () => draw(0), state: () => ({ ...cur }) };
 }
-return { isLightSky, skyColors, createSky };
+return { isLightSky, skyColors, blobsFor, createSky };
 })();
 
 // ---- meteogram.js ----
@@ -6481,7 +6395,7 @@ __m['views'] = (() => {
 // views.js: näkymät HTML-merkkijonoina. Puhtaita funktioita: sama syöte antaa saman HTML:n.
 // Kaikki dynaaminen teksti kulkee esc()-funktion kautta.
 
-const { escapeHtml: esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, cap, mdToHtml, zonedToUtcMs, localNow } = __m['util'];
+const { escapeHtml: esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, mdToHtml, zonedToUtcMs, localNow } = __m['util'];
 const { SYMBOLS, nowPosition, snapshot, modelRows, confidence, describeNow, describeDay, describeHour, popText } = __m['blend'];
 const { icon, icon3d } = __m['icons'];
 const { meteogram, RANGES } = __m['meteogram'];
@@ -6680,8 +6594,7 @@ function verdictHtml({ v }) {
   const sub = String(umb.sub || '').split(' · ')[0];
   return `
     <button class="vsay" type="button" data-act="ask-open" data-q="${esc(askRain)}"><b>${esc(sentence(umb.text))}</b>${sub ? `<span>${esc(sentence(sub))}</span>` : ''}</button>
-    <button class="vcoat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${esc([coat.text, coatSub].filter(Boolean).join(' · '))}</button>
-    <div class="vbar"><div class="modebar v-seg" role="group" aria-label="Ajankohta"><button class="seg" type="button" data-act="vday" data-day="today" aria-pressed="${!tomorrow}">Tänään</button><button class="seg" type="button" data-act="vday" data-day="tomorrow" aria-pressed="${tomorrow}">Huomenna</button></div><span class="vcap">${esc(v.win.caption)}</span></div>`;
+    <button class="vcoat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${esc([coat.text, coatSub].filter(Boolean).join(' · '))}</button>`;
 }
 
 /** Etusivun hiljaiset lisäyksiä: tutkalause ja lisähuomiot radan alla. */
@@ -6700,8 +6613,8 @@ function verdictMoreHtml({ v, nowcastLine = '', range = '' }) {
 // ---------- Tuntirata ----------
 
 // Radan tuntipaikat (esirenderöidyn radan kuvassa, 412 x 750 -yksikön alue): q = merkin keskipiste, d = piste radan vieressä, c = kuvakkeen keskipiste.
-const TRACK = [{"c": [377.7, 158.4], "q": [377.7, 204.4], "d": [356.4, 187.1]}, {"c": [290.7, 295.7], "q": [290.7, 341.7], "d": [316.6, 273.3]}, {"c": [361.3, 384.6], "q": [361.3, 430.6], "d": [326.8, 364.4]}, {"c": [243.1, 431.9], "q": [243.1, 477.9], "d": [238.7, 399.1]}, {"c": [173.4, 436.7], "q": [173.4, 482.7], "d": [162.7, 404.8]}, {"c": [32.8, 329.8], "q": [32.8, 375.8], "d": [67.6, 389.9]}, {"c": [117.9, 457.0], "q": [117.9, 503.0], "d": [87.1, 480.0]}, {"c": [62.9, 596.6], "q": [62.9, 642.6], "d": [88.8, 570.3]}, {"c": [171.0, 622.5], "q": [171.0, 668.5], "d": [176.4, 589.8]}, {"c": [236.6, 635.3], "q": [236.6, 681.3], "d": [250.2, 604.0]}, {"c": [380.0, 540.7], "q": [380.0, 586.7], "d": [345.0, 602.9]}, {"c": [291.0, 670.5], "q": [291.0, 716.5], "d": [313.9, 692.1]}];
-const TRACK_ICON_W = 68;
+const TRACK = [{"c": [377.7, 158.4], "q": [377.7, 204.4], "d": [356.4, 187.1]}, {"c": [290.7, 295.7], "q": [290.7, 341.7], "d": [316.6, 273.3]}, {"c": [361.3, 384.6], "q": [361.3, 430.6], "d": [326.8, 364.4]}, {"c": [243.1, 431.9], "q": [243.1, 477.9], "d": [238.7, 399.1]}, {"c": [173.4, 436.7], "q": [173.4, 482.7], "d": [162.7, 404.8]}, {"c": [30.1, 348.1], "q": [30.1, 394.1], "d": [67.6, 389.9]}, {"c": [117.9, 457.0], "q": [117.9, 503.0], "d": [87.1, 480.0]}, {"c": [62.9, 596.6], "q": [62.9, 642.6], "d": [88.8, 570.3]}, {"c": [171.0, 622.5], "q": [171.0, 668.5], "d": [176.4, 589.8]}, {"c": [236.6, 635.3], "q": [236.6, 681.3], "d": [250.2, 604.0]}, {"c": [380.0, 540.7], "q": [380.0, 586.7], "d": [345.0, 602.9]}, {"c": [291.0, 670.5], "q": [291.0, 716.5], "d": [313.9, 692.1]}];
+const TRACK_ICON_W = 64;
 const pct = (v, total) => `${((v / total) * 100).toFixed(2)}%`;
 
 /** Seuraavat 12 tuntia kromiradalla: jokaisella tunnilla oma paikka, sääkuvake, lämpötila ja kellonaika. */
@@ -6814,20 +6727,34 @@ function meteoHtml({ fc, nowMs, range = '24h', inspectIso = null, width = 360, c
 
 // ---------- Tunnit ja päivät ----------
 
+function hoursHeadline(hs) {
+  const wet = (h) => h.pop >= 0.5 && h.precip >= 0.1;
+  const first = hs.findIndex(wet);
+  if (first < 0) return ['Kuivaa pitkään.', 'Ei sadetta seuraavaan vuorokauteen.'];
+  if (first === 0) {
+    const dry = hs.findIndex((h) => !wet(h));
+    return ['Sataa nyt.', dry < 0 ? 'Sade jatkuu koko vuorokauden.' : `Kuivuu klo ${hh(hs[dry].t)}.`];
+  }
+  const end = hs.findIndex((h, i) => i > first && !wet(h));
+  return [`Kuivaa klo ${hh(hs[first].t)} asti.`, end < 0 ? 'Sade jatkuu sen jälkeen.' : `Sade ${hh(hs[end].t)} asti.`];
+}
+
 function hourlyHtml({ fc, nowMs, sel }) {
   const { idx } = nowPosition(fc, nowMs);
-  const cells = fc.hours.slice(idx, idx + 48).map((h, i) => {
+  const hs = fc.hours.slice(idx, idx + 24);
+  const [h1, h2] = hoursHeadline(hs);
+  const rows = hs.map((h, i) => {
     const date = h.t.slice(0, 10);
     const first = i === 0;
-    const flag = first || hh(h.t) === '00' ? weekday(date) : '';
     const pressed = first ? sel.type === 'now' : sel.type === 'hour' && sel.iso === h.t;
-    const act = first ? 'now' : 'hour';
-    const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
-    return `<button class="hr" type="button" data-act="${act}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`${weekday(date)} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`)}">
-      <span class="hr-d">${esc(flag)}</span><span class="hr-t">${first ? 'Nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 46)}
-      <span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></button>`;
+    const pc = Math.round((h.pop || 0) * 100);
+    const day = !first && hh(h.t) === '00' ? `<span class="hv-day">${esc(weekday(date))}</span>` : '';
+    return `<button class="hv${first ? ' now' : ''}" type="button" data-act="${first ? 'now' : 'hour'}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`${weekday(date)} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}, sateen todennäköisyys ${pc} %`)}">
+      <span class="hv-t"><i></i>${first ? 'nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 40)}<span class="hv-temp">${esc(fmtTemp(h.temp))}</span>
+      <span class="hv-bar" aria-hidden="true"><b style="width:${pc}%"></b></span><span class="hv-pc">${pc} %</span>${day}</button>`;
   });
-  return `<h2 class="label">Seuraavat tunnit</h2><div class="strip" id="strip">${cells.join('')}</div>`;
+  return `<p class="kick">Tunnit · ${esc(weekday(hs[0].t.slice(0, 10), true))}</p><h2 class="hl"><b>${esc(h1)}</b><span>${esc(h2)}</span></h2>
+    <p class="hv-cap">sateen todennäköisyys</p><div class="hvs" id="strip">${rows.join('')}</div>`;
 }
 
 /** Yhden päivän tuntiruudut: tälle päivälle jäljellä olevat tunnit (tänään) tai koko päivä. */
@@ -6845,6 +6772,18 @@ function dayHoursHtml({ fc, nowMs, sel, day }) {
   });
   return `<div class="day-hours" id="dh-${esc(day.date)}" role="region" aria-label="${esc(`Tuntiennuste ${weekday(day.date)} ${fmtDM(day.date)}`)}">
     <p class="dh-sum">${esc(bits.join(' · '))}</p><div class="strip dstrip" data-date="${esc(day.date)}">${cells.join('')}</div></div>`;
+}
+
+function weekHeadline(days) {
+  const cold = days.reduce((m, d) => (d.tmax < m.tmax ? d : m), days[0]);
+  const warm = days.reduce((m, d) => (d.tmax > m.tmax ? d : m), days[0]);
+  const snow = days.find((d) => /snow/.test(d.sym));
+  const wet = days.find((d) => /rain|drizzle|sleet|thunder/.test(d.sym));
+  const first = days[0];
+  const trend = days[days.length - 1].tmax - first.tmax;
+  const h1 = trend <= -4 ? 'Viikon aikana kylmenee.' : trend >= 4 ? 'Viikon aikana lämpenee.' : 'Lämpötila pysyy samoissa.';
+  const h2 = snow ? `${cap(weekday(snow.date, true))}na lunta.` : wet ? `${cap(weekday(wet.date, true))}na sadetta.` : `Lämpimin ${weekday(warm.date, true)}, kylmin ${weekday(cold.date, true)}.`;
+  return [h1, h2];
 }
 
 function dailyHtml({ fc, nowMs, sel, openDate = null }) {
@@ -6865,7 +6804,45 @@ function dailyHtml({ fc, nowMs, sel, openDate = null }) {
       <span class="day-p">${d.precip >= 0.1 ? esc(fmtMm(d.precip)) : '–'}</span><svg class="day-c" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`;
     return row + (open ? dayHoursHtml({ fc, nowMs, sel, day: d }) : '');
   });
-  return `<h2 class="label">${days.length} päivän ennuste</h2><p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="days">${rows.join('')}</div>`;
+  const [w1, w2] = weekHeadline(days);
+  return `<p class="kick">Seuraavat ${days.length} päivää</p><h2 class="hl"><b>${esc(w1)}</b><span>${esc(w2)}</span></h2><p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="days">${rows.join('')}</div>`;
+}
+
+// ---------- Varmuus ----------
+
+/** Yhden päivän (tänään/huomenna) mallien hajonta lämpötilassa: keskiarvo päivän tunneilta. */
+function daySpread(fc, date) {
+  const hs = fc.hours.filter((h) => h.t.slice(0, 10) === date && Number.isFinite(h.spread));
+  return hs.length ? hs.reduce((a, h) => a + h.spread, 0) / hs.length : 0;
+}
+
+/** Helmirypäs: tiivis, kun hajonta on pieni; levinnyt, kun suuri. Sijainnit lasketaan luvuista, ei satunnaisesti. */
+function pearls(spread, n = 14) {
+  const r = Math.min(46, 8 + spread * 14);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = i * 2.399963;
+    const d = Math.sqrt((i + 0.5) / n) * r;
+    out.push(`<i style="left:${(50 + Math.cos(a) * d).toFixed(1)}%;top:${(50 + Math.sin(a) * d * 0.8).toFixed(1)}%"></i>`);
+  }
+  return out.join('');
+}
+
+function certaintyHtml({ fc, nowMs }) {
+  const { local } = nowPosition(fc, nowMs);
+  const d0 = local.date;
+  const d1 = addDays(d0, 1);
+  const s0 = daySpread(fc, d0);
+  const s1 = daySpread(fc, d1);
+  const word = (x) => (x < 1.2 ? 'luotettava' : x < 2.5 ? 'kohtalainen' : 'epävarma');
+  const sameMind = (x) => (x < 1.2 ? 'mallit samaa mieltä' : x < 2.5 ? 'mallit hieman eri mieltä' : 'mallit eri mieltä');
+  const head = s1 < 1.2 ? 'Huomennakin varma.' : s1 < 2.5 ? 'Huomenna hieman eroa.' : 'Huomenna epävarmaa.';
+  return `<p class="kick">Varmuus</p><h2 class="hl"><b>Tänään ${word(s0)}.</b><span>${esc(head)}</span></h2>
+    <p class="cert-d">Jokainen helmi on yksi säämalli. Mitä tiiviimpi rypäs, sitä varmempi ennuste.</p>
+    <div class="cert-row"><div class="pearls" role="img" aria-label="Tänään: mallien hajonta ${esc(fmtNum(s0, 1))} astetta">${pearls(s0)}<em>Tänään</em></div>
+      <div class="pearls" role="img" aria-label="Huomenna: mallien hajonta ${esc(fmtNum(s1, 1))} astetta">${pearls(s1)}<em>Huomenna</em></div></div>
+    <div class="glass cert-c"><b>Tänään · ${esc(sameMind(s0))}</b><span>ero ${esc(fmtNum(s0, 1))}° lämpötilassa</span></div>
+    <div class="glass cert-c"><b>Huomenna · ${esc(word(s1))} varmuus</b><span>${esc(fmtNum(s1, 1))}° eroa mallien välillä</span></div>`;
 }
 
 // ---------- Mallivertailu ----------
@@ -6956,6 +6933,7 @@ function settingsSheetHtml({ hasKey, mode = 'internal', model, refreshMin, model
   return `
     <div class="sheet-head"><h2>Asetukset</h2><button class="icon-btn" type="button" data-act="close" aria-label="Sulje">${SVG.close}</button></div>
     <div class="sheet-scroll">
+      <div class="quick"><button id="refreshBtn" class="btn ghost" type="button" data-act="refresh">${SVG.refresh}<span>Päivitä sää</span></button><button class="btn ghost" type="button" data-act="locate">${SVG.locate}<span>Käytä sijaintiani</span></button></div>
       ${demo ? '<p class="note demo-note">Esimerkkitila: sää, paikkahaku ja nimet ovat tekaistuja, eikä Gemini ole käytössä. Chat vastaa silti sovelluksen omalla laskennalla.</p>' : ''}
       <section class="set">
         <h3>Vastausten lähde</h3>
@@ -7086,7 +7064,7 @@ function chatEmptyHtml({ mode = 'internal' }) {
   if (mode === 'free') return '<p class="note center">Gemini vastaa sovelluksen keräämän säädatan perusteella ja voi käyttää lisäksi yleistietoa ilmiöiden selittämiseen. Kysy esimerkiksi pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.</p>';
   return '<p class="note center">Gemini vastaa vain sovelluksen keräämän säädatan perusteella. Kysy esimerkiksi pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.</p>';
 }
-return { SVG, GLYPH, agoText, STALE_MIN, selLabel, placeHtml, heroHtml, heroRestHtml, alertsHtml, verdictHtml, verdictMoreHtml, trackHtml, selectionLines, aiHtml, nightSpans, meteoHtml, hourlyHtml, dailyHtml, modelsHtml, MODE_INFO, modeNote, modeSwitchHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, welcomeHtml, aboutSheetHtml, CHAT_CHIPS, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml };
+return { SVG, GLYPH, agoText, STALE_MIN, selLabel, placeHtml, heroHtml, heroRestHtml, alertsHtml, verdictHtml, verdictMoreHtml, trackHtml, selectionLines, aiHtml, nightSpans, meteoHtml, hourlyHtml, dailyHtml, certaintyHtml, modelsHtml, MODE_INFO, modeNote, modeSwitchHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, welcomeHtml, aboutSheetHtml, CHAT_CHIPS, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml };
 })();
 
 // ---- app.js ----
@@ -7109,10 +7087,10 @@ const { fetchNowcast, summarizeNowcast, nowcastUrl } = __m['nowcast'];
 const { createGuard, runSource, memoryStorage, sourceLine } = __m['sources'];
 const { fetchWarnings, officialRows, inFinland, MIRROR_URL } = __m['warnings'];
 const { makeDemoFetch } = __m['demo'];
-const { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, verdictMoreHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
+const { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, certaintyHtml, verdictMoreHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
 
-const VERSION = '0.5.0';
-const BUILD = 'c26610ab45'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
+const VERSION = '0.6.0';
+const BUILD = '70e4ca8e7f'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
 // ---------- Ympäristö ----------
@@ -7142,7 +7120,6 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const el = {
   sky: $('#sky'),
   place: $('#placeBtn'),
-  refresh: $('#refreshBtn'),
   banner: $('#banner'),
   update: $('#update'),
   app: $('#app'),
@@ -7160,6 +7137,7 @@ const el = {
   daily: $('#daily'),
   meteo: $('#meteo'),
   models: $('#models'),
+  certainty: $('#certainty'),
   fab: $('#fab'),
   sheet: $('#sheet'),
   panel: $('#sheetPanel'),
@@ -7248,7 +7226,7 @@ function renderHeader() {
     el.place.innerHTML = html;
     el.place.setAttribute('aria-label', state.place?.name ? `Vaihda paikkakuntaa. Nyt: ${state.place.name}` : 'Vaihda paikkakuntaa');
   }
-  el.refresh.classList.toggle('spin', state.loading && (state.manualLoad || !state.fc));
+  $('#refreshBtn')?.classList.toggle('spin', state.loading && (state.manualLoad || !state.fc));
 }
 
 function renderAi() {
@@ -7278,6 +7256,8 @@ function renderAdvice(fc, now) {
   } catch {
     v = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
   }
+  const tomorrow = v?.win?.kind === 'tomorrow';
+  document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.day === 'tomorrow') === tomorrow)));
   el.verdict.hidden = !v;
   patch('verdict', el.verdict, v ? verdictHtml({ v }) : '');
   el.verdictMore.hidden = !v;
@@ -7518,6 +7498,7 @@ function renderAll() {
       }
     }
   }
+  patch('certainty', el.certainty, certaintyHtml({ fc, nowMs: now }));
   const wasOpen = $('.models-d', el.models)?.open;
   if (patch('models', el.models, modelsHtml({ results: state.results, fc, nowMs: now })) && wasOpen) $('.models-d', el.models).open = true;
 }

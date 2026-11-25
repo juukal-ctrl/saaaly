@@ -22,6 +22,9 @@ const EXPECTED = [
   'saaaly.js',
   'sw.js',
   'version.json',
+  'trk-d.webp',
+  'trk-n.webp',
+  ...['d-sun', 'd-part_sun', 'd-part', 'd-part_cloud', 'd-cloud', 'd-rain', 'd-snow', 'd-storm', 'n-moon', 'n-moonpart', 'n-cloud', 'n-rain', 'n-snow', 'n-storm'].map((n) => `wx-${n}.webp`),
 ];
 
 function fail(msg) {

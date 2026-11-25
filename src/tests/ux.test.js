@@ -35,8 +35,7 @@ test('Tänään/Huomenna pakottaa ikkunan', () => {
   const v = verdict(fc, at(13, 0), { month: 10, window: 'tomorrow' });
   assert.match(v.win.caption, /^Huomenna klo 07/);
   const html = verdictHtml({ v });
-  assert.match(html, /data-act="vday" data-day="tomorrow" aria-pressed="true"/);
-  assert.match(html, /data-act="vday" data-day="today" aria-pressed="false"/);
+  assert.match(html, /Sataako huomenna\?/);
   assert.ok(CHAT_CHIPS.includes('Mitä pukisin huomenna?'));
 });
 
@@ -45,7 +44,6 @@ test('etusivun lause: iso sateenvarjolause, takkirivi ja valinta ilman laatikoit
   const html = verdictHtml({ v });
   assert.match(html, /class="vsay"/);
   assert.match(html, /class="vcoat"/);
-  assert.match(html, /data-act="vday"/);
   assert.doesNotMatch(html, /vgrid|vcell/);
   const more = verdictMoreHtml({ v, nowcastLine: 'Tutkan mukaan ei sadetta', range: 'tänään ylin +5°, alin +1°' });
   assert.match(more, /class="vnow"/);

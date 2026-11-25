@@ -1,7 +1,7 @@
 // views.js: näkymät HTML-merkkijonoina. Puhtaita funktioita: sama syöte antaa saman HTML:n.
 // Kaikki dynaaminen teksti kulkee esc()-funktion kautta.
 
-import { escapeHtml as esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, cap, mdToHtml, zonedToUtcMs, localNow } from './util.js';
+import { escapeHtml as esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, mdToHtml, zonedToUtcMs, localNow } from './util.js';
 import { SYMBOLS, nowPosition, snapshot, modelRows, confidence, describeNow, describeDay, describeHour, popText } from './blend.js';
 import { icon, icon3d } from './icons.js';
 import { meteogram, RANGES } from './meteogram.js';
@@ -200,8 +200,7 @@ export function verdictHtml({ v }) {
   const sub = String(umb.sub || '').split(' · ')[0];
   return `
     <button class="vsay" type="button" data-act="ask-open" data-q="${esc(askRain)}"><b>${esc(sentence(umb.text))}</b>${sub ? `<span>${esc(sentence(sub))}</span>` : ''}</button>
-    <button class="vcoat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${esc([coat.text, coatSub].filter(Boolean).join(' · '))}</button>
-    <div class="vbar"><div class="modebar v-seg" role="group" aria-label="Ajankohta"><button class="seg" type="button" data-act="vday" data-day="today" aria-pressed="${!tomorrow}">Tänään</button><button class="seg" type="button" data-act="vday" data-day="tomorrow" aria-pressed="${tomorrow}">Huomenna</button></div><span class="vcap">${esc(v.win.caption)}</span></div>`;
+    <button class="vcoat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${esc([coat.text, coatSub].filter(Boolean).join(' · '))}</button>`;
 }
 
 /** Etusivun hiljaiset lisäyksiä: tutkalause ja lisähuomiot radan alla. */
@@ -220,8 +219,8 @@ export function verdictMoreHtml({ v, nowcastLine = '', range = '' }) {
 // ---------- Tuntirata ----------
 
 // Radan tuntipaikat (esirenderöidyn radan kuvassa, 412 x 750 -yksikön alue): q = merkin keskipiste, d = piste radan vieressä, c = kuvakkeen keskipiste.
-const TRACK = [{"c": [377.7, 158.4], "q": [377.7, 204.4], "d": [356.4, 187.1]}, {"c": [290.7, 295.7], "q": [290.7, 341.7], "d": [316.6, 273.3]}, {"c": [361.3, 384.6], "q": [361.3, 430.6], "d": [326.8, 364.4]}, {"c": [243.1, 431.9], "q": [243.1, 477.9], "d": [238.7, 399.1]}, {"c": [173.4, 436.7], "q": [173.4, 482.7], "d": [162.7, 404.8]}, {"c": [32.8, 329.8], "q": [32.8, 375.8], "d": [67.6, 389.9]}, {"c": [117.9, 457.0], "q": [117.9, 503.0], "d": [87.1, 480.0]}, {"c": [62.9, 596.6], "q": [62.9, 642.6], "d": [88.8, 570.3]}, {"c": [171.0, 622.5], "q": [171.0, 668.5], "d": [176.4, 589.8]}, {"c": [236.6, 635.3], "q": [236.6, 681.3], "d": [250.2, 604.0]}, {"c": [380.0, 540.7], "q": [380.0, 586.7], "d": [345.0, 602.9]}, {"c": [291.0, 670.5], "q": [291.0, 716.5], "d": [313.9, 692.1]}];
-const TRACK_ICON_W = 68;
+const TRACK = [{"c": [377.7, 158.4], "q": [377.7, 204.4], "d": [356.4, 187.1]}, {"c": [290.7, 295.7], "q": [290.7, 341.7], "d": [316.6, 273.3]}, {"c": [361.3, 384.6], "q": [361.3, 430.6], "d": [326.8, 364.4]}, {"c": [243.1, 431.9], "q": [243.1, 477.9], "d": [238.7, 399.1]}, {"c": [173.4, 436.7], "q": [173.4, 482.7], "d": [162.7, 404.8]}, {"c": [30.1, 348.1], "q": [30.1, 394.1], "d": [67.6, 389.9]}, {"c": [117.9, 457.0], "q": [117.9, 503.0], "d": [87.1, 480.0]}, {"c": [62.9, 596.6], "q": [62.9, 642.6], "d": [88.8, 570.3]}, {"c": [171.0, 622.5], "q": [171.0, 668.5], "d": [176.4, 589.8]}, {"c": [236.6, 635.3], "q": [236.6, 681.3], "d": [250.2, 604.0]}, {"c": [380.0, 540.7], "q": [380.0, 586.7], "d": [345.0, 602.9]}, {"c": [291.0, 670.5], "q": [291.0, 716.5], "d": [313.9, 692.1]}];
+const TRACK_ICON_W = 64;
 const pct = (v, total) => `${((v / total) * 100).toFixed(2)}%`;
 
 /** Seuraavat 12 tuntia kromiradalla: jokaisella tunnilla oma paikka, sääkuvake, lämpötila ja kellonaika. */
@@ -334,20 +333,34 @@ export function meteoHtml({ fc, nowMs, range = '24h', inspectIso = null, width =
 
 // ---------- Tunnit ja päivät ----------
 
+function hoursHeadline(hs) {
+  const wet = (h) => h.pop >= 0.5 && h.precip >= 0.1;
+  const first = hs.findIndex(wet);
+  if (first < 0) return ['Kuivaa pitkään.', 'Ei sadetta seuraavaan vuorokauteen.'];
+  if (first === 0) {
+    const dry = hs.findIndex((h) => !wet(h));
+    return ['Sataa nyt.', dry < 0 ? 'Sade jatkuu koko vuorokauden.' : `Kuivuu klo ${hh(hs[dry].t)}.`];
+  }
+  const end = hs.findIndex((h, i) => i > first && !wet(h));
+  return [`Kuivaa klo ${hh(hs[first].t)} asti.`, end < 0 ? 'Sade jatkuu sen jälkeen.' : `Sade ${hh(hs[end].t)} asti.`];
+}
+
 export function hourlyHtml({ fc, nowMs, sel }) {
   const { idx } = nowPosition(fc, nowMs);
-  const cells = fc.hours.slice(idx, idx + 48).map((h, i) => {
+  const hs = fc.hours.slice(idx, idx + 24);
+  const [h1, h2] = hoursHeadline(hs);
+  const rows = hs.map((h, i) => {
     const date = h.t.slice(0, 10);
     const first = i === 0;
-    const flag = first || hh(h.t) === '00' ? weekday(date) : '';
     const pressed = first ? sel.type === 'now' : sel.type === 'hour' && sel.iso === h.t;
-    const act = first ? 'now' : 'hour';
-    const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
-    return `<button class="hr" type="button" data-act="${act}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`${weekday(date)} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`)}">
-      <span class="hr-d">${esc(flag)}</span><span class="hr-t">${first ? 'Nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 46)}
-      <span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></button>`;
+    const pc = Math.round((h.pop || 0) * 100);
+    const day = !first && hh(h.t) === '00' ? `<span class="hv-day">${esc(weekday(date))}</span>` : '';
+    return `<button class="hv${first ? ' now' : ''}" type="button" data-act="${first ? 'now' : 'hour'}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`${weekday(date)} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}, sateen todennäköisyys ${pc} %`)}">
+      <span class="hv-t"><i></i>${first ? 'nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 40)}<span class="hv-temp">${esc(fmtTemp(h.temp))}</span>
+      <span class="hv-bar" aria-hidden="true"><b style="width:${pc}%"></b></span><span class="hv-pc">${pc} %</span>${day}</button>`;
   });
-  return `<h2 class="label">Seuraavat tunnit</h2><div class="strip" id="strip">${cells.join('')}</div>`;
+  return `<p class="kick">Tunnit · ${esc(weekday(hs[0].t.slice(0, 10), true))}</p><h2 class="hl"><b>${esc(h1)}</b><span>${esc(h2)}</span></h2>
+    <p class="hv-cap">sateen todennäköisyys</p><div class="hvs" id="strip">${rows.join('')}</div>`;
 }
 
 /** Yhden päivän tuntiruudut: tälle päivälle jäljellä olevat tunnit (tänään) tai koko päivä. */
@@ -365,6 +378,18 @@ function dayHoursHtml({ fc, nowMs, sel, day }) {
   });
   return `<div class="day-hours" id="dh-${esc(day.date)}" role="region" aria-label="${esc(`Tuntiennuste ${weekday(day.date)} ${fmtDM(day.date)}`)}">
     <p class="dh-sum">${esc(bits.join(' · '))}</p><div class="strip dstrip" data-date="${esc(day.date)}">${cells.join('')}</div></div>`;
+}
+
+function weekHeadline(days) {
+  const cold = days.reduce((m, d) => (d.tmax < m.tmax ? d : m), days[0]);
+  const warm = days.reduce((m, d) => (d.tmax > m.tmax ? d : m), days[0]);
+  const snow = days.find((d) => /snow/.test(d.sym));
+  const wet = days.find((d) => /rain|drizzle|sleet|thunder/.test(d.sym));
+  const first = days[0];
+  const trend = days[days.length - 1].tmax - first.tmax;
+  const h1 = trend <= -4 ? 'Viikon aikana kylmenee.' : trend >= 4 ? 'Viikon aikana lämpenee.' : 'Lämpötila pysyy samoissa.';
+  const h2 = snow ? `${cap(weekday(snow.date, true))}na lunta.` : wet ? `${cap(weekday(wet.date, true))}na sadetta.` : `Lämpimin ${weekday(warm.date, true)}, kylmin ${weekday(cold.date, true)}.`;
+  return [h1, h2];
 }
 
 export function dailyHtml({ fc, nowMs, sel, openDate = null }) {
@@ -385,7 +410,45 @@ export function dailyHtml({ fc, nowMs, sel, openDate = null }) {
       <span class="day-p">${d.precip >= 0.1 ? esc(fmtMm(d.precip)) : '–'}</span><svg class="day-c" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`;
     return row + (open ? dayHoursHtml({ fc, nowMs, sel, day: d }) : '');
   });
-  return `<h2 class="label">${days.length} päivän ennuste</h2><p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="days">${rows.join('')}</div>`;
+  const [w1, w2] = weekHeadline(days);
+  return `<p class="kick">Seuraavat ${days.length} päivää</p><h2 class="hl"><b>${esc(w1)}</b><span>${esc(w2)}</span></h2><p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="days">${rows.join('')}</div>`;
+}
+
+// ---------- Varmuus ----------
+
+/** Yhden päivän (tänään/huomenna) mallien hajonta lämpötilassa: keskiarvo päivän tunneilta. */
+function daySpread(fc, date) {
+  const hs = fc.hours.filter((h) => h.t.slice(0, 10) === date && Number.isFinite(h.spread));
+  return hs.length ? hs.reduce((a, h) => a + h.spread, 0) / hs.length : 0;
+}
+
+/** Helmirypäs: tiivis, kun hajonta on pieni; levinnyt, kun suuri. Sijainnit lasketaan luvuista, ei satunnaisesti. */
+function pearls(spread, n = 14) {
+  const r = Math.min(46, 8 + spread * 14);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = i * 2.399963;
+    const d = Math.sqrt((i + 0.5) / n) * r;
+    out.push(`<i style="left:${(50 + Math.cos(a) * d).toFixed(1)}%;top:${(50 + Math.sin(a) * d * 0.8).toFixed(1)}%"></i>`);
+  }
+  return out.join('');
+}
+
+export function certaintyHtml({ fc, nowMs }) {
+  const { local } = nowPosition(fc, nowMs);
+  const d0 = local.date;
+  const d1 = addDays(d0, 1);
+  const s0 = daySpread(fc, d0);
+  const s1 = daySpread(fc, d1);
+  const word = (x) => (x < 1.2 ? 'luotettava' : x < 2.5 ? 'kohtalainen' : 'epävarma');
+  const sameMind = (x) => (x < 1.2 ? 'mallit samaa mieltä' : x < 2.5 ? 'mallit hieman eri mieltä' : 'mallit eri mieltä');
+  const head = s1 < 1.2 ? 'Huomennakin varma.' : s1 < 2.5 ? 'Huomenna hieman eroa.' : 'Huomenna epävarmaa.';
+  return `<p class="kick">Varmuus</p><h2 class="hl"><b>Tänään ${word(s0)}.</b><span>${esc(head)}</span></h2>
+    <p class="cert-d">Jokainen helmi on yksi säämalli. Mitä tiiviimpi rypäs, sitä varmempi ennuste.</p>
+    <div class="cert-row"><div class="pearls" role="img" aria-label="Tänään: mallien hajonta ${esc(fmtNum(s0, 1))} astetta">${pearls(s0)}<em>Tänään</em></div>
+      <div class="pearls" role="img" aria-label="Huomenna: mallien hajonta ${esc(fmtNum(s1, 1))} astetta">${pearls(s1)}<em>Huomenna</em></div></div>
+    <div class="glass cert-c"><b>Tänään · ${esc(sameMind(s0))}</b><span>ero ${esc(fmtNum(s0, 1))}° lämpötilassa</span></div>
+    <div class="glass cert-c"><b>Huomenna · ${esc(word(s1))} varmuus</b><span>${esc(fmtNum(s1, 1))}° eroa mallien välillä</span></div>`;
 }
 
 // ---------- Mallivertailu ----------
@@ -476,6 +539,7 @@ export function settingsSheetHtml({ hasKey, mode = 'internal', model, refreshMin
   return `
     <div class="sheet-head"><h2>Asetukset</h2><button class="icon-btn" type="button" data-act="close" aria-label="Sulje">${SVG.close}</button></div>
     <div class="sheet-scroll">
+      <div class="quick"><button id="refreshBtn" class="btn ghost" type="button" data-act="refresh">${SVG.refresh}<span>Päivitä sää</span></button><button class="btn ghost" type="button" data-act="locate">${SVG.locate}<span>Käytä sijaintiani</span></button></div>
       ${demo ? '<p class="note demo-note">Esimerkkitila: sää, paikkahaku ja nimet ovat tekaistuja, eikä Gemini ole käytössä. Chat vastaa silti sovelluksen omalla laskennalla.</p>' : ''}
       <section class="set">
         <h3>Vastausten lähde</h3>

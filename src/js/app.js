@@ -16,9 +16,9 @@ import { fetchNowcast, summarizeNowcast, nowcastUrl } from './nowcast.js';
 import { createGuard, runSource, memoryStorage, sourceLine } from './sources.js';
 import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.js';
 import { makeDemoFetch } from './demo.js';
-import { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, verdictMoreHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
+import { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, certaintyHtml, verdictMoreHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
@@ -49,7 +49,6 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const el = {
   sky: $('#sky'),
   place: $('#placeBtn'),
-  refresh: $('#refreshBtn'),
   banner: $('#banner'),
   update: $('#update'),
   app: $('#app'),
@@ -67,6 +66,7 @@ const el = {
   daily: $('#daily'),
   meteo: $('#meteo'),
   models: $('#models'),
+  certainty: $('#certainty'),
   fab: $('#fab'),
   sheet: $('#sheet'),
   panel: $('#sheetPanel'),
@@ -155,7 +155,7 @@ function renderHeader() {
     el.place.innerHTML = html;
     el.place.setAttribute('aria-label', state.place?.name ? `Vaihda paikkakuntaa. Nyt: ${state.place.name}` : 'Vaihda paikkakuntaa');
   }
-  el.refresh.classList.toggle('spin', state.loading && (state.manualLoad || !state.fc));
+  $('#refreshBtn')?.classList.toggle('spin', state.loading && (state.manualLoad || !state.fc));
 }
 
 function renderAi() {
@@ -185,6 +185,8 @@ function renderAdvice(fc, now) {
   } catch {
     v = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
   }
+  const tomorrow = v?.win?.kind === 'tomorrow';
+  document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.day === 'tomorrow') === tomorrow)));
   el.verdict.hidden = !v;
   patch('verdict', el.verdict, v ? verdictHtml({ v }) : '');
   el.verdictMore.hidden = !v;
@@ -425,6 +427,7 @@ function renderAll() {
       }
     }
   }
+  patch('certainty', el.certainty, certaintyHtml({ fc, nowMs: now }));
   const wasOpen = $('.models-d', el.models)?.open;
   if (patch('models', el.models, modelsHtml({ results: state.results, fc, nowMs: now })) && wasOpen) $('.models-d', el.models).open = true;
 }
