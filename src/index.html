@@ -31,7 +31,9 @@
   <div id="update" class="banner" role="status" aria-live="polite" hidden></div>
 
   <section id="welcome" class="welcome" aria-label="Aloitus" hidden></section>
-  <div id="pages" class="pages">
+  <div id="pages" class="pages cube-rest">
+    <div class="cube">
+    <div class="face" data-face="0">
     <section id="pgHome" class="page pg-home" aria-label="Sää nyt" data-page="0">
       <section id="alerts" class="alerts" aria-label="Varoitukset ja huomiot" hidden></section>
       <div id="stage" class="stage">
@@ -40,11 +42,15 @@
         <section id="track" class="trk" aria-label="Seuraavat tunnit radalla" hidden></section>
       </div>
     </section>
+    </div>
+    <div class="face" data-face="1">
     <section id="pgHours" class="page" aria-label="Tunnit" data-page="1">
       <div id="hourly"></div>
       <section id="meteo" class="meteo" aria-label="Sääkaavio" hidden></section>
     </section>
-    <section id="pgWeek" class="page" aria-label="Viikko" data-page="2"><div id="daily"></div></section>
+    </div>
+    <div class="face" data-face="2"><section id="pgWeek" class="page" aria-label="Viikko" data-page="2"><div id="daily"></div></section></div>
+    <div class="face" data-face="3">
     <section id="pgCert" class="page" aria-label="Varmuus" data-page="3">
       <div id="certainty" class="cert"></div>
       <section id="models" aria-label="Mallivertailu"></section>
@@ -53,6 +59,8 @@
         <p>Kokeiluversio. Tärkeissä päätöksissä ja vaaratilanteissa katso <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Ilmatieteen laitoksen varoitukset</a>. <button class="linkish" type="button" data-act="open-about">Tietoja ja tietolähteet</button></p>
       </footer>
     </section>
+    </div>
+    </div>
   </div>
 </main>
 

@@ -19,8 +19,9 @@ import { fetchObs } from './observations.js';
 import { makeDemoFetch } from './demo.js';
 import { agoText, selLabel, placeHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 import { homeHeadline } from './headline.js';
+import { createCube } from './cube.js';
 
-const VERSION = '0.7.0';
+const VERSION = '0.7.1';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
@@ -500,17 +501,22 @@ function renderWeek(now = nowMs()) {
 let pageEntry = false; // alisivulle siirtyminen lisää historiaan yhden merkinnän: Androidin takaisin palaa kotiin
 let ignorePop = false;
 
+let cube = null; // sivukuutio (js/cube.js)
+
 function goPage(i, { smooth = true } = {}) {
-  const w = el.pages.clientWidth || innerWidth;
-  el.pages.scrollTo({ left: i * w, behavior: smooth && !reduceMotion ? 'smooth' : 'auto' });
+  cube?.go(i, { animate: smooth });
 }
 
-function onPageChange() {
-  const i = Math.max(0, Math.min(3, Math.round(el.pages.scrollLeft / Math.max(1, el.pages.clientWidth))));
+/** Kuutio asettui kyljelle i: pisteet, historia (Androidin takaisin palaa kotiin) ja vihjeen piilotus. */
+function markDot(i) {
+  el.dots?.querySelectorAll('button').forEach((b) => (+b.dataset.page === i ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current')));
+}
+
+function onPageChange(i) {
+  markDot(i);
   if (i === state.page) return;
   const prev = state.page;
   state.page = i;
-  el.dots?.querySelectorAll('button').forEach((b) => (+b.dataset.page === i ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current')));
   if (prev === 0 && i > 0 && !pageEntry && !state.sheet) {
     try {
       history.pushState({ saaalyPage: true }, '');
@@ -1666,16 +1672,17 @@ function bindEvents() {
       goPage(0);
     }
   });
-  let pageRaf = 0;
-  el.pages?.addEventListener(
-    'scroll',
-    () => {
-      if (!pageRaf) pageRaf = requestAnimationFrame(() => ((pageRaf = 0), onPageChange()));
-    },
-    { passive: true },
-  );
+  if (el.pages) {
+    cube = createCube(el.pages, {
+      onSettle: onPageChange,
+      onTurn: markDot,
+      reduceMotion,
+      // Näiden vaakaveto kuuluu niille itselleen: päivän tuntinauha ja sääkaavion tarkastelu.
+      ignore: '.dstrip, #mgWrap, input, textarea, select',
+    });
+  }
   if (typeof ResizeObserver === 'function' && el.pgHome) new ResizeObserver(() => sizeStage()).observe(el.pgHome);
-  window.addEventListener('resize', debounce(() => goPage(state.page, { smooth: false }), 120));
+  window.addEventListener('resize', debounce(() => cube?.layout(), 120));
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       tick();
@@ -1746,5 +1753,5 @@ async function boot() {
   setTimeout(checkForUpdate, 4000, { force: true });
 }
 
-globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError };
+globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, get cube() { return cube; } };
 boot();

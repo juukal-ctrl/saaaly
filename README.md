@@ -1,4 +1,4 @@
-# SääÄly – AI Weather (versio 0.7.0)
+# SääÄly – AI Weather (versio 0.7.1)
 
 Sääsovellus, joka hakee ennusteen usealta säämallilta (ECMWF, MET Norway, DWD ICON, Météo-France, UK Met Office, NOAA GFS, Kanadan GEM ja kokeiluna Ilmatieteen laitos), yhdistää ne **koodilla** yhdeksi tunti- ja päiväennusteeksi ja kertoo suoraan, mitä se tarkoittaa: mitä pukea, tarvitaanko sateenvarjoa ja milloin sade alkaa tai loppuu. Mukana on chat, jolta voi kysyä säästä suomeksi, myös toisen paikkakunnan säästä.
 
@@ -12,7 +12,7 @@ Mitä kussakin versiossa muuttui: `CHANGELOG.md`.
 
 ## Näin sovellus toimii
 
-Sovelluksessa on neljä sivua, joiden välillä liikutaan pyyhkäisemällä tai alapalkin pisteistä. Androidin takaisin-ele palaa kotisivulle.
+Sovelluksen neljä sivua ovat näytön kokoisen kuution kyljet. Kuutiota käännetään pyyhkäisemällä sivuttain tai alapalkin pisteistä, ja se jatkaa ympäri: Varmuudesta eteenpäin tulee Koti. Androidin takaisin-ele palaa kotisivulle.
 
 | Sivu | Mitä siinä on |
 |---|---|
@@ -45,7 +45,8 @@ Gemini-avaimen lisääminen: hae ilmainen avain osoitteesta aistudio.google.com/
 | Katso kotisivun otsikkoa kuivana ja sateisena päivänä | Kuivana: takki ja "Kuivaa klo X asti" tai "koko päivän". Sateella: sateenvarjo ja sateen alkamis- tai loppumisaika. Sama aika näkyy Tunnit-sivulla |
 | Napauta radan tuntia | Tunnin tiedot näkyvät ylhäällä merkinnällä "Tänään klo 17"; "×" palaa nykyhetkeen |
 | Napauta **Huomenna** | Otsikko, lämpötila ja rata kertovat huomisesta |
-| Pyyhkäise Tunnit-sivulle ja napauta riviä | Rivi avautuu paikallaan. "Näytä 48 tuntia" jatkaa listaa |
+| Käännä kuutiota sormella sivuttain | Kuutio kääntyy sormen mukana ja asettuu seuraavalle kyljelle; Varmuudesta eteenpäin tulee Koti. Pystysuunnassa sivu vierii kuten ennenkin |
+| Käännä Tunnit-sivulle ja napauta riviä | Rivi avautuu paikallaan. "Näytä 48 tuntia" jatkaa listaa |
 | Valitse Tunnit-sivulla **Kaavio** ja vedä sormella kaavion päällä | Kaavio näyttää valitun hetken lämpötilan, sateen ja tuulen |
 | Avaa Varmuus-sivu | Kahdeksan helmeä tänään ja huomenna; teksti kertoo, ovatko mallit samaa mieltä |
 | Odota varoituspäivää | Ilmatieteen laitoksen varoitus näkyy värirenkaalla, oma huomio katkoviivalla. Napautus avaa tekstin |
@@ -104,16 +105,16 @@ Repon juuressa ovat julkaistut tiedostot (GitHub Pages tarjoilee ne). Lähdekood
 
 ```
 cd src
-node --test tests/*.test.js            # yksikkötestit (219 kpl)
+node --test tests/*.test.js            # yksikkötestit (223 kpl)
 node tools/build.mjs                   # kokoaa js/-moduulit tiedostoksi saaaly.js, esikatselun ja julkaise/-kansion
 node tools/publish.mjs                 # kopioi julkaise/-kansion tiedostot repon juureen
-python3 tools/e2e.py                   # selaintestit (43 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages
+python3 tools/e2e.py                   # selaintestit (44 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages
 python3 tools/shot.py kuva.png "?demo=rain&at=2026-10-14T14:04:00%2B03:00"   # kuvakaappaus esimerkkitilasta
 cd .. && git add -A && git commit && git push
 ```
 
 Esikatselu esimerkkidatalla: `node tools/build.mjs` tekee tiedoston `src/esikatselu.html`, joka toimii ilman verkkoa. Osoitteen perään voi lisätä `?demo=rain`, `snow`, `thunder`, `fog` tai `clear` ja ajan, esimerkiksi `&at=2026-10-14T23:30:00%2B03:00`.
 
-Rakenne: `js/headline.js` (etusivun, Tunnit-, Viikko- ja Varmuus-sivujen otsikot), `js/views.js` (sivujen HTML), `js/app.js` (tila, sivut ja päivitys), `js/blend.js` (mallien yhdistäminen ja sadejaksot), `js/advice.js` (takki, sateenvarjo, liukkaus), `js/meteogram.js` (sääkaavio), `js/sky.js` (animoitu taivas). Chatin oma vastausmoottori: `js/nlu.js`, `js/answer.js` ja `js/gazetteer.js`. Valinnaiset lähteet: `js/sources.js` (varmistus ja odotusajat), `js/nowcast.js` (tutkaennuste), `js/warnings.js` (varoitukset) ja `js/observations.js` (havainnot).
+Rakenne: `js/headline.js` (etusivun, Tunnit-, Viikko- ja Varmuus-sivujen otsikot), `js/views.js` (sivujen HTML), `js/app.js` (tila, sivut ja päivitys), `js/cube.js` (sivukuutio ja sen kääntö), `js/blend.js` (mallien yhdistäminen ja sadejaksot), `js/advice.js` (takki, sateenvarjo, liukkaus), `js/meteogram.js` (sääkaavio), `js/sky.js` (animoitu taivas). Chatin oma vastausmoottori: `js/nlu.js`, `js/answer.js` ja `js/gazetteer.js`. Valinnaiset lähteet: `js/sources.js` (varmistus ja odotusajat), `js/nowcast.js` (tutkaennuste), `js/warnings.js` (varoitukset) ja `js/observations.js` (havainnot).
 
 Jokainen versio on oma commitinsa. Jos uusi versio ei toimi, edelliseen palaa `git revert`illä (tai pyydä Claudea tekemään paluu).

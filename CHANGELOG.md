@@ -1,5 +1,12 @@
 # Muutosloki
 
+## 0.7.1 – Sivukuutio
+
+- **Sivut ovat nyt kuution kyljet.** Koti, Tunnit, Viikko ja Varmuus ovat näytön kokoisen kuution neljä kylkeä. Kuutio kääntyy sormen mukana; irrotus kääntää sen lähimmälle kyljelle ja nopea pyyhkäisy seuraavalle. Kuutio jatkaa ympäri: Varmuudesta eteenpäin tulee Koti ja Kodista taaksepäin Varmuus.
+- Kääntyessään kyljet ovat pehmeäkulmaista huurrelasia, jossa on vaaleat reunat ja varjostus. Levossa sivu on litteä ja teksti terävä kuten ennenkin. Alapalkin pisteet seuraavat kääntöä, ja pisteistä kuutio kääntyy lyhintä reittiä.
+- Sivujen vieritys, vedä päivittääksesi, päivän tuntinauha ja sääkaavio toimivat kuten ennenkin. Veto ei ole napautus, joten kääntö ei valitse radalta tuntia. Piilossa olevat kyljet eivät ole ruudunlukijan eivätkä sarkaimen ulottuvilla.
+- Kun puhelimessa on valittu vähemmän liikettä, sivu vaihtuu häivyttäen ilman 3D-kääntöä.
+
 ## 0.7.0 – Arvion korjaukset: neljä sivua ja selkeämpi etusivu
 
 Etusivu

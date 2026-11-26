@@ -3109,15 +3109,97 @@ body:not(.light) .hd-seg .seg[aria-pressed='true'] {
 
 /* ---------- Sivut ---------- */
 
+/* ---------- Sivukuutio: neljä sivua näytön kokoisen kuution kylkinä (js/cube.js) ---------- */
+
 .pages {
+  position: relative;
   flex: 1;
   min-height: 0;
-  display: flex;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
+  overflow: hidden;
+  perspective: calc(var(--cube-w, 412px) * 2.4);
+  perspective-origin: 50% 50%;
+  touch-action: pan-y;
+}
+
+.pages.cube-rest {
+  perspective: none;
+}
+
+.cube {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.pages.cube-rest .cube {
+  transform-style: flat;
+}
+
+.face {
+  position: absolute;
+  inset: 0;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* Kääntyessä kylki on pehmeäkulmainen huurrelasi: materiaali sisällön takana, varjostus sen päällä. Levossa näkymättömät. */
+.pages:not(.cube-rest) .face {
+  overflow: hidden;
+  border-radius: 30px;
+  will-change: transform;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.face::before,
+.face::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.face::before {
+  z-index: 0;
+  background: var(--face-fill);
+  box-shadow: inset 0 0 0 1.5px var(--face-edge);
+}
+
+.face::after {
+  z-index: 2;
+  background: var(--face-shade);
+}
+
+.pages:not(.cube-rest) .face::before {
+  opacity: calc(min(1, var(--turn, 0) * 1.8) * 0.92);
+}
+
+.pages:not(.cube-rest) .face::after {
+  opacity: calc(var(--turn, 0) * 0.42);
+}
+
+.face > .page {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.pages img {
+  -webkit-user-drag: none;
+}
+
+:root {
+  --face-fill: linear-gradient(180deg, #3b3074 0%, #2c2762 55%, #212355 100%);
+  --face-edge: rgba(255, 255, 255, 0.28);
+  --face-shade: #05040f;
+}
+
+body.light {
+  --face-fill: linear-gradient(180deg, #fdeef6 0%, #f2eafd 55%, #e6f0fd 100%);
+  --face-edge: rgba(255, 255, 255, 0.95);
+  --face-shade: #2b1f66;
 }
 
 .pages::-webkit-scrollbar {
@@ -3125,15 +3207,13 @@ body:not(.light) .hd-seg .seg[aria-pressed='true'] {
 }
 
 .page {
-  flex: 0 0 100%;
   width: 100%;
   min-width: 0;
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
+  touch-action: pan-y;
   padding: 2px max(var(--gut), env(safe-area-inset-right)) calc(150px + env(safe-area-inset-bottom)) max(var(--gut), env(safe-area-inset-left));
   scroll-padding-bottom: calc(120px + env(safe-area-inset-bottom));
 }

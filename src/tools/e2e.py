@@ -133,10 +133,24 @@ def chat_calls(question):
 def sys_prompt(call):
     return call['body']['systemInstruction']['parts'][0]['text']
 
+CUBE_REST = "document.querySelector('#pages').classList.contains('cube-rest')"
+
 def goto_page(page, i):
-    """Siirtyy sivulle pisteiden kautta (0 koti, 1 tunnit, 2 viikko, 3 varmuus) ja odottaa, että se on näkyvissä."""
+    """Kääntää sivukuution pisteiden kautta (0 koti, 1 tunnit, 2 viikko, 3 varmuus) ja odottaa, että se on levossa sivulla."""
     page.click(f'#dots [data-page="{i}"]')
-    page.wait_for_function("(i) => { const p = document.querySelector('#pages'); return Math.abs(p.scrollLeft - i * p.clientWidth) < 2; }", arg=i, timeout=5000)
+    page.wait_for_function(f"(i) => {CUBE_REST} && window.__saaaly.state.page === i", arg=i, timeout=5000)
+
+def cube_drag(page, x0, x1, y, steps=10, hold=0):
+    """Vaakaveto hiirellä (osoitintapahtumat kuten sormella). hold: ms paikallaan ennen irrotusta."""
+    page.mouse.move(x0, y)
+    page.mouse.down()
+    for k in range(1, steps + 1):
+        page.mouse.move(x0 + (x1 - x0) * k / steps, y)
+        page.wait_for_timeout(16)
+    if hold:
+        page.wait_for_timeout(hold)
+    page.mouse.up()
+    page.wait_for_function(f"() => {CUBE_REST}", timeout=3000)
 
 def open_adv(page):
     """Avaa asetukset ja niiden Lisäasetukset-osion (vastausten lähde, Gemini, diagnostiikka)."""
@@ -231,6 +245,30 @@ with sync_playwright() as pw:
         expect(page.locator('#certainty .cert-c.obs')).to_contain_text('Esimerkkiasema')
         goto_page(page, 0)
     check('Varmuus: helmet malleittain, havainto ja mallivertailu', t_models)
+
+    def t_cube():
+        st = lambda: page.evaluate("window.__saaaly.state.page")
+        goto_page(page, 0)
+        cube_drag(page, 330, 110, 520)
+        assert st() == 1, f'vaakaveto vasemmalle ei kääntänyt Tunteihin: {st()}'
+        expect(page.locator('#dots [data-page="1"]')).to_have_attribute('aria-current', 'true')
+        cube_drag(page, 110, 330, 520)
+        assert st() == 0, f'veto oikealle ei palannut Kotiin: {st()}'
+        cube_drag(page, 110, 330, 520)
+        assert st() == 3, f'kuutio ei jatkanut ympäri Kodista Varmuuteen: {st()}'
+        cube_drag(page, 330, 110, 520)
+        assert st() == 0, f'Varmuudesta eteenpäin ei tullut Koti: {st()}'
+        cube_drag(page, 300, 250, 520, steps=5, hold=300)
+        assert st() == 0, 'lyhyt hidas veto vaihtoi sivun'
+        b = page.locator('#track .th').nth(2).bounding_box()
+        cube_drag(page, b['x'] + b['width'] / 2, b['x'] + b['width'] / 2 - 220, b['y'] + b['height'] / 2)
+        assert page.evaluate("window.__saaaly.state.sel.type") == 'now', 'veto radan tunnin päältä valitsi tunnin'
+        goto_page(page, 0)
+        assert page.evaluate("[...document.querySelectorAll('.face')].map((f) => f.inert).join()") == 'false,true,true,true', 'piilossa oleva kylki on kohdistettavissa'
+        goto_page(page, 2)
+        page.go_back()
+        page.wait_for_function(f"() => {CUBE_REST} && window.__saaaly.state.page === 0", timeout=3000)
+    check('sivukuutio: vaakaveto kääntää ja jatkaa ympäri, lyhyt veto palaa, veto ei ole napautus, takaisin palaa kotiin', t_cube)
 
     def t_day():
         goto_page(page, 2)
