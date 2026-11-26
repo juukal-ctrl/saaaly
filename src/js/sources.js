@@ -18,7 +18,14 @@ export const SOURCE_INFO = {
     provider: 'Ilmatieteen laitos',
     url: 'https://www.ilmatieteenlaitos.fi/varoitukset',
     license: 'CC BY 4.0',
-    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle. Haetaan GitHubin kautta, koska Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua.',
+    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle. Haetaan GitHubin kautta, koska Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua. Jos tieto on yli puolitoista tuntia vanha, etusivu kertoo sen.',
+  },
+  obs: {
+    name: 'Havainto',
+    provider: 'Ilmatieteen laitos, avoin data',
+    url: 'https://www.ilmatieteenlaitos.fi/avoin-data',
+    license: 'CC BY 4.0',
+    note: 'Lähimmän sääaseman mitattu lämpötila: vertailukohta ennusteelle (Varmuus-sivu).',
   },
   air: {
     name: 'Ilmanlaatu ja siitepöly',
@@ -50,8 +57,9 @@ export function createGuard({ storage = store, clock = () => Date.now() } = {}) 
       const e = entry(id);
       return !(Number(e.until) > now);
     },
-    ok(id, now = clock(), note = '') {
-      put(id, { fails: 0, until: 0, lastOk: now, note: String(note).slice(0, 80) });
+    /** limited = lähde vastasi, mutta tietoa ei voinut käyttää (esim. vanhentunut peili tai ei kattavuutta). */
+    ok(id, now = clock(), note = '', limited = false) {
+      put(id, { fails: 0, until: 0, lastOk: now, note: String(note).slice(0, 80), ...(limited ? { limited: true } : {}) });
     },
     fail(id, err, now = clock()) {
       const e = entry(id);
@@ -75,8 +83,8 @@ export async function runSource(guard, id, fn, { force = false, now = Date.now()
     const value = await fn();
     if (value && value.ok === false) {
       // Lähde vastasi, mutta ei kata paikkaa tai tieto puuttuu: ei virhe, mutta ei käyttökelpoista tietoa
-      guard.ok(id, now, value.reason || '');
-      return { value: null, reason: value.reason || 'ei kattavuutta' };
+      guard.ok(id, now, value.reason || '', true);
+      return { value: null, reason: value.reason || 'ei kattavuutta', raw: value };
     }
     guard.ok(id, now, value?.note || '');
     return { value };
@@ -96,7 +104,7 @@ export function sourceLine(id, st, now = Date.now()) {
     const wait = Math.max(0, Math.ceil((Number(st.until) - now) / 60000));
     return `– ${head}: ei vastannut${st.error ? ` (${st.error})` : ''}${wait ? `, uusi yritys ${wait >= 90 ? `${Math.round(wait / 60)} h` : `${wait} min`} päästä` : ''}`;
   }
-  if (st?.lastOk) return `✓ ${head}${st.note ? `: ${st.note}` : ''}`;
+  if (st?.lastOk) return `${st.limited ? '!' : '✓'} ${head}${st.note ? `: ${st.note}` : ''}`;
   return `· ${head}: ei vielä kokeiltu`;
 }
 

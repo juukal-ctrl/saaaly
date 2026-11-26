@@ -24,6 +24,14 @@ const EXPECTED = [
   'version.json',
   'trk-d.webp',
   'trk-n.webp',
+  'braid.webp',
+  'cap.webp',
+  'pearls.webp',
+  'inter-display-regular.woff',
+  'inter-display-medium.woff',
+  'inter-display-semibold.woff',
+  'inter-display-bold.woff',
+  'inter-OFL.txt',
   ...['d-sun', 'd-part_sun', 'd-part', 'd-part_cloud', 'd-cloud', 'd-rain', 'd-snow', 'd-storm', 'n-moon', 'n-moonpart', 'n-cloud', 'n-rain', 'n-snow', 'n-storm'].map((n) => `wx-${n}.webp`),
 ];
 

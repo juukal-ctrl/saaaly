@@ -88,39 +88,34 @@ function meteoHtmlFor(fc) {
   return meteoHtml({ fc: { ...fc, tz: 'Europe/Helsinki' }, nowMs, range: '24h', width: 360 });
 }
 
-import { dailyHtml, hourlyHtml } from '../js/views.js';
+import { weekPageHtml, hoursPageHtml, certPageHtml, heroHtml } from '../js/views.js';
 import { icon3d, icon3dKey } from '../js/icons.js';
 import { SYMBOLS } from '../js/blend.js';
 
-test('päiväennuste: napautettu päivä avaa sen tunnit, sulkematon ei näytä niitä', () => {
+test('viikko: napautettu päivä avaa sen tunnit paikallaan, sulkematon ei näytä niitä', () => {
   const fc = blendForecast(results());
-  const closed = dailyHtml({ fc, nowMs: NOW, sel: { type: 'now' } });
+  const closed = weekPageHtml({ fc, nowMs: NOW });
   assert.doesNotMatch(closed, /day-hours/);
   assert.match(closed, /aria-expanded="false"/);
   const date = fc.days[2].date;
-  const open = dailyHtml({ fc, nowMs: NOW, sel: { type: 'day', date }, openDate: date });
+  const open = weekPageHtml({ fc, nowMs: NOW, open: date });
   assert.match(open, new RegExp(`id="dh-${date}"`));
   assert.match(open, /aria-expanded="true"/);
   const cells = open.match(/class="hr"/g) || [];
   assert.equal(cells.length, 24, 'tulevan päivän kaikki 24 tuntia');
-  assert.match(open, /data-act="hour" data-iso="[^"]+T07:00"/);
+  assert.match(open, /data-iso="[^"]+T07:00"/);
+  assert.equal((closed.match(/class="wd-cap"/g) || []).length, 7, 'jokaisella päivällä oma kapseli');
+  assert.equal((closed.match(/class="wd-now"/g) || []).length, 1, 'nykyhetken piste vain tänään');
+  assert.doesNotMatch(closed, />–</, 'ei irrallisia viivoja');
 });
 
-test('päiväennuste: tämän päivän tunnit alkavat nykyhetkestä', () => {
+test('viikko: tämän päivän tunnit alkavat nykyhetkestä', () => {
   const fc = blendForecast(results());
   const today = fc.days[0].date;
-  const open = dailyHtml({ fc, nowMs: NOW, sel: { type: 'day', date: today }, openDate: today });
+  const open = weekPageHtml({ fc, nowMs: NOW, open: today });
   const cells = open.match(/class="hr"/g) || [];
   assert.ok(cells.length > 0 && cells.length < 24, `tänään jäljellä ${cells.length} tuntia`);
   assert.doesNotMatch(open, /data-iso="[^"]+T0[0-9]:00"/, 'menneitä aamutunteja ei näytetä');
-});
-
-test('valittu tunti päivän sisällä näkyy painettuna', () => {
-  const fc = blendForecast(results());
-  const date = fc.days[1].date;
-  const iso = `${date}T12:00`;
-  const html = dailyHtml({ fc, nowMs: NOW, sel: { type: 'hour', iso }, openDate: date });
-  assert.match(html, new RegExp(`data-iso="${iso}" aria-pressed="true"`));
 });
 
 test('3D-kuvake: jokaiselle sääsymbolille on kuva päivällä ja yöllä', () => {
@@ -134,26 +129,70 @@ test('3D-kuvake: jokaiselle sääsymbolille on kuva päivällä ja yöllä', () 
   assert.match(icon3d('fog', true), /wx3-fog/);
 });
 
-test('tuntinauha käyttää 3D-kuvakkeita', () => {
+test('tunnit: 13 riviä nykyhetkestä, 3D-kuvakkeet, rivin napautus avaa tiedot paikallaan', () => {
   const fc = blendForecast(results());
-  assert.match(hourlyHtml({ fc, nowMs: NOW, sel: { type: 'now' } }), /class="wx3 wx-/);
+  const html = hoursPageHtml({ fc, nowMs: NOW });
+  assert.equal((html.match(/data-act="hrow"/g) || []).length, 13);
+  assert.match(html, /class="wx3 wx-/);
+  assert.match(html, /class="hv now"/);
+  assert.match(html, />nyt</);
+  assert.doesNotMatch(html, /hv-more/);
+  const iso = fc.hours.find((h) => h.t > '2026-10-14T22:00').t;
+  const open = hoursPageHtml({ fc, nowMs: NOW, open: iso });
+  assert.match(open, new RegExp(`data-iso="${iso}" aria-expanded="true"`));
+  assert.match(open, /class="hv-more"/);
+  assert.match(open, /Tuntuu kuin/);
+  assert.equal((hoursPageHtml({ fc, nowMs: NOW, more: true }).match(/data-act="hrow"/g) || []).length, 48);
+  assert.match(hoursPageHtml({ fc, nowMs: NOW, day: 'tomorrow' }), /Tunnit · huomenna/);
 });
 
 import { trackHtml } from '../js/views.js';
 
-test('tuntirata: 12 tuntia, jokaisella oma paikka, kuvake ja lämpötila', () => {
+test('tuntirata: jokaisella tunnilla oma paikka, napautettava 3D-objekti ja lämpötila; alussa "nyt"', () => {
   const fc = blendForecast(results());
   const html = trackHtml({ fc, nowMs: NOW, sel: { type: 'now' } });
-  assert.equal((html.match(/class="th(?: th-big)?"/g) || []).length, 12);
-  assert.equal((html.match(/class="th-ic"/g) || []).length, 12);
-  assert.equal((html.match(/class="td"/g) || []).length, 12);
-  assert.match(html, /data-act="now"[^>]*aria-pressed="true"/);
-  assert.match(html, />nyt</);
+  const n = (html.match(/class="th"/g) || []).length;
+  assert.ok(n >= 10, `${n} tuntia radalla`);
+  assert.equal((html.match(/class="th-ic"/g) || []).length, n, 'kuvake on painikkeen sisällä');
+  assert.equal((html.match(/class="td"/g) || []).length, n);
+  assert.match(html, /class="th-start"[^>]*>nyt</);
+  assert.doesNotMatch(html, /aria-pressed="true"/);
+  const tomorrow = trackHtml({ fc, nowMs: NOW, sel: { type: 'now' }, day: 'tomorrow' });
+  assert.match(tomorrow, />huomenna</);
+  assert.match(tomorrow, /data-iso="2026-10-15T07:00"/);
 });
 
-test('tuntirata: valittu tunti näkyy painettuna ja valinta toimii napautuksella', () => {
+test('tuntirata: valittu tunti näkyy painettuna, ja sankari näyttää sen tunnin paluupainikkeen kanssa', () => {
   const fc = blendForecast(results());
-  const iso = fc.hours.find((h) => h.t > '2026-10-14T20:00').t;
+  const iso = fc.hours.find((h) => h.t > '2026-10-14T21:00').t;
   const html = trackHtml({ fc, nowMs: NOW, sel: { type: 'hour', iso } });
   assert.match(html, new RegExp(`data-act="hour" data-iso="${iso}" aria-pressed="true"`));
+  const hero = heroHtml({ fc, nowMs: NOW, sel: { type: 'hour', iso } });
+  assert.match(hero, /class="hero-chip" type="button" data-act="now"/);
+  assert.match(hero, /Tänään klo 2[1-3]/);
+});
+
+test('sankari: huomenna-tilassa ylin lämpötila, aamun lämpötila ja päivämäärä', () => {
+  const fc = blendForecast(results());
+  const hero = heroHtml({ fc, nowMs: NOW, sel: { type: 'now' }, day: 'tomorrow' });
+  assert.match(hero, /Huomenna to 15\.10\./);
+  assert.match(hero, /aamulla [+−]?\d+°/);
+  const now = heroHtml({ fc, nowMs: NOW, sel: { type: 'now' } });
+  assert.match(now, /tuntuu kuin/);
+  assert.match(now, /tänään [+−]?\d+°…[+−]?\d+°/);
+});
+
+test('varmuus: yksi helmi jokaista mallia kohden, ja kortit kertovat saman tason kuin otsikko', () => {
+  const res = results();
+  const fc = blendForecast(res);
+  const html = certPageHtml({ fc, results: res, nowMs: NOW });
+  const ok = res.filter((r) => r.ok).length;
+  const days = html.match(/class="pearls"/g) || [];
+  assert.equal(days.length, 2, 'tänään ja huomenna');
+  assert.equal((html.match(/class="pearl pk/g) || []).length, ok * 2, 'helmiä on yhtä monta kuin malleja');
+  assert.doesNotMatch(html, /epävarma varmuus/);
+  assert.match(html, /Tänään (luotettava|melko luotettava|epävarma)\./);
+  const obs = certPageHtml({ fc, results: res, nowMs: NOW, obs: { name: 'Turku Artukainen', value: 10.4, t: NOW - 600000, km: 6 } });
+  assert.match(obs, /Havainto · /);
+  assert.match(obs, /Turku Artukainen \(6 km\) mittasi \+10,4°/);
 });

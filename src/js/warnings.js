@@ -204,6 +204,8 @@ export function officialRows(list, lat, lon, nowMs, max = 3) {
         severity: w.severity,
         title: w.event || w.headline || 'Säävaroitus',
         when: [area, whenText(w.onset, w.expires, nowMs)].filter(Boolean).join(' · '),
+        time: whenText(w.onset, w.expires, nowMs),
+        area,
         text: clip([w.description, w.instruction].filter(Boolean).join(' '), 600),
       };
     });
@@ -272,7 +274,7 @@ export function parseMirror(data, nowMs = Date.now()) {
   if (!data || typeof data !== 'object' || data.v !== MIRROR_VERSION || !Array.isArray(data.alerts)) throw new Error('Varoitukset: peilin muoto ei täsmää');
   const at = Date.parse(data.fetchedAt);
   if (!Number.isFinite(at)) throw new Error('Varoitukset: peilin aikaleima puuttuu');
-  if (nowMs - at > MIRROR_MAX_AGE) return { ok: false, reason: `peili on vanhentunut (päivitetty ${fmtStamp(at)})` };
+  if (nowMs - at > MIRROR_MAX_AGE) return { ok: false, reason: `peili on vanhentunut (päivitetty ${fmtStamp(at)})`, fetchedAt: at };
   const alerts = [];
   for (const a of data.alerts.slice(0, MAX_ALERTS)) {
     if (!a || typeof a !== 'object' || typeof a.expires !== 'number' || !Number.isFinite(a.expires)) continue;

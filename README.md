@@ -1,144 +1,69 @@
-# SääÄly – AI Weather (testiversio 0.3.1)
+# SääÄly – AI Weather (versio 0.7.0)
 
-Sääsovellus, joka hakee ennusteen usealta säämallilta (ECMWF, MET Norway, DWD ICON, Météo-France, UK Met Office, NOAA GFS, Kanadan GEM ja kokeiluna Ilmatieteen laitos), yhdistää ne **koodilla** yhdeksi tunti- ja päiväennusteeksi ja antaa **tekoälyn** (Gemini) selittää sään valitulle ajalle ja paikalle. Mukana on chat, jolla voi kysyä säästä suomeksi, myös toisen paikkakunnan säästä.
+Sääsovellus, joka hakee ennusteen usealta säämallilta (ECMWF, MET Norway, DWD ICON, Météo-France, UK Met Office, NOAA GFS, Kanadan GEM ja kokeiluna Ilmatieteen laitos), yhdistää ne **koodilla** yhdeksi tunti- ja päiväennusteeksi ja kertoo suoraan, mitä se tarkoittaa: mitä pukea, tarvitaanko sateenvarjoa ja milloin sade alkaa tai loppuu. Mukana on chat, jolta voi kysyä säästä suomeksi, myös toisen paikkakunnan säästä.
 
-**Chat vastaa sovelluksen omalla datalla.** Se toimii ilman Gemini-avainta: sovelluksen oma vastausmoottori laskee vastauksen siitä datasta, jonka sovellus on kerännyt eri säämalleilta (yhdistelmäennuste ja jokaisen mallin omat luvut). Gemini on valinnainen lisä, ja senkin voi rajata käyttämään vain sovelluksen dataa. Jokaisen vastauksen alla lukee, mistä se tuli.
+**Osoite:** https://juukal-ctrl.github.io/saaaly/ (Androidin Chromessa: kolmen pisteen valikko → **Lisää aloitusnäytölle**).
 
-**Uutta versiossa 0.3.1:** viralliset Ilmatieteen laitoksen varoitukset toimivat nyt oikeasti. Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua (puhelimen diagnostiikka osoitti sen), joten GitHub hakee varoitukset itse neljännestunnin välein ja sovellus lukee valmiin tiivistelmän (ks. kohta *Varoituspeili*). Diagnostiikka kertoo nyt, johtuuko vika CORS-esteestä, tietoturvapolitiikasta vai puuttuvasta yhteydestä. Lisäksi Gemini-avaimen kenttä tarkistaa avaimen ja kertoo, jos tallennus ei onnistu.
+**Chat vastaa sovelluksen omalla datalla.** Se toimii ilman Gemini-avainta: sovelluksen oma vastausmoottori laskee vastauksen siitä datasta, jonka sovellus on kerännyt säämalleilta (yhdistelmäennuste ja jokaisen mallin omat luvut). Gemini on valinnainen lisä. Jokaisen vastauksen alla lukee, mistä se tuli.
 
-**Uutta versiossa 0.3.0** (koko lista: `CHANGELOG.md`): sääkaavio (lämpötila, sade, tuuli ja aurinko yhdessä kuvassa, 24 h / 48 h / 7 pv), tutkapohjainen lähiennuste ("sade alkaa noin 15 min päästä"), viralliset Ilmatieteen laitoksen varoitukset (kun lähde vastaa), aiempaa paljon parempi suomen ymmärrys chatissa (arkikieli, kirjoitusvirheet, englanti, uusia aiheita), sovelluksen oma "Uusi versio saatavilla" -ilmoitus, akkua säästävä taivasanimaatio, kaatumissuojaus ja tietoturvapolitiikka (CSP).
+Tekoäly ei laske lämpötiloja. Luvut tulevat mallien yhdistelmästä (poikkeavat mallit karsitaan pois), joten ne ovat samat kaikilla sivuilla ja tarkistettavissa Varmuus-sivun mallivertailusta.
 
-Tekoäly ei laske lämpötiloja. Luvut tulevat mallien yhdistelmästä (poikkeavat mallit karsitaan pois), ja tekoäly selittää valmiin tuloksen. Siksi luvut ovat samat kuin etusivulla ja tarkistettavissa mallivertailusta.
+Mitä kussakin versiossa muuttui: `CHANGELOG.md`.
 
-## Mitä zipissä on
+## Näin sovellus toimii
 
-| Kansio tai tiedosto | Mikä se on |
+Sovelluksessa on neljä sivua, joiden välillä liikutaan pyyhkäisemällä tai alapalkin pisteistä. Androidin takaisin-ele palaa kotisivulle.
+
+| Sivu | Mitä siinä on |
 |---|---|
-| `julkaise/` | **Valmis julkaisupaketti: 11 tiedostoa, ei alikansioita. Vain nämä viedään GitHubiin.** |
-| `CHANGELOG.md` | Mitä kussakin versiossa on muuttunut |
-| `README.md` | Tämä ohje |
-| `esikatselu.html` | Esikatselu esimerkkidatalla, toimii ilman nettiyhteyttä |
-| `js/`, `css/`, `icons/`, `tests/`, `tools/` | Lähdekoodi, testit ja työkalut (kehittäjälle, ei tarvita julkaisussa) |
+| **Koti** | Lämpötila, tuntuu kuin, sää, tuuli ja päivän alin ja ylin. Iso otsikko kertoo olennaisen: takki ja mihin asti on kuivaa, tai sateenvarjo ja milloin sade alkaa tai loppuu. Kromiradalla seuraavat 10 tuntia; tunnin napautus näyttää sen tiedot ylhäällä. Varoitukset ovat otsikon yläpuolella. |
+| **Tunnit** | Tuntilista (13 tuntia, "Näytä 48 tuntia"). Rivin napautus avaa tuulen, puuskat, sateen, pilvisyyden ja mallien eron (nyt-rivillä myös lähimmän sääaseman mittauksen). Kaavio-näkymässä sääkaavio 24 h / 48 h / 7 vrk. Kun sade on lähellä, tutkan sadekäyrä näyttää seuraavat 2 tuntia. |
+| **Viikko** | Seitsemän päivää, viikon suunta ja sadepäivät otsikossa, viikonlopun yhteenveto. Päivän napautus avaa sen tunnit. |
+| **Varmuus** | Kuinka luotettava ennuste on tänään ja huomenna. Jokainen helmi on yksi säämalli: vasemmalla kylmempi, oikealla lämpimämpi kuin SääÄlyn ennuste. Lisäksi mallivertailu ja lähimmän sääaseman havainto. |
 
-### Repossa (github.com/juukal-ctrl/saaaly)
+Yläpalkin **Tänään / Huomenna** vaihtaa kotisivun ja Tunnit-sivun huomiseen. **Kysy SääÄlyltä** avaa chatin. Valikosta (☰) löytyvät päivitys, sijainti, pukeutumisen kylmänsietokyky, päivitysväli, taustan animaatio, tiedot ja lisäasetukset.
 
-Repon **juuressa** ovat julkaistut tiedostot (`index.html`, `saaaly.js` ja muut yksitoista; GitHub Pages tarjoilee ne osoitteesta juukal-ctrl.github.io/saaaly/). **Lähdekoodi, testit ja työkalut ovat kansiossa `src/`** (`js/`, `css/`, `icons/`, `tests/`, `tools/`). Juuren tiedostot ovat generoituja: älä muokkaa niitä käsin, vaan muuta `src/`-kansiota ja julkaise näin:
+## Chatin vastausten lähde (Gemini-avain on valinnainen)
 
-```
-cd src
-node --test tests/*.test.js     # yksikkötestit
-node tools/build.mjs            # koostaa src/julkaise/
-node tools/publish.mjs          # kopioi yksitoista tiedostoa repon juureen
-cd .. && git add -A && git commit && git push
-```
-
-## 1. Katso ensin, miltä se näyttää
-
-Tietokoneella: avaa `esikatselu.html` tuplaklikkaamalla. Se käyttää **tekaistua** esimerkkisäätä, mutta kaikki ominaisuudet ovat mukana. Chat vastaa esikatselussa sovelluksen omalla laskennalla (Gemini ei ole esikatselussa käytössä). Osoitteen perään voi lisätä `?demo=rain`, `?demo=snow`, `?demo=thunder`, `?demo=fog` tai `?demo=clear` eri säätilojen katsomiseen. Puhelimella voit ohittaa tämän kohdan ja siirtyä suoraan kohtaan 2.
-
-## 2. Julkaise puhelimelle (GitHub Pages, noin 10 minuuttia, ilmainen)
-
-Oikeaa säädataa ei voi testata tiedostosta, joten sovellus tarvitsee osoitteen (https). Helpoin tapa on GitHub Pages.
-
-Julkaisuun tarvitaan vain kansion **`julkaise`** yksitoista tiedostoa. Kansiossa ei ole alikansioita, koska Androidin tiedostovalitsin ei osaa valita kansioita.
-
-Tässä ohjeessa käytetään repositorya `github.com/juukal-ctrl/saaaly`. Jos teet uuden: paina **+ → New repository**, nimeksi `saaaly`, valitse **Public** ja paina **Create repository**.
-
-### A. Pura zip
-
-1. Avaa ladattu zip Tiedostot-sovelluksessa (yleensä *Lataukset*-kansiossa) ja valitse **Pura** (*Extract*).
-2. Avaa purettu kansio `saaaly` ja sen sisältä `julkaise`. Siellä pitää olla yksitoista tiedostoa: `index.html`, `saaaly.js`, `crash.js`, `app.css`, `sw.js`, `version.json`, `manifest.webmanifest`, `icon.svg`, `icon-192.png`, `icon-512.png` ja `icon-maskable-512.png`.
-
-### B. Lataa tiedostot GitHubiin
-
-1. Avaa Chromessa `github.com/juukal-ctrl/saaaly`. Tyhjällä repositoryllä näkyy laatikko *Quick setup*. Napauta sen tekstistä sinistä linkkiä **uploading an existing file**. Samalle sivulle pääsee myös suoraan osoitteella `github.com/juukal-ctrl/saaaly/upload/main`.
-2. Napauta **choose your files**. Mene kansioon `julkaise`, paina yhtä tiedostoa pitkään ja napauta sitten muut, kunnes kaikki yksitoista on valittu (tai valitse kolmen pisteen valikosta *Valitse kaikki*). Vahvista valinta (*Avaa*).
-3. Odota, että kaikki yksitoista tiedostoa näkyvät sivun listassa. Vieritä alas ja napauta vihreää **Commit changes**.
-4. Tarkista, että repositoryn etusivulla on yksitoista tiedostoa eikä yhtään kansiota.
-
-### C. Kytke GitHub Pages päälle
-
-1. Avaa `github.com/juukal-ctrl/saaaly/settings/pages`.
-2. Kohdassa *Build and deployment* valitse *Source: Deploy from a branch*. Kohdassa *Branch* valitse `main` ja kansioksi `/ (root)`. Paina **Save**.
-3. Odota 1–2 minuuttia ja päivitä sivu. Yläreunaan tulee teksti *Your site is live at* ja osoite **`https://juukal-ctrl.github.io/saaaly/`**.
-
-Jos sivulla lukee *Upgrade or make this repository public*, repositoryn näkyvyys on *Private*. Avaa `github.com/juukal-ctrl/saaaly/settings`, vieritä alimmaiseksi (*Danger Zone*) ja valitse **Change visibility → Make public**. Tiedostoissa ei ole mitään salaista. Gemini-avainta ei koskaan laiteta tiedostoihin, vaan se tallennetaan vain oman puhelimen selaimeen.
-
-### D. Avaa puhelimella
-
-Avaa osoite **Androidin Chromessa**, salli sijainti ja valitse kolmen pisteen valikosta **Lisää aloitusnäytölle** (tai *Asenna sovellus*). Sovellus avautuu sen jälkeen kuin tavallinen sovellus.
-
-### Uusi versio myöhemmin
-
-Kun saat päivityksen: avaa `github.com/juukal-ctrl/saaaly/upload/main`, valitse päivitetyt tiedostot ja paina **Commit changes**. Usein riittää yksi tiedosto (esimerkiksi `saaaly.js`). Zipin mukana tulee aina koko `julkaise`-kansio. Samannimiset tiedostot korvautuvat, joten tiedoston nimen pitää olla täsmälleen sama (ei esimerkiksi `saaaly (1).js`). Pages päivittyy 1–2 minuutissa. Sulje sovellus ja avaa se uudelleen. Version näet diagnostiikkaraportin ensimmäiseltä riviltä. Versiosta 0.3.0 alkaen sovellus huomaa uuden version itse ja näyttää ruudun alareunassa ilmoituksen **Uusi versio saatavilla** ja painikkeen **Päivitä**; sulkemista ja uudelleenavaamista ei tarvita.
-
-### Jos uusi versio ei toimi: paluu edelliseen
-
-Edellinen toimiva versio 0.2.0 on tallessa repon haarassa `release-0.2.0`. Paluu: lataa sen tiedostot osoitteesta `github.com/juukal-ctrl/saaaly/archive/refs/heads/release-0.2.0.zip`, pura zip ja vie tiedostot uudelleen julkaisuun (`github.com/juukal-ctrl/saaaly/upload/main`). Nopeampaa: pyydä Claudea tekemään paluu.
-
-### Tietokoneelta
-
-Tietokoneella voit vetää `julkaise`-kansion tiedostot (ei itse kansiota) upload-sivulle. Vaihtoehto: app.netlify.com/drop antaa osoitteen, kun vedät sinne `julkaise`-kansion.
-
-Jos jokin kohta ei näytä samalta kuin ohjeessa (GitHub muuttaa ulkoasuaan), ota kuvakaappaus ja liitä se Claudelle.
-
-## 3. Chatin ja selityksen lähde (Gemini-avain on valinnainen)
-
-Chatissa ja asetuksissa on kolmen tilan valitsin:
+Valinta on kohdassa **Valikko → Lisäasetukset → Vastausten lähde** (chatista pääsee sinne linkistä "vaihda").
 
 | Tila | Mitä tapahtuu | Tarvitsee avaimen |
 |---|---|---|
-| **Oma laskenta** | Ei tekoälyä. Sovelluksen oma vastausmoottori vastaa sovelluksen keräämästä säädatasta: sade, lumi, ukkonen, liukkaus, lämpö, tuuli, pukeutuminen, ulkoilu ja lenkki, aurinko, pilvisyys, mallien omat luvut ja niiden yhtäpitävyys, toisen paikkakunnan sää ja kahden paikan vertailu. Jatkokysymykset toimivat ("Entä Rovaniemellä?" tarkoittaa samaa ajankohtaa). Ymmärtää myös kuukaudet, juhlapyhät ja vuodenajat ("joulukuussa", "jouluna", "juhannuksena", "pääsiäisenä"), useamman vuorokaudenajan ("aamulla ja illalla"), sumun, myrskyn ja päivän pituuden. Ennusteen ulkopuolisesta ajasta kerrotaan rehellisesti, mutta auringon nousu ja lasku lasketaan tähtitieteellisesti mille tahansa päivälle. | ei |
-| **Gemini + data** (oletus avaimen kanssa) | Gemini kirjoittaa vastauksen, mutta saa tietää vain sovelluksen säädatan, myös jokaisen mallin omat luvut. Muuta tietoa säästä sen ei pitäisi käyttää. | kyllä |
+| **Oma laskenta** | Ei tekoälyä. Sovelluksen oma vastausmoottori vastaa sovelluksen keräämästä säädatasta: sade, lumi, ukkonen, liukkaus, lämpö, tuuli, pukeutuminen, ulkoilu ja lenkki, aurinko, pilvisyys, mallien omat luvut ja niiden yhtäpitävyys, toisen paikkakunnan sää ja kahden paikan vertailu. Jatkokysymykset toimivat ("Entä Rovaniemellä?" tarkoittaa samaa ajankohtaa). Ymmärtää myös kuukaudet, juhlapyhät ja vuodenajat. | ei |
+| **Gemini + data** (oletus avaimen kanssa) | Gemini kirjoittaa vastauksen, mutta saa tietää vain sovelluksen säädatan, myös jokaisen mallin omat luvut. | kyllä |
 | **Gemini vapaa** | Luvut tulevat aina sovelluksen datasta, mutta Gemini saa lisäksi käyttää yleistietoa ilmiöiden selittämiseen ja neuvoihin. | kyllä |
 
-Jokaisen vastauksen alla on lähdemerkintä: *Sovelluksen oma laskenta · 7/7 mallia*, *Gemini · data: sovelluksen säämallit* tai *Gemini ei vastannut (kiintiö täynnä) · sovelluksen oma laskenta*. Viimeinen tarkoittaa, että Gemini ei vastannut (kiintiö täynnä, ei verkkoa, virhe) ja sovellus vastasi itse. Käyttäjälle ei jää tyhjää virheilmoitusta.
+Jos Gemini ei vastaa (kiintiö täynnä, ei verkkoa, virhe), sovellus vastaa itse ja kertoo sen vastauksen alla.
 
-Gemini-avaimen lisääminen:
+Gemini-avaimen lisääminen: hae ilmainen avain osoitteesta aistudio.google.com/apikey, avaa **Valikko → Lisäasetukset**, liitä avain ja paina **Tallenna** ja sitten **Testaa yhteys**. Jos mallin nimi ei kelpaa, **Hae mallit** ehdottaa uusinta Flash-mallia. Avain tallentuu vain tämän puhelimen selaimeen, ei koskaan tiedostoihin.
 
-1. Hae ilmainen avain osoitteesta aistudio.google.com/apikey.
-2. Avaa sovelluksessa **Asetukset** (oikean yläkulman liukusäädinkuvake), liitä avain kenttään ja paina **Tallenna**. Tila vaihtuu samalla tilaan *Gemini + data*.
-3. Paina **Testaa yhteys**. Jos mallin nimi ei kelpaa, paina **Hae mallit**: sovellus ehdottaa uusinta Flash-mallia.
-
-Ilman avainta etusivun selityskortti näyttää koodilla laaditun suomenkielisen yhteenvedon ja chat vastaa omalla laskennalla. Ilmaisella avaimella on päivittäinen kiintiö, ja sovellus pyytää selityksen vain, kun valinta tai tunti vaihtuu, ei jokaisella päivityksellä. Avain tallentuu vain tämän puhelimen selaimeen.
-
-## 4. Mitä kannattaa testata puhelimella
+## Mitä kannattaa testata puhelimella
 
 | Testaa | Odotettu tulos |
 |---|---|
-| Avaa sovellus ja salli sijainti | Otsikossa oikea paikkakunta ja maakunta (esim. *Turku, Varsinais-Suomi*), ei "Oma sijainti" |
-| Vertaa lämpötilaa Ilmatieteen laitoksen havaintoon | Ero yleensä enintään 1–2 astetta. Avaa **Mallivertailu**: jokaisen mallin oma lukema ja ero yhdistelmään |
-| Jätä sovellus auki 10 minuuttia tai paina päivityspainiketta | "Päivitetty" -kellonaika muuttuu |
-| Napauta tuntia tai päivää | Selitys ja taivas vaihtuvat. Napauta "nyt" palataksesi |
-| Vieritä **Sääkaavioon** ja kosketa tai vedä sormella sen päällä | Kaavio näyttää valitun hetken lämpötilan, sateen, tuulen ja sään. Painikkeilla vaihdat 24 h / 48 h / 7 pv. Näppäimistöllä nuolinäppäimet siirtävät kohtaa, Esc palauttaa |
-| Katso vastauskaistan (*Mitä päälle ja mukaan*) ylintä riviä | Jos tutkaennuste vastaa, siinä lukee esimerkiksi *Tutkan mukaan sade alkaa noin 15 min päästä* tai *Tutkan mukaan ei sadetta seuraavaan 2 tuntiin*. Jos lähde ei vastaa, riviä ei näytetä eikä mitään virheilmoitusta tule |
-| Odota sadepäivänä tai tuulisena päivänä ja katso sivun yläreuna | Jos Ilmatieteen laitoksella on varoitus alueellesi, se näkyy värillisenä rivinä merkinnällä *Ilmatieteen laitos*. Omat huomiot ovat katkoviivalla ja merkitty *SääÄlyn huomio* |
-| Kysy chatissa: *Sataako vielä?*, *Voiko pyykin ripustaa ulos?*, *Will it rain tomorrow?*, *Mitä pitää päälle?* | Vastaus tulee omalla laskennalla. Arkikieli, kirjoitusvirheet ja englanti toimivat |
-| Etsi toinen paikkakunta otsikon kautta | Ennuste ja nimi vaihtuvat, sijaintipainike palauttaa oman paikan |
-| Avaa chat (*Kysy SääÄlyltä*) ilman avainta ja kysy: *Sataako huomenna?* | Vastaus tulee heti, alla lukee *Sovelluksen oma laskenta · N/N mallia*. Sateen alkamis- ja loppumisaika ja sademäärä täsmäävät etusivun tunti- ja päivälistaan |
-| Kysy sen jälkeen: *Entä Rovaniemellä?* | Vastaus koskee Rovaniemeä ja samaa päivää (huomenna) |
-| Kysy: *Mitä pukisin tänään?*, *Paljonko tuulee illalla?*, *Milloin on paras hetki lenkille?*, *Onko huomenna liukasta?* | Vastaus perustuu etusivun lukuihin (tuntuu kuin, tuuli, sade) eikä sisällä `**`-merkkejä tai "undefined"-tekstiä |
-| Kysy: *Mitä mallit ennustavat huomiselle?* ja *Ovatko mallit samaa mieltä?* | Näet jokaisen mallin oman ennusteen ja sen, kuinka paljon ne eroavat. Luvut ovat samat kuin Mallivertailussa |
-| Kysy: *Onko Oulussa kylmempää kuin Turussa?* | Vertailu kahdesta paikasta samalta ajalta |
-| Lisää Gemini-avain ja vaihda chatin tila (*Oma laskenta*, *Gemini + data*, *Gemini vapaa*) | Alla oleva lähdemerkintä muuttuu. Oma laskenta ei kutsu Geminiä lainkaan |
-| Sammuta verkko hetkeksi ja kysy Gemini-tilassa | Vastaus tulee silti, alla lukee *Gemini ei vastannut (ei verkkoyhteyttä)* ja että vastasi sovelluksen oma laskenta |
+| Avaa sovellus ja salli sijainti | Yläpalkissa oikea paikkakunta ja sen alla maakunta |
+| Katso kotisivun otsikkoa kuivana ja sateisena päivänä | Kuivana: takki ja "Kuivaa klo X asti" tai "koko päivän". Sateella: sateenvarjo ja sateen alkamis- tai loppumisaika. Sama aika näkyy Tunnit-sivulla |
+| Napauta radan tuntia | Tunnin tiedot näkyvät ylhäällä merkinnällä "Tänään klo 17"; "×" palaa nykyhetkeen |
+| Napauta **Huomenna** | Otsikko, lämpötila ja rata kertovat huomisesta |
+| Pyyhkäise Tunnit-sivulle ja napauta riviä | Rivi avautuu paikallaan. "Näytä 48 tuntia" jatkaa listaa |
+| Valitse Tunnit-sivulla **Kaavio** ja vedä sormella kaavion päällä | Kaavio näyttää valitun hetken lämpötilan, sateen ja tuulen |
+| Avaa Varmuus-sivu | Kahdeksan helmeä tänään ja huomenna; teksti kertoo, ovatko mallit samaa mieltä |
+| Odota varoituspäivää | Ilmatieteen laitoksen varoitus näkyy värirenkaalla, oma huomio katkoviivalla. Napautus avaa tekstin |
+| Kysy chatissa: *Milloin sataa seuraavan kerran?*, *Mitä pukisin huomenna?*, *Entä Rovaniemellä?* | Vastaus tulee heti omalla laskennalla, ja ajat täsmäävät sivujen kanssa |
+| Paina Androidin takaisin-elettä toisella sivulla | Sovellus palaa kotisivulle eikä sulkeudu |
 
-Jos jokin ei toimi: **Asetukset → Aja diagnostiikka → Kopioi raportti** ja liitä raportti Claudelle. Raportti kertoo mallikohtaisesti, vastaako palvelu, mitä lämpötilaa kukin malli antaa juuri nyt ja toimiiko Gemini. Raportin ensimmäisellä rivillä on version numero (nyt 0.3.1), ja siinä näkyy myös, toimiiko sovelluksen oma vastausmoottori. Raportin lopussa on osio **Valinnaiset lähteet**: siinä näet, vastaako tutkaennuste (MET Norway) ja varoituspeili juuri sinun puhelimessasi, ja jos ei, miksi (palvelu vastaa mutta ei salli selaimen lukea sitä, tietoturvapolitiikka esti haun, ei yhteyttä tai peiliä ei ole vielä tehty). Selain voi estää yhteyden (CORS), eikä sitä voi tarkistaa muualta kuin oikealla laitteella. Jos lähde ei toimi, sovellus toimii ilman sitä.
+Jos jokin ei toimi: **Valikko → Lisäasetukset → Aja diagnostiikka → Kopioi raportti** ja liitä raportti Claudelle. Raportin ensimmäisellä rivillä on versio, ja lopussa osio **Valinnaiset lähteet** kertoo, vastaavatko tutkaennuste, varoituspeili ja havaintoasema juuri sinun puhelimessasi ja miksi eivät.
 
-## 5. Mitä tässä versiossa ei vielä ole
+## Mitä tässä versiossa ei vielä ole
 
-- **Valokuvamaiset aluetunnelmakuvat** (suurkaupunki ja maaseutu, vuodenajan mukaan). Taustana on nyt koodilla piirretty animoitu taivas: aurinko, kuu oikeassa vaiheessa, tähdet, pilvet, sade, lumi, ukkonen ja sumu. Kuvat ovat seuraava vaihe.
-- **Ilmatieteen laitoksen havainnot** ennusteen korjaajana. Jos mallit poikkeavat toistuvasti havainnoista, lisätään havaintopohjainen korjaus.
-- **Valinnaiset lähteet voivat hiljentyä.** Tutkaennuste (MET Norway) toimii puhelimessa suoraan. Varoitukset kulkevat GitHub-peilin kautta. Jos lähde ei vastaa, sovellus hiljenee (ei virheilmoituksia, uusi yritys 15 min, 1 h, 6 h ja 24 h päästä). Tulos näkyy Tietoja-näkymässä ja diagnostiikassa.
-- **Oikea Android-sovellus ja widget** (Play-kauppa). Suunnitelma perustuu widget-kyselyn vastauksiin. Nykyinen asennettava verkkosovellus toimii aloitusnäytöltä kuin sovellus, mutta se ei voi tarjota Androidin widgetiä.
-- **Chatin oma vastausmoottori ei ole tekoäly.** Se tunnistaa suomenkielisen kysymyksen aiheen, ajankohdan ja paikan säännöillä. Epätavallisesti muotoiltu kysymys voi jäädä ymmärtämättä, jolloin se kertoo, mitä osaa vastata. Gemini-tilat ymmärtävät vapaamuotoisemmin.
-- Ilmatieteen laitoksen oma malli ei ole Open-Meteon tarjoamien mallien joukossa (`fmi_seamless`-tunnusta ei ole), joten sovellus ei käytä sitä. Suomen tarkimmat mallit ovat MET Nordic ja ECMWF; virallinen ennuste ja varoitukset löytyvät ilmatieteenlaitos.fi:stä.
-
-Sääennusteet: Open-Meteo.com (CC BY 4.0, ei-kaupalliseen käyttöön). Paikkahaku: Open-Meteo / GeoNames. Paikannimet: BigDataCloud ja © OpenStreetMap-tekijät.
+- **Tutkakartta.** Tunnit-sivulla on tutkan sadekäyrä seuraaville 2 tunnille; kartta tulee myöhemmin.
+- **Oikea Android-sovellus ja widget** (Play-kauppa). Nykyinen verkkosovellus toimii aloitusnäytöltä kuin sovellus, mutta se ei voi tarjota widgetiä.
+- **Chatin oma vastausmoottori ei ole tekoäly.** Se tunnistaa kysymyksen aiheen, ajankohdan ja paikan säännöillä. Epätavallisesti muotoiltu kysymys voi jäädä ymmärtämättä, jolloin se kertoo, mitä osaa vastata. Gemini-tilat ymmärtävät vapaamuotoisemmin.
+- Ilmatieteen laitoksen oma malli ei ole Open-Meteon mallien joukossa, joten sovellus ei käytä sitä. Virallinen ennuste ja varoitukset löytyvät ilmatieteenlaitos.fi:stä.
 
 ## Tietolähteet ja yksityisyys
 
-Sovellus ei käytä omaa palvelinta, mainoksia, analytiikkaa eikä seurantaa. Selain saa ottaa yhteyttä vain alla oleviin osoitteisiin (tietoturvapolitiikka `Content-Security-Policy` sivun alussa), ja `tests/deploy.test.js` varmistaa, että lista vastaa koodia.
+Sovellus ei käytä omaa palvelinta, mainoksia, analytiikkaa eikä seurantaa. Selain saa ottaa yhteyttä vain alla oleviin osoitteisiin (tietoturvapolitiikka `Content-Security-Policy`), ja `tests/deploy.test.js` varmistaa, että lista vastaa koodia.
 
 | Osoite | Mihin | Mitä lähtee |
 |---|---|---|
@@ -146,32 +71,49 @@ Sovellus ei käytä omaa palvelinta, mainoksia, analytiikkaa eikä seurantaa. Se
 | `geocoding-api.open-meteo.com` | Paikkahaku | Hakusana |
 | `api.bigdatacloud.net`, `nominatim.openstreetmap.org` | Paikan nimi sijainnista (jälkimmäinen varalla) | Koordinaatit |
 | `api.met.no` | Tutkaennuste (valinnainen) | Sijainti pyöristettynä kahteen desimaaliin |
-| `raw.githubusercontent.com` | Viralliset varoitukset (valinnainen): repon haarassa `warnings-data` oleva peili Ilmatieteen laitoksen syötteestä | Ei sijaintia: koko maan varoitukset ladataan ja oma alue valitaan laitteella. GitHub näkee vain IP-osoitteesi, kuten muutkin palvelut |
+| `opendata.fmi.fi` | Lähimmän sääaseman havainto (valinnainen) | Sijainti pyöristettynä kahteen desimaaliin |
+| `raw.githubusercontent.com` | Viralliset varoitukset (valinnainen): repon haarassa `warnings-data` oleva peili Ilmatieteen laitoksen syötteestä | Ei sijaintia: koko maan varoitukset ladataan ja oma alue valitaan laitteella |
 | `generativelanguage.googleapis.com` | Gemini (valinnainen, vain jos lisäät avaimen) | Kysymys ja sovelluksen säädata |
 
-Paikka, asetukset ja välimuisti tallentuvat vain tämän laitteen selaimeen. Gemini-avainta ei koskaan laiteta tiedostoihin.
+Paikka, asetukset ja välimuisti tallentuvat vain tämän laitteen selaimeen. Fontti (Inter Display, SIL Open Font License, `inter-OFL.txt`) tulee sovelluksen mukana, joten sitä ei haeta muualta.
+
+Sääennusteet: Open-Meteo.com (CC BY 4.0). Havainnot ja varoitukset: Ilmatieteen laitos (CC BY 4.0). Tutkaennuste: MET Norway. Paikkahaku: Open-Meteo / GeoNames. Paikannimet: BigDataCloud ja © OpenStreetMap-tekijät.
 
 ## Varoituspeili (GitHub Actions)
 
-Ilmatieteen laitoksen varoitussyöte (`alerts.fmi.fi`) ei salli selaimen suoraa hakua (CORS), joten sovellus ei voi lukea sitä itse. Siksi repossa on ajo `.github/workflows/mirror-warnings.yml`: GitHub hakee syötteen neljännestunnin välein, `src/tools/mirror-warnings.mjs` tiivistää sen (suomenkielinen teksti, koordinaatit 0,001 asteen tarkkuudella) ja tulos tallentuu repon haaraan `warnings-data` tiedostoksi `warnings.json`. Sovellus lukee sen osoitteesta `raw.githubusercontent.com/juukal-ctrl/saaaly/warnings-data/warnings.json` ja valitsee omaa paikkaa koskevat varoitukset laitteella. Haara tehdään joka kerta yhdeksi uudeksi commitiksi, joten historia ei kasva.
+Ilmatieteen laitoksen varoitussyöte (`alerts.fmi.fi`) ei salli selaimen suoraa hakua (CORS), joten repossa on ajo `.github/workflows/mirror-warnings.yml`: se hakee syötteen, `src/tools/mirror-warnings.mjs` tiivistää sen ja tulos tallentuu haaraan `warnings-data` tiedostoksi `warnings.json`. Sovellus lukee sen ja valitsee omaa paikkaa koskevat varoitukset laitteella. Haara tehdään joka kerta yhdeksi commitiksi, joten historia ei kasva.
 
-- **Viive:** noin 5–30 minuuttia (ajastus ja GitHubin välimuisti). Varoitukset annetaan yleensä tuntikausia etukäteen, joten tämä riittää, mutta äkillisessä tilanteessa katso ilmatieteenlaitos.fi.
-- **Jos varoitukset eivät näy:** Asetukset → Aja diagnostiikka → *Valinnaiset lähteet* kertoo syyn. "Peiliä ei löytynyt" tarkoittaa, ettei ajo ole vielä käynyt: avaa repon **Actions**-välilehti → *Peilaa säävaroitukset* → **Run workflow**. Yli kuusi tuntia vanhaa peiliä sovellus ei käytä.
-- **Ajo katoaa 60 päivän hiljaisuuden jälkeen:** GitHub poistaa ajastetut ajot käytöstä, jos repossa ei ole ollut toimintaa 60 päivään. Käynnistä ajo silloin samasta paikasta.
-- Ajo ei epäonnistu, vaikka Ilmatieteen laitoksen palvelu olisi alhaalla, joten GitHub ei lähetä toistuvia virheviestejä. Syy näkyy ajon lokissa varoituksena. Edellinen peili jää silloin voimaan.
-- Tämä on väliaikainen ratkaisu verkkosovellukselle. Oikea Android-sovellus voi hakea syötteen suoraan, eikä tarvitse peiliä.
+- **Ajastus:** GitHubin oma ajastin on epäluotettava (ajot viivästyvät tunteja), joten ajo kannattaa käynnistää ulkoisella ajastimella (esimerkiksi cron-job.org) neljännestunnin välein GitHubin rajapinnan kautta. Ohje on alla. GitHubin oma ajastus jää varalle.
+- **Jos varoitukset eivät näy:** diagnostiikan kohta *Valinnaiset lähteet* kertoo syyn. Ajon voi käynnistää käsin: repon **Actions** → *Peilaa säävaroitukset* → **Run workflow**. Yli kuusi tuntia vanhaa peiliä sovellus ei käytä, ja yli 90 minuuttia vanhasta tiedosta kotisivu näyttää merkin "tarkista Ilmatieteen laitokselta".
+- Ajo ei epäonnistu, vaikka Ilmatieteen laitoksen palvelu olisi alhaalla; edellinen peili jää voimaan.
+
+### Ulkoinen ajastin (cron-job.org)
+
+1. GitHubissa: **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**. Repository access: *Only select repositories* → `saaaly`. Permissions: **Actions: Read and write**. Kopioi tunnus talteen (se näytetään vain kerran).
+2. cron-job.org:ssa luo uusi ajo:
+   - URL: `https://api.github.com/repos/juukal-ctrl/saaaly/actions/workflows/mirror-warnings.yml/dispatches`
+   - Aikataulu: 15 minuutin välein
+   - Lisäasetuksista: metodi **POST**, otsakkeet `Authorization: Bearer <tunnus>`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, runko `{"ref":"main"}`
+3. Onnistunut kutsu palauttaa tilan 204, ja repon Actions-välilehdelle ilmestyy ajo.
+
+Tunnus antaa oikeuden vain tämän repon ajoihin. Älä laita sitä repoon tai sovellukseen.
 
 ## Kehittäjälle
 
+Repon juuressa ovat julkaistut tiedostot (GitHub Pages tarjoilee ne). Lähdekoodi, testit ja työkalut ovat kansiossa `src/`. Juuren tiedostot ovat generoituja: muuta `src/`-kansiota ja julkaise näin:
+
 ```
-node --test tests/*.test.js            # yksikkötestit (191 kpl, noin 3 s)
-node tools/build.mjs                   # kokoaa js/-moduulit tiedostoksi saaaly.js ja tekee esikatselun sekä julkaise/-kansion
-node tools/publish.mjs                 # kopioi julkaise/-kansion tiedostot repon juureen (vain repossa, src/-kansiosta ajettuna)
-python3 tools/e2e.py                   # selaintestit (43 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages (vaatii Pythonin Playwrightin ja Chromiumin)
-python3 tools/shot.py kuva.png "?demo=rain&at=2026-10-14T14:04:00%2B03:00"   # kuvakaappaus esimerkkitilasta (dev-palvelin: python3 -m http.server 8765 --bind 127.0.0.1)
-E2E_TARGET=root python3 tools/e2e.py   # sama lähdekansiolle sellaisenaan
+cd src
+node --test tests/*.test.js            # yksikkötestit (219 kpl)
+node tools/build.mjs                   # kokoaa js/-moduulit tiedostoksi saaaly.js, esikatselun ja julkaise/-kansion
+node tools/publish.mjs                 # kopioi julkaise/-kansion tiedostot repon juureen
+python3 tools/e2e.py                   # selaintestit (43 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages
+python3 tools/shot.py kuva.png "?demo=rain&at=2026-10-14T14:04:00%2B03:00"   # kuvakaappaus esimerkkitilasta
+cd .. && git add -A && git commit && git push
 ```
 
-Chatin oma vastausmoottori on moduuleissa `js/nlu.js` (kysymyksen jäsennys), `js/answer.js` (vastaukset datasta) ja `js/gazetteer.js` (paikannimet ilman verkkoa). Valinnaiset lähteet: `js/sources.js` (varmistus ja odotusajat), `js/nowcast.js` (tutkaennuste) ja `js/warnings.js` (Ilmatieteen laitoksen CAP-varoitukset, oma XML-lukija). Sääkaavio on `js/meteogram.js`, ja neuvot (takki, sateenvarjo, liukkaus) `js/advice.js`. Sen testit ovat tiedostossa `tests/answer.test.js`: data on rakennettu käsin, joten oikeat vastaukset tiedetään tarkasti.
+Esikatselu esimerkkidatalla: `node tools/build.mjs` tekee tiedoston `src/esikatselu.html`, joka toimii ilman verkkoa. Osoitteen perään voi lisätä `?demo=rain`, `snow`, `thunder`, `fog` tai `clear` ja ajan, esimerkiksi `&at=2026-10-14T23:30:00%2B03:00`.
 
-`js/` sisältää lähdekoodin, `saaaly.js` on siitä koottu tiedosto ja `julkaise/` on valmis julkaisupaketti (sama sisältö, tiedostopolut litistetty). Muutoksen jälkeen aja `node tools/build.mjs` ja vie `julkaise/`-kansion tiedostot julkaisuun.
+Rakenne: `js/headline.js` (etusivun, Tunnit-, Viikko- ja Varmuus-sivujen otsikot), `js/views.js` (sivujen HTML), `js/app.js` (tila, sivut ja päivitys), `js/blend.js` (mallien yhdistäminen ja sadejaksot), `js/advice.js` (takki, sateenvarjo, liukkaus), `js/meteogram.js` (sääkaavio), `js/sky.js` (animoitu taivas). Chatin oma vastausmoottori: `js/nlu.js`, `js/answer.js` ja `js/gazetteer.js`. Valinnaiset lähteet: `js/sources.js` (varmistus ja odotusajat), `js/nowcast.js` (tutkaennuste), `js/warnings.js` (varoitukset) ja `js/observations.js` (havainnot).
+
+Jokainen versio on oma commitinsa. Jos uusi versio ei toimi, edelliseen palaa `git revert`illä (tai pyydä Claudea tekemään paluu).

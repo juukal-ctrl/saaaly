@@ -385,7 +385,7 @@ test('ajankohta: pääsiäinen ja juhannus lasketaan oikein ja menneet päivät 
   assert.equal(at('sää juhannuksena', { start: '2027-06-10', now: Date.UTC(2027, 5, 10, 8, 0) }).beyond, true);
   // vastaus: vappu ennusteessa, pääsiäinen jo mennyt
   const o = { fn: () => ({}), start: '2027-04-29', now: Date.UTC(2027, 3, 29, 7, 0) };
-  assert.match(await ask('Sataako vappuna?', o), /^\*\*Vappuna ei sada\.\*\*/);
+  assert.match(await ask('Sataako vappuna?', o), /^\*\*Vappuna ei sada(\.\*\*|:\*\* poutaa)/);
   const past = await ask('Sataako pääsiäisenä?', { fn: () => ({}), start: '2027-03-30', now: Date.UTC(2027, 2, 30, 7, 0) });
   assert.match(past, /Ajankohta "pääsiäisenä" on jo mennyt/);
   const hol = await ask('Onko pääsiäisenä lämmin?', { fn: () => ({}), start: '2027-03-27', now: Date.UTC(2027, 2, 27, 8, 0) });
@@ -404,7 +404,7 @@ test('useampi vuorokaudenaika: "aamulla ja illalla" saa vastauksen kummallekin',
   for (const q of ['sataako aamupäivällä', 'sataako huomenaamuna', 'sataako illalla', 'sataako klo 15 illalla']) assert.equal(parseQuestion(q).when.parts, undefined, q);
   const t = await ask('Sataako huomenna aamulla ja illalla?');
   assert.match(t, /\*\*Huomenna aamulla sataa:\*\*/);
-  assert.match(t, /\*\*Huomenna illalla ei sada\.\*\*/);
+  assert.match(t, /\*\*Huomenna illalla ei sada:\*\* poutaa, [+−]?\d+°/);
   assert.ok(t.indexOf('aamulla') < t.indexOf('illalla'));
   // ennusteen ulkopuolinen päivä: yksi huomautus eikä kahta
   const far = await ask('Sataako joulukuussa aamulla ja illalla?');

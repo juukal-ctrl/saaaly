@@ -1,5 +1,51 @@
 # Muutosloki
 
+## 0.7.0 – Arvion korjaukset: neljä sivua ja selkeämpi etusivu
+
+Etusivu
+
+- **Otsikko kertoo ensin olennaisen.** Kuivana päivänä takkisuositus ja mihin asti on kuivaa ("Välikausitakki tai tuulitakki. Kuivaa koko päivän."), sateella sateenvarjo ja sateen todellinen alkamis- tai loppumisaika ("Sade alkaa klo 16."). Kun tutkaennuste on käytettävissä, aika tulee tutkasta minuutteina ("Sade alkaa noin 20 min kuluttua."). Pieni lisärivi kertoo liukkauden, puuskat tai seuraavan sateen ("Seuraava sade ma klo 11.").
+- Sankarissa on tämän päivän alin ja ylin lämpötila; maakunta näkyy yläpalkissa paikan alla.
+- **Huomenna** vaihtaa koko etusivun huomiseen: otsikko, sankari ja rata alkavat huomisaamusta.
+- Radan tunnin napautus näyttää tunnin tiedot sankarissa samalla sivulla; "×" palaa nykyhetkeen.
+- Etusivu mahtuu yhdelle ruudulle myös 360 px:n puhelimessa kahden varoituksen kanssa. Hyvin lyhyellä ruudulla sivu vierii, eikä mikään jää alapalkin alle.
+- Etusivulta poistettiin SääÄly kertoo -kortti, faktakortti, mallirivi, sääkaavio, kuivan sään tutkarivi ja "Lisää Gemini-avain" -painike. Ne löytyvät nyt omilta sivuiltaan tai asetuksista.
+- **Varoitusrivi**: viralliset varoitukset värirenkaalla, omat huomiot katkoviivalla, tiivis kaksirivinen yhteenveto (alue, lähde ja teksti avautuvat napautuksella). Jos varoituksia ei voitu tarkistaa tai tieto on yli 90 minuuttia vanha, näkyy pieni merkki "Varoitustieto klo 4.24 · tarkista Ilmatieteen laitokselta".
+
+Sivut
+
+- **Neljä pyyhkäistävää sivua**: Koti, Tunnit, Viikko ja Varmuus. Alapalkin pisteet näyttävät sivun ja vievät suoraan sinne; Androidin takaisin-ele palaa kotisivulle. Ensimmäisellä kerralla vihje kertoo pyyhkäisystä.
+- **Tunnit**: 13 tuntia ja painike "Näytä 48 tuntia". Rivin napautus avaa tunnin tiedot paikallaan (tuntuu kuin, tuuli ja puuskat, sade, pilvisyys ja mallien ero, lähimmän aseman havainto, "Kysy tästä tunnista"). Lista/Kaavio-valinta; sääkaaviossa 3D-sääkuvakkeet. Kun sade on alle kahden tunnin päässä, tutkan sadekäyrä näyttää seuraavat 2 tuntia. Tyhjät 0 %:n palkit ja viivat poistettiin.
+- **Viikko**: otsikko kertoo viikon suunnan ja sadepäivät ("Pakkanen hellittää lauantaina."), viikonlopun yhteenveto ja liukkaat päivät. Lämpötilavälit kromikapseleina; päivän napautus avaa sen tunnit.
+- **Varmuus**: yksi mittari tänään ja huomenna (luotettava, melko luotettava, epävarma) ja kahdeksan helmeä, yksi kullekin mallille sen mukaan, paljonko malli poikkeaa SääÄlyn ennusteesta. Teksti kertoo, mistä epävarmuus tulee ("sade alkaa klo 15–17 mallista riippuen"). Lähimmän sääaseman havainto kertoo, osuuko ennuste juuri nyt.
+
+Chat ja asetukset
+
+- Chatin lähdevalitsin siirtyi asetuksiin (Lisäasetukset). Chatissa lukee "Vastaa: Oma laskenta · vaihda".
+- Chat aukeaa yhteenvedolla nykyhetkestä; uudet kysymysehdotukset (seuraava sade, huominen, viikonloppu, lenkki, toinen paikkakunta).
+- Asetukset uudessa järjestyksessä: päivitys ja sijainti, pukeutuminen, päivitysväli, ulkoasu ja tiedot. Lisäasetuksissa ovat vastausten lähde, Gemini ja diagnostiikka.
+
+Ulkoasu
+
+- Inter Display -fontti (tulee sovelluksen mukana, OFL-lisenssi), täysmittainen miinusmerkki ja tummempi toissijainen teksti, jotta pieni teksti erottuu vaalealla taivaalla.
+- Ei laatikoita: kromipunos tuntilistassa, kromikapselit viikossa ja 3D-helmet varmuudessa. Paneelit, painikkeet ja sääkaavio uudistettu samaan tyyliin.
+- Hämärä on sininen hetki eikä harmaa; sade on rauhallisempi ja harvempi.
+
+Uusi lähde
+
+- **Lähimmän sääaseman havainto** Ilmatieteen laitoksen avoimesta datasta (enintään 35 km:n päästä ja 90 minuuttia vanha). Näkyy Tunnit- ja Varmuus-sivuilla, jos palvelu sallii selaimen haun; muuten sovellus toimii ilman sitä.
+
+Korjaukset
+
+- Keskiyö: teksteissä "keskiyöllä" ja "keskiyöhön", sarakkeissa tunnit kahdella numerolla (23, 00, 01).
+- Tunnit-sivun otsikko käyttää tutkaa samoin kuin etusivu, joten sivut eivät kerro sateesta eri aikoja.
+- Sumun taustan piirtovirhe korjattu.
+- Selaimen vaaraton ResizeObserver-ilmoitus ei enää avaa virhenäyttöä.
+
+Ei vielä tässä versiossa
+
+- Tutkakartta. Ilmatieteen laitoksen karttatasoja ja sopivaa taustakarttaa ei voitu varmistaa toimiviksi, joten kartta tulee myöhemmin. Tutkan sadekäyrä on Tunnit-sivulla.
+
 ## 0.6.0 – Hyväksytty konsepti käyttöön
 
 - **Elävät pastellitaustat** aamulle, päivälle, illalle ja yölle (yö on violetti, ei lähes musta). Yläpalkissa on paikkapilleri, Tänään/Huomenna-valitsin ja valikkopainike; alalaidassa lasinen "Kysy SääÄlyltä" -pilleri. Päivitys ja "Käytä sijaintiani" ovat asetuksissa.

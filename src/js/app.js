@@ -15,10 +15,12 @@ import { verdict } from './advice.js';
 import { fetchNowcast, summarizeNowcast, nowcastUrl } from './nowcast.js';
 import { createGuard, runSource, memoryStorage, sourceLine } from './sources.js';
 import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.js';
+import { fetchObs } from './observations.js';
 import { makeDemoFetch } from './demo.js';
-import { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, certaintyHtml, verdictMoreHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
+import { agoText, selLabel, placeHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
+import { homeHeadline } from './headline.js';
 
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
@@ -53,21 +55,21 @@ const el = {
   update: $('#update'),
   app: $('#app'),
   welcome: $('#welcome'),
+  pages: $('#pages'),
+  pgHome: $('#pgHome'),
   alerts: $('#alerts'),
   hero: $('#hero'),
-  heroRest: $('#heroRest'),
   verdict: $('#verdict'),
-  verdictMore: $('#verdictMore'),
   stage: $('#stage'),
   track: $('#track'),
-  ai: $('#ai'),
-  forecast: $('#forecast'),
   hourly: $('#hourly'),
   daily: $('#daily'),
   meteo: $('#meteo'),
   models: $('#models'),
   certainty: $('#certainty'),
   fab: $('#fab'),
+  dots: $('#dots'),
+  hint: $('#swipeHint'),
   sheet: $('#sheet'),
   panel: $('#sheetPanel'),
   theme: $('meta[name="theme-color"]'),
@@ -85,7 +87,11 @@ const state = {
   manualLoad: false,
   error: '',
   sel: { type: 'now' },
-  dayOpen: null, // päivä, jonka tunnit näytetään päiväennusteen alla
+  dayOpen: null, // Viikko-sivun päivä, jonka tunnit näytetään sen rivin alla
+  page: 0, // näkyvä sivu: 0 koti, 1 tunnit, 2 viikko, 3 varmuus
+  hourOpen: null, // Tunnit-sivun avattu tunti (lisätiedot rivin alla)
+  hoursMore: false, // Tunnit-sivulla 48 tuntia 13 sijaan
+  hoursView: store.str('hoursView', 'list') === 'chart' ? 'chart' : 'list',
   ai: { status: 'idle', text: '', error: '', fp: '' },
   refreshMin: REFRESH_OPTIONS.includes(savedRefresh) ? savedRefresh : 10,
   sheet: null,
@@ -98,12 +104,13 @@ const state = {
   banner: null,
   first: false, // ensimmäinen käynnistys: näytetään paikan valintakortti, eikä sijaintilupaa kysytä ennen kuin käyttäjä painaa
   sens: Math.max(-3, Math.min(3, store.num('sens', 0))), // kylmänsietokyky: −3 (palelen helposti) … +3 (kestän kylmää)
-  vday: 'auto', // vastauskaistan ajankohta: 'auto' | 'today' | 'tomorrow'
+  vday: 'today', // yläpalkin valinta: 'today' | 'tomorrow' (etusivu ja Tunnit näyttävät valitun päivän)
   mg: { range: Object.hasOwn(MG_RANGES, store.str('mgRange', '24h')) ? store.str('mgRange', '24h') : '24h', inspectIso: null }, // sääkaavio: aikaväli ja tarkastettu hetki
   nowcast: null, // tutkaennusteen tulkinta nykyhetkelle (nowcast.js), jos saatavilla
   nc: { raw: null, key: '', at: 0, ttl: 0 }, // viimeisin haettu tutkaennuste, paikka ja haun ajankohta
   warn: { raw: null, at: 0 }, // koko maan CAP-varoitukset (warnings.js); oma alue valitaan piirrettäessä
   official: [], // viralliset varoitukset (warnings.js), jos saatavilla
+  obs: { raw: null, key: '', at: 0 }, // lähimmän sääaseman havainto (observations.js), jos saatavilla
 };
 
 // Gemini on käytettävissä vain, kun avain on tallennettu (esimerkkitilassa ei koskaan). Ilman sitä vastataan sovelluksen omalla laskennalla.
@@ -158,42 +165,62 @@ function renderHeader() {
   $('#refreshBtn')?.classList.toggle('spin', state.loading && (state.manualLoad || !state.fc));
 }
 
+/** SääÄlyn selitys nykyhetkestä näkyy chatin ensimmäisenä viestinä (aiemmin etusivun kortti). */
 function renderAi() {
-  if (!state.fc) {
-    el.ai.hidden = true;
-    patch('ai', el.ai, '');
-    return;
-  }
-  el.ai.hidden = false;
-  patch('ai', el.ai, aiHtml({ fc: state.fc, nowMs: nowMs(), sel: state.sel, ai: state.ai, hasKey: keyOn(), mode: aiMode() }));
+  if (state.sheet === 'chat' && !state.chat.length) renderChat();
 }
 
-/** Päivän ääriarvot pienenä lisärivinä etusivun lisähuomioissa. */
-function rangeText(fc, now) {
-  const { local } = nowPosition(fc, now);
-  const d = fc.days.find((x) => x.date === local.date) || fc.days[0];
-  return d ? `tänään ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}` : '';
+function chatIntro() {
+  if (!state.fc) return null;
+  if (geminiOn() && state.ai.status === 'done' && state.ai.text) return { text: state.ai.text, md: true, src: 'SääÄly kertoo · Gemini' };
+  const lines = selectionLines(state.fc, { type: 'now' }, nowMs());
+  return lines.length ? { text: lines.join(' '), md: false, src: `SääÄly kertoo · oma laskenta, ${state.fc.modelsUsed}/${state.fc.modelsTotal} mallia` } : null;
 }
 
-/** Vastauskaista ja huomiot: laskenta neuvomoduulissa, tässä vain piirretään. */
+/** Etusivun otsikko ja varoitusrivi: laskenta headline.js:ssä ja advice.js:ssä, tässä vain piirretään. */
 function renderAdvice(fc, now) {
-  let v = null;
   state.nowcast = currentNowcast(now);
   state.official = currentOfficial(now);
+  let hl = null;
+  let v = null;
   try {
-    v = verdict(fc, now, { window: state.vday, lat: state.place?.lat, sensitivity: state.sens, nowcast: state.nowcast });
+    hl = homeHeadline(fc, now, { day: state.vday, sensitivity: state.sens, nowcast: state.nowcast });
   } catch {
-    v = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
+    hl = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
   }
-  const tomorrow = v?.win?.kind === 'tomorrow';
-  document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.day === 'tomorrow') === tomorrow)));
-  el.verdict.hidden = !v;
-  patch('verdict', el.verdict, v ? verdictHtml({ v }) : '');
-  el.verdictMore.hidden = !v;
-  patch('verdictMore', el.verdictMore, v ? verdictMoreHtml({ v, range: rangeText(fc, now), nowcastLine: state.nowcast?.ok && v.win?.kind !== 'tomorrow' ? state.nowcast.line : '' }) : '');
-  const html = v ? alertsHtml({ alerts: v.alerts, official: state.official, officialState: officialState(now) }) : '';
+  try {
+    v = verdict(fc, now, { window: 'today', lat: state.place?.lat, sensitivity: state.sens, nowcast: state.nowcast });
+  } catch {
+    v = null;
+  }
+  document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.day === state.vday)));
+  el.verdict.hidden = !hl;
+  patch('verdict', el.verdict, hl ? verdictHtml({ hl }) : '');
+  const html = alertsHtml({ alerts: v?.alerts || [], official: state.official, officialState: officialState(now), checkedAt: state.warn.fetchedAt || 0, nowMs: now });
   el.alerts.hidden = !html;
-  patch('alerts', el.alerts, html);
+  if (patch('alerts', el.alerts, html)) sizeStage();
+}
+
+/** Etusivun näyttämö mahtuu ruudulle: korkeus = sivu − varoitusrivi − alapalkki. Leveys seuraa radan kuvasuhdetta (412 x 750). */
+function sizeStage() {
+  const pg = el.pgHome;
+  if (!pg || el.stage.classList.contains('stage-off')) {
+    el.stage.style.width = '';
+    return;
+  }
+  const H = pg.clientHeight;
+  const W = pg.clientWidth;
+  if (!H || !W) return;
+  const top = el.alerts.hidden ? 0 : el.alerts.offsetHeight + 6;
+  const pill = el.fab ? el.fab.getBoundingClientRect().height + 8 : 110;
+  // Radan alimmat merkit ovat 94 %:n korkeudella: niiden on jäätävä alapalkin yläpuolelle. Kuvan loppu saa jäädä palkin alle.
+  const h = (H - top - pill) / 0.94;
+  const fit = (h * 412) / 750;
+  const w = Math.round(Math.max(260, Math.min(W, fit)));
+  el.stage.style.width = `${w}px`;
+  // Hyvin lyhyellä ruudulla (monta varoitusta) näyttämö ei mahdu: sivu vierii, ja loppuun jää tilaa palkin yli.
+  // Väli on ::after-elementti (muuttuja), ei sivun täyte: sivun oma koko ei muutu, joten ResizeObserver ei kierrä.
+  pg.style.setProperty('--stage-pad', fit < 260 ? `${Math.ceil(pill)}px` : '0px');
 }
 
 // ---------- Valinnaiset lähteet ----------
@@ -226,7 +253,40 @@ async function refreshNowcast({ ignoreAge = false } = {}) {
   } finally {
     ncBusy = false;
   }
-  if (state.fc) renderAdvice(state.fc, nowMs());
+  if (state.fc) {
+    renderAdvice(state.fc, nowMs());
+    renderHours();
+  }
+}
+
+const OBS_TTL = 10 * 60000; // asemat mittaavat kymmenen minuutin välein
+let obsBusy = false;
+
+/** Lähimmän aseman havainto, jos se on haettu tälle paikalle eikä ole vanha. */
+function currentObs(now) {
+  const o = state.obs;
+  if (!o.raw || o.key !== ncKey(state.place) || now - o.raw.t > 90 * 60000) return null;
+  return o.raw;
+}
+
+/** Hakee havainnon Suomessa olevalle paikalle. Hiljainen lisälähde kuten tutkaennuste. */
+async function refreshObs({ ignoreAge = false } = {}) {
+  const p = state.place;
+  const key = ncKey(p);
+  if (!key || obsBusy || !inFinland(p.lat, p.lon)) return;
+  const now = nowMs();
+  if (!ignoreAge && state.obs.key === key && now - state.obs.at < OBS_TTL) return;
+  obsBusy = true;
+  try {
+    const r = await runSource(sources, 'obs', () => fetchObs(p.lat, p.lon, { fetchFn, now }), { now });
+    if (ncKey(state.place) === key && 'value' in r) state.obs = { raw: r.value, key, at: now };
+  } finally {
+    obsBusy = false;
+  }
+  if (state.fc) {
+    renderHours();
+    patch('certainty', el.certainty, certPageHtml({ fc: state.fc, results: state.results, nowMs: nowMs(), obs: currentObs(nowMs()) }));
+  }
 }
 
 const WARN_TTL = 15 * 60000; // CAP-syöte päivittyy useita kertoja päivässä; neljännestunnin välein riittää
@@ -265,7 +325,7 @@ async function refreshWarnings({ ignoreAge = false } = {}) {
   try {
     const r = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn, now }), { now });
     // Vanhentunut peili (value null) ei ole virhe, mutta uutta tietoa ei ole: edellinen lista jää voimaan ja seuraavaa hakua odotetaan normaalisti
-    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now, stale: !r.value, fetchedAt: r.value ? r.value.fetchedAt : state.warn.fetchedAt };
+    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now, stale: !r.value, fetchedAt: r.value ? r.value.fetchedAt : (r.raw?.fetchedAt ?? state.warn.fetchedAt) };
   } finally {
     warnBusy = false;
   }
@@ -378,58 +438,108 @@ function renderAll() {
     el.stage.classList.add('stage-off');
     el.track.hidden = true;
     patch('track', el.track, '');
-    el.verdictMore.hidden = true;
     el.verdict.hidden = true;
     el.alerts.hidden = true;
-    el.heroRest.hidden = true;
-    patch('heroRest', el.heroRest, '');
     patch('verdict', el.verdict, '');
     patch('alerts', el.alerts, '');
-    renderAi();
-    el.forecast.hidden = true;
+    for (const k of ['hourly', 'daily', 'certainty', 'models']) patch(k, el[k], '');
+    el.meteo.hidden = true;
+    sizeStage();
     return;
   }
   const now = nowMs();
   const { fc, sel } = state;
-  patch('hero', el.hero, heroHtml({ fc, nowMs: now }));
+  const day = state.vday;
+  patch('hero', el.hero, heroHtml({ fc, nowMs: now, sel, day }));
   el.stage.classList.remove('stage-off');
   el.track.hidden = false;
-  patch('track', el.track, trackHtml({ fc, nowMs: now, sel }));
-  el.heroRest.hidden = false;
-  patch(
-    'heroRest',
-    el.heroRest,
-    heroRestHtml({ fc, nowMs: now, fetchedAt: state.fetchedAt, loading: state.loading && state.manualLoad, modelsUsed: fc.modelsUsed, modelsTotal: fc.modelsTotal }),
-  );
+  patch('track', el.track, trackHtml({ fc, nowMs: now, sel, day }));
   renderAdvice(fc, now);
-  renderAi();
-  el.forecast.hidden = false;
-  renderMeteo(now);
+  renderHours(now);
+  renderWeek(now);
+  patch('certainty', el.certainty, certPageHtml({ fc, results: state.results, nowMs: now, obs: currentObs(now) }));
+  const wasOpen = $('.models-d', el.models)?.open;
+  if (patch('models', el.models, modelsHtml({ results: state.results, fc, nowMs: now })) && wasOpen) $('.models-d', el.models).open = true;
+  sizeStage();
+}
 
-  const strip = $('#strip', el.hourly);
-  const left = strip ? strip.scrollLeft : 0;
-  if (patch('hourly', el.hourly, hourlyHtml({ fc, nowMs: now, sel }))) {
-    const next = $('#strip', el.hourly);
-    if (next && left) next.scrollLeft = left;
-  }
+/** Tunnit-sivu: lista tai kaavio. Tutkan käyrä näkyy, kun sade on alle kahden tunnin päässä. */
+function renderHours(now = nowMs()) {
+  const { fc } = state;
+  if (!fc) return;
+  const chart = state.hoursView === 'chart';
+  const raw = state.nc.key === ncKey(state.place) ? state.nc.raw : null;
+  const radar = state.vday === 'today' ? radarHtml({ raw, nc: state.nowcast, nowMs: now, tz: fc.tz }) : '';
+  patch('hourly', el.hourly, hoursPageHtml({ fc, nowMs: now, day: state.vday, open: state.hourOpen, more: state.hoursMore, view: state.hoursView, radar, fetchedAt: state.fetchedAt, loading: state.loading && state.manualLoad, obs: currentObs(now), nowcast: state.vday === 'today' ? state.nowcast : null }));
+  el.meteo.hidden = !chart;
+  if (chart) renderMeteo(now);
+}
+
+/** Viikko-sivu. Avatun päivän tuntinauha aloittaa aamusta (tänään nykyhetkestä). */
+function renderWeek(now = nowMs()) {
+  const { fc } = state;
+  if (!fc) return;
   if (state.dayOpen && !fc.days.slice(0, 7).some((d) => d.date === state.dayOpen)) state.dayOpen = null;
   const dayLeft = $('.dstrip', el.daily)?.scrollLeft || 0;
-  if (patch('daily', el.daily, dailyHtml({ fc, nowMs: now, sel, openDate: state.dayOpen }))) {
+  if (patch('daily', el.daily, weekPageHtml({ fc, nowMs: now, open: state.dayOpen }))) {
     const ds = $('.dstrip', el.daily);
     if (ds) {
       if (dayLeft && ds.dataset.date === state.dayScrolled) ds.scrollLeft = dayLeft;
       else {
-        // uusi päivä: aloita aamusta (tänään jo alkavasta tunnista)
         const first = ds.querySelector('.hr');
-        const morning = ds.querySelector(`.hr[data-iso$="T07:00"]`);
+        const morning = ds.querySelector('.hr[data-iso$="T07:00"]');
         ds.scrollLeft = morning && first ? Math.max(0, morning.offsetLeft - first.offsetLeft) : 0;
         state.dayScrolled = ds.dataset.date;
       }
     }
   }
-  patch('certainty', el.certainty, certaintyHtml({ fc, nowMs: now }));
-  const wasOpen = $('.models-d', el.models)?.open;
-  if (patch('models', el.models, modelsHtml({ results: state.results, fc, nowMs: now })) && wasOpen) $('.models-d', el.models).open = true;
+}
+
+// ---------- Sivut ----------
+
+let pageEntry = false; // alisivulle siirtyminen lisää historiaan yhden merkinnän: Androidin takaisin palaa kotiin
+let ignorePop = false;
+
+function goPage(i, { smooth = true } = {}) {
+  const w = el.pages.clientWidth || innerWidth;
+  el.pages.scrollTo({ left: i * w, behavior: smooth && !reduceMotion ? 'smooth' : 'auto' });
+}
+
+function onPageChange() {
+  const i = Math.max(0, Math.min(3, Math.round(el.pages.scrollLeft / Math.max(1, el.pages.clientWidth))));
+  if (i === state.page) return;
+  const prev = state.page;
+  state.page = i;
+  el.dots?.querySelectorAll('button').forEach((b) => (+b.dataset.page === i ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current')));
+  if (prev === 0 && i > 0 && !pageEntry && !state.sheet) {
+    try {
+      history.pushState({ saaalyPage: true }, '');
+      pageEntry = true;
+    } catch {
+      pageEntry = false;
+    }
+  } else if (i === 0 && pageEntry && !state.sheet) {
+    pageEntry = false;
+    ignorePop = true;
+    try {
+      history.back();
+    } catch {
+      ignorePop = false;
+    }
+  }
+  if (el.hint && !el.hint.hidden) {
+    el.hint.hidden = true;
+    store.set('swiped', true);
+  }
+}
+
+/** Kerran laitteella: vihje sivujen pyyhkäisystä, kunnes käyttäjä vaihtaa sivua. */
+function maybeHint() {
+  if (DEMO || store.bool('swiped', false) || !el.hint || !state.fc) return;
+  el.hint.hidden = false;
+  setTimeout(() => {
+    if (!el.hint.hidden) el.hint.hidden = true;
+  }, 9000);
 }
 
 /** Uuden version ilmoitus: oma elementtinsä, jota paikan vaihto tai haku ei tyhjennä. */
@@ -503,29 +613,14 @@ function skyIdle() {
   setThemeColor(sun.altitudeDeg);
 }
 
-/** Taivaan tila valitulle ajalle: nyt, valittu tunti tai valitun päivän iltapäivä. */
+/** Taivaan tila nykyhetkelle. Valittu tunti ei vaihda taustaa eikä teemaa: tausta kertoo aina, millainen sää on nyt. */
 function skyStateFor() {
-  const { fc, sel } = state;
+  const { fc } = state;
   const now = nowMs();
-  const { idx, frac, local } = nowPosition(fc, now);
-  let ms = now;
-  let h = snapshot(fc, idx, frac);
-  if (sel.type === 'hour') {
-    const i = fc.hours.findIndex((x) => x.t === sel.iso);
-    if (i >= 0) {
-      h = fc.hours[i];
-      ms = zonedToUtcMs(h.t, fc.tz) + 30 * 60000;
-    }
-  } else if (sel.type === 'day' && sel.date !== local.date) {
-    const d = fc.days.find((x) => x.date === sel.date);
-    if (d) {
-      const at = fc.hours.findIndex((x) => x.t === `${sel.date}T14:00`);
-      h = fc.hours[at >= 0 ? at : Math.floor((d.from + d.to) / 2)];
-      ms = zonedToUtcMs(h.t, fc.tz) + 30 * 60000;
-    }
-  }
-  const sun = sunPosition(ms, fc.lat, fc.lon);
-  const moon = moonInfo(ms, fc.lat, fc.lon);
+  const { idx, frac } = nowPosition(fc, now);
+  const h = snapshot(fc, idx, frac);
+  const sun = sunPosition(now, fc.lat, fc.lon);
+  const moon = moonInfo(now, fc.lat, fc.lon);
   return {
     moonPhase: moon.phase,
     moonAlt: moon.altitudeDeg,
@@ -602,9 +697,9 @@ function validateSelection() {
   if (sel.type === 'hour') {
     const i = fc.hours.findIndex((h) => h.t === sel.iso);
     if (i < idx) state.sel = { type: 'now' };
-  } else if (sel.type === 'day') {
-    if (!fc.days.some((d) => d.date === sel.date) || sel.date < local.date) state.sel = { type: 'now' };
-  }
+  } else if (sel.type !== 'now') state.sel = { type: 'now' };
+  if (state.hourOpen && !fc.hours.some((h, i) => h.t === state.hourOpen && i >= idx)) state.hourOpen = null;
+  void local;
 }
 
 /** Yksi haku kerrallaan: sama paikka käynnissä -> odotetaan sitä; toinen paikka -> vanha haku perutaan. */
@@ -668,9 +763,11 @@ async function runLoad({ manual = false, signal } = {}) {
   persistCache();
   renderAll();
   updateSky();
-  syncAi({ immediate: true });
+  maybeHint();
+  if (state.sheet === 'chat') syncAi({ immediate: true });
   void refreshNowcast({ ignoreAge: manual });
   void refreshWarnings({ ignoreAge: manual });
+  void refreshObs({ ignoreAge: manual });
 }
 
 // ---------- Paikka ----------
@@ -763,7 +860,7 @@ let aiSeq = 0;
 let aiAbort = null;
 
 function selection() {
-  return { type: state.sel.type, label: selLabel(state.sel) };
+  return { type: 'now', label: 'nyt' };
 }
 
 /** Selityksen tunniste: sama paikka, valinta ja tunti + sateiden ajoitus. Näin selitystä ei pyydetä turhaan joka päivityksellä. */
@@ -775,12 +872,13 @@ function aiFingerprint() {
     .map((h, i) => (h.precip >= 0.2 ? i : -1))
     .filter((i) => i >= 0)
     .join(',');
-  const key = sel.type === 'hour' ? sel.iso : sel.type === 'day' ? sel.date : 'nyt';
-  return [placeKey(place), sel.type, key, local.iso.slice(0, 13), wet, Math.round(fc.hours[idx].temp / 3), aiSettings.model(), aiMode()].join('|');
+  void sel;
+  return [placeKey(place), 'now', 'nyt', local.iso.slice(0, 13), wet, Math.round(fc.hours[idx].temp / 3), aiSettings.model(), aiMode()].join('|');
 }
 
 function syncAi({ immediate = false } = {}) {
-  if (!state.fc || !state.place?.name) return;
+  // Selitys näkyy vain chatin ensimmäisenä viestinä: Geminiä ei kutsuta, kun chat on kiinni
+  if (!state.fc || !state.place?.name || state.sheet !== 'chat') return;
   const fp = aiFingerprint();
   if (state.ai.fp === fp && state.ai.status !== 'idle') return;
   const cached = aiCache.get(fp);
@@ -824,17 +922,10 @@ async function runAi({ force = false } = {}) {
 }
 const runAiSoon = debounce(() => runAi(), 450);
 
-function select(sel, { reveal = true } = {}) {
+/** Radan tunnin valinta näkyy etusivun sankarissa paikallaan: sivu ei vieritä minnekään. */
+function select(sel) {
   state.sel = sel;
   renderAll();
-  updateSky();
-  syncAi();
-  if (reveal && sel.type !== 'now') revealAi();
-}
-
-function revealAi() {
-  const r = el.ai.getBoundingClientRect();
-  if (r.top < 8 || r.bottom > innerHeight - 76) el.ai.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
 }
 
 // ---------- Päivityssilmukka ----------
@@ -849,6 +940,7 @@ function tick() {
   }
   void refreshNowcast();
   void refreshWarnings();
+  void refreshObs();
   validateSelection();
   renderAll();
   updateSky();
@@ -869,7 +961,7 @@ const TITLES = { search: 'Paikkakunta', settings: 'Asetukset', chat: 'Kysy Sää
 function sheetContent(kind) {
   if (kind === 'search') return searchSheetHtml({ recent: state.recent });
   if (kind === 'chat') return chatSheetHtml({ mode: aiMode(), hasKey: keyOn(), hasMessages: state.chat.length > 0 });
-  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
+  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
   return settingsSheetHtml({ hasKey: keyOn(), mode: aiMode(), model: aiSettings.model(), refreshMin: state.refreshMin, models: state.models, demo: DEMO, sens: state.sens, anim: store.bool('anim', true) });
 }
 
@@ -880,7 +972,11 @@ function openSheet(kind) {
   el.panel.dataset.kind = kind;
   el.panel.setAttribute('aria-label', TITLES[kind]);
   el.panel.innerHTML = sheetContent(kind);
-  if (kind === 'chat') renderChat();
+  if (kind === 'chat') {
+    chatShown = 0;
+    renderChat();
+    syncAi();
+  }
   el.sheet.hidden = false;
   el.app.inert = true;
   el.fab.inert = true;
@@ -936,11 +1032,21 @@ function trapTab(ev) {
 
 // ---------- Chat ----------
 
+/** Chat: uudet viestit lisätään loppuun (ruudunlukija lukee vain uuden viestin), tyhjä keskustelu piirretään kokonaan. */
+let chatShown = 0;
 function renderChat() {
   const box = $('#msgs');
   if (!box || state.sheet !== 'chat') return;
-  const html = state.chat.length ? state.chat.map(messageHtml).join('') : chatEmptyHtml({ mode: aiMode() });
-  box.innerHTML = html + (state.chatBusy ? typingHtml : '');
+  const n = state.chat.length;
+  box.querySelector('.typing')?.remove();
+  if (n && box.dataset.mode === 'msgs' && n >= chatShown) {
+    for (const m of state.chat.slice(chatShown)) box.insertAdjacentHTML('beforeend', messageHtml(m));
+  } else {
+    box.innerHTML = n ? state.chat.map(messageHtml).join('') : chatEmptyHtml({ mode: aiMode(), intro: chatIntro() });
+    box.dataset.mode = n ? 'msgs' : 'empty';
+  }
+  chatShown = n;
+  if (state.chatBusy) box.insertAdjacentHTML('beforeend', typingHtml);
   box.scrollTop = box.scrollHeight;
   const send = $('.send');
   if (send) send.disabled = state.chatBusy;
@@ -1359,34 +1465,57 @@ const ACTIONS = {
   },
   'open-diag': () => {
     openSheet('settings');
+    const adv = $('#advSet', el.panel);
+    if (adv) adv.open = true;
     setTimeout(runDiagnostics, 80);
+  },
+  'open-adv': () => {
+    openSheet('settings');
+    const adv = $('#advSet', el.panel);
+    if (adv) {
+      adv.open = true;
+      setTimeout(() => adv.scrollIntoView({ block: 'start' }), 80);
+    }
+  },
+  page: (t) => goPage(+t.dataset.page || 0),
+  hrow: (t) => {
+    const iso = t.dataset.iso;
+    state.hourOpen = state.hourOpen === iso ? null : iso;
+    renderHours();
+  },
+  'hours-more': () => {
+    state.hoursMore = !state.hoursMore;
+    renderHours();
+  },
+  'hours-view': (t) => {
+    const v = t.dataset.view === 'chart' ? 'chart' : 'list';
+    if (v === state.hoursView) return;
+    state.hoursView = v;
+    store.set('hoursView', v);
+    renderHours();
   },
   locate: () => locate(),
   refresh: () => load({ manual: true }),
   now: () => select({ type: 'now' }),
-  hour: (t) => select({ type: 'hour', iso: t.dataset.iso }, { reveal: !t.closest('.day-hours') }),
+  hour: (t) => select(state.sel.type === 'hour' && state.sel.iso === t.dataset.iso ? { type: 'now' } : { type: 'hour', iso: t.dataset.iso }),
   day: (t) => {
     const date = t.dataset.date;
-    if (state.dayOpen === date) {
-      state.dayOpen = null;
-      select({ type: 'now' }, { reveal: false });
-    } else {
-      state.dayOpen = date;
-      state.dayScrolled = '';
-      select({ type: 'day', date }, { reveal: false });
+    state.dayOpen = state.dayOpen === date ? null : date;
+    state.dayScrolled = '';
+    renderWeek();
+    if (state.dayOpen)
       requestAnimationFrame(() => {
-        const row = $(`.day[data-date="${CSS.escape(date)}"]`, el.daily);
         const box = $('.day-hours', el.daily);
-        if (!row || !box) return;
-        const bottom = box.getBoundingClientRect().bottom;
-        const top = row.getBoundingClientRect().top;
-        if (bottom > innerHeight - 76 || top < 8) row.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+        if (box) box.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'nearest' });
       });
-    }
   },
   vday: (t) => {
-    state.vday = t.dataset.day === 'tomorrow' ? 'tomorrow' : 'today';
-    if (state.fc) renderAdvice(state.fc, nowMs());
+    const d = t.dataset.day === 'tomorrow' ? 'tomorrow' : 'today';
+    if (d === state.vday) return;
+    state.vday = d;
+    state.sel = { type: 'now' };
+    state.hourOpen = null;
+    renderAll();
   },
   'ai-run': () => runAi({ force: true }),
   pick: (t) => pickPlace(state.found[+t.dataset.i]),
@@ -1416,6 +1545,7 @@ function bindPullToRefresh() {
   const ind = $('#ptr');
   if (!ind) return;
   let y0 = null;
+  let x0 = 0;
   let pulled = 0;
   const reset = () => {
     y0 = null;
@@ -1428,9 +1558,10 @@ function bindPullToRefresh() {
     'touchstart',
     (ev) => {
       const t = ev.target;
-      const inStrip = t.closest?.('#strip, .sheet, textarea, input, select');
-      if (state.sheet || inStrip || window.scrollY > 0 || ev.touches.length !== 1) y0 = null;
-      else (y0 = ev.touches[0].clientY), (pulled = 0);
+      const inStrip = t.closest?.('.dstrip, #mgWrap, .sheet, textarea, input, select');
+      const page = t.closest?.('.page');
+      if (state.sheet || inStrip || !page || page.scrollTop > 0 || ev.touches.length !== 1) y0 = null;
+      else (y0 = ev.touches[0].clientY), (x0 = ev.touches[0].clientX), (pulled = 0);
     },
     { passive: true },
   );
@@ -1438,6 +1569,11 @@ function bindPullToRefresh() {
     'touchmove',
     (ev) => {
       if (y0 == null) return;
+      // Sivujen vaakapyyhkäisy ei ole päivitysveto
+      if (Math.abs(ev.touches[0].clientX - x0) > Math.abs(ev.touches[0].clientY - y0) + 6) {
+        reset();
+        return;
+      }
       pulled = Math.max(0, ev.touches[0].clientY - y0);
       if (pulled < 12) return;
       ind.hidden = false;
@@ -1519,8 +1655,27 @@ function bindEvents() {
     if (state.sheet) {
       hasEntry = false;
       closeSheet();
+      return;
+    }
+    if (ignorePop) {
+      ignorePop = false;
+      return;
+    }
+    if (state.page > 0) {
+      pageEntry = false;
+      goPage(0);
     }
   });
+  let pageRaf = 0;
+  el.pages?.addEventListener(
+    'scroll',
+    () => {
+      if (!pageRaf) pageRaf = requestAnimationFrame(() => ((pageRaf = 0), onPageChange()));
+    },
+    { passive: true },
+  );
+  if (typeof ResizeObserver === 'function' && el.pgHome) new ResizeObserver(() => sizeStage()).observe(el.pgHome);
+  window.addEventListener('resize', debounce(() => goPage(state.page, { smooth: false }), 120));
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       tick();
@@ -1534,7 +1689,7 @@ function bindEvents() {
   });
   // Animaatio pysähtyy, kun ruutuun ei kosketa (akku): kosketus, vieritys tai näppäin herättää sen.
   for (const type of ['pointerdown', 'touchstart', 'keydown']) document.addEventListener(type, () => sky?.poke(), { passive: true, capture: true });
-  window.addEventListener('scroll', () => sky?.poke(), { passive: true });
+  document.addEventListener('scroll', () => sky?.poke(), { passive: true, capture: true });
 }
 
 // ---------- Käynnistys ----------

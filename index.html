@@ -2,11 +2,11 @@
 <html lang="fi">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://generativelanguage.googleapis.com https://api.met.no https://raw.githubusercontent.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://generativelanguage.googleapis.com https://api.met.no https://raw.githubusercontent.com https://opendata.fmi.fi; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>SääÄly</title>
 <meta name="description" content="SääÄly kertoo yhdellä silmäyksellä, tarvitsetko takin tai sateenvarjon. Se yhdistää usean säämallin ennusteen ja selittää sään suomeksi.">
-<meta name="theme-color" content="#0b1530">
+<meta name="theme-color" content="#f3d9e8">
 <meta name="color-scheme" content="dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -32,30 +32,32 @@
   <div id="update" class="banner" role="status" aria-live="polite" hidden></div>
 
   <section id="welcome" class="welcome" aria-label="Aloitus" hidden></section>
-  <section id="alerts" class="alerts" aria-label="Säähuomiot" hidden></section>
-  <div id="stage" class="stage">
-    <section id="hero" class="hero" aria-label="Sää nyt"></section>
-    <section id="verdict" class="verdict" aria-label="Mitä päälle ja mukaan" hidden></section>
-    <section id="track" class="trk" aria-label="Seuraavat tunnit radalla" hidden></section>
+  <div id="pages" class="pages">
+    <section id="pgHome" class="page pg-home" aria-label="Sää nyt" data-page="0">
+      <section id="alerts" class="alerts" aria-label="Varoitukset ja huomiot" hidden></section>
+      <div id="stage" class="stage">
+        <section id="hero" class="hero" aria-label="Sää nyt"></section>
+        <section id="verdict" class="verdict" aria-label="Mitä päälle ja mukaan" aria-live="polite" hidden></section>
+        <section id="track" class="trk" aria-label="Seuraavat tunnit radalla" hidden></section>
+      </div>
+    </section>
+    <section id="pgHours" class="page" aria-label="Tunnit" data-page="1">
+      <div id="hourly"></div>
+      <section id="meteo" class="meteo" aria-label="Sääkaavio" hidden></section>
+    </section>
+    <section id="pgWeek" class="page" aria-label="Viikko" data-page="2"><div id="daily"></div></section>
+    <section id="pgCert" class="page" aria-label="Varmuus" data-page="3">
+      <div id="certainty" class="cert"></div>
+      <section id="models" aria-label="Mallivertailu"></section>
+      <footer class="foot">
+        <p>Sääennusteet: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0), jonka kautta mm. ECMWF, DWD, MET Norway ja UK Met Office. Yhdistelmä, sateen ajoitus ja neuvot ovat SääÄlyn omaa laskentaa.</p>
+        <p>Kokeiluversio. Tärkeissä päätöksissä ja vaaratilanteissa katso <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Ilmatieteen laitoksen varoitukset</a>. <button class="linkish" type="button" data-act="open-about">Tietoja ja tietolähteet</button></p>
+      </footer>
+    </section>
   </div>
-  <section id="verdictMore" class="verdict-more" aria-label="Lisähuomiot" hidden></section>
-  <section id="heroRest" class="hero hero-rest" aria-label="Sään lisätiedot" hidden></section>
-  <section id="ai" class="ai" aria-label="Tekoälyn selitys" hidden></section>
-  <div id="forecast" class="panel" hidden>
-    <section id="meteo" class="meteo" aria-label="Sääkaavio"></section>
-    <section id="hourly" aria-label="Tuntiennuste"></section>
-    <section id="daily" aria-label="Päiväennuste"></section>
-    <section id="certainty" class="cert" aria-label="Varmuus"></section>
-    <section id="models" aria-label="Mallivertailu"></section>
-  </div>
-
-  <footer class="foot">
-    <p>Sääennusteet: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0), jonka kautta mm. ECMWF, DWD, MET Norway ja UK Met Office. Yhdistelmä, sateen ajoitus ja neuvot ovat SääÄlyn omaa laskentaa.</p>
-    <p>Kokeiluversio. Tärkeissä päätöksissä ja vaaratilanteissa katso <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Ilmatieteen laitoksen varoitukset</a>. <button class="linkish" type="button" data-act="open-about">Tietoja ja tietolähteet</button></p>
-  </footer>
 </main>
 
-<div id="fab" class="askbar"><button class="ask-btn" type="button" data-act="open-chat" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg><span>Kysy SääÄlyltä</span><svg class="go" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-3-7z"/></svg></button></div>
+<div id="fab" class="askbar"><p id="swipeHint" class="swipe-hint" hidden>Pyyhkäise sivulle: tunnit, viikko ja varmuus</p><nav id="dots" class="dots" aria-label="Näkymät"><button type="button" data-act="page" data-page="0" aria-label="Koti" aria-current="true"><i></i></button><button type="button" data-act="page" data-page="1" aria-label="Tunnit"><i></i></button><button type="button" data-act="page" data-page="2" aria-label="Viikko"><i></i></button><button type="button" data-act="page" data-page="3" aria-label="Varmuus"><i></i></button></nav><button class="ask-btn" type="button" data-act="open-chat" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg><span>Kysy SääÄlyltä</span></button></div>
 
 <div id="ptr" class="ptr" aria-hidden="true" hidden><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.4 5.7"/><path d="M20 4v7h-7"/></svg></div>
 

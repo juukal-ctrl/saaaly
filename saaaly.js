@@ -1397,9 +1397,12 @@ function wetSpans(fc, from, to, { minPwin = 0.3 } = {}) {
       }
     }
     const timingUncertain = !!s.smeared || (starts.length >= 3 && wQuantile(starts, 0.75) - wQuantile(starts, 0.25) > 2);
+    // Alkamisajan vaihteluväli mallien kesken (20. ja 80. persentiili): "sade alkaa klo 15–17 mallista riippuen"
+    const startLo = starts.length >= 3 ? Math.round(wQuantile(starts, 0.2)) : s.start;
+    const startHi = starts.length >= 3 ? Math.round(wQuantile(starts, 0.8)) : s.start;
     const sh = s.total ? s.snowW / s.total : 0;
     out.push({
-      start: s.start, end: s.end, total: s.total, snowW: s.snowW, pwin, timingUncertain,
+      start: s.start, end: s.end, total: s.total, snowW: s.snowW, pwin, timingUncertain, startLo, startHi,
       startT: hours[s.start].t, endT: hours[s.end].t, kind: sh >= 0.6 ? 'snow' : sh >= 0.25 ? 'sleet' : 'rain',
     });
   }
@@ -1738,10 +1741,10 @@ const { clamp, lerp } = __m['util'];
 // Auringon korkeus (astetta) -> taivaan kolme väriä [ylä, keski, horisontti]
 const STOPS = [
   [-18, ['#03060f', '#060b1c', '#0a1330']],
-  [-12, ['#060b1e', '#0d1735', '#17275a']],
-  [-6, ['#101b45', '#2f3573', '#b55f6b']],
-  [-5, ['#2a2f66', '#6a5a9c', '#d98a9a']],
-  [-2.5, ['#e8c5cf', '#d3b4e2', '#b8baf0']], // aamu/ilta: pastellinen persikka ja laventeli, vaalea jo ennen auringonnousua
+  [-12, ['#0a0d26', '#141a45', '#1f2a66']],
+  [-8, ['#1d1f52', '#3d3486', '#7a4f96']],
+  [-6, ['#4a3d93', '#8a6ec2', '#d690b6']], // syvä hämärä: kylläinen violetti, ei harmaata välivaihetta
+  [-4, ['#e8c5cf', '#d3b4e2', '#b8baf0']], // aamu/ilta: pastellinen persikka ja laventeli, vaalea jo ennen auringonnousua
   [1, ['#f6cfc6', '#eabcd8', '#c9c4f2']],
   [6, ['#ffe4cc', '#f6cae4', '#c7d3fb']],
   [14, ['#fdebd3', '#e2cbfb', '#bcdcff']],
@@ -1796,15 +1799,56 @@ const PAL = {
 };
 for (const k of Object.keys(PAL)) PAL[k] = PAL[k].map(([x, y, bw, bh, c, o]) => [x, y, bw, bh, hex3(c), o]);
 
-const blendPal = (a, b, t) => a.map((p, i) => [lerp(p[0], b[i][0], t), lerp(p[1], b[i][1], t), lerp(p[2], b[i][2], t), lerp(p[3], b[i][3], t), mix(p[4], b[i][4], t), lerp(p[5], b[i][5], t)]);
+// Värien sekoitus OKLCH-avaruudessa: sävy kiertää ja kylläisyys säilyy, joten hämärän välivaiheet eivät muutu harmaiksi.
+const lin = (v) => ((v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+const gam = (v) => clamp((v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055) * 255, 0, 255);
+function toLab([r, g, b]) {
+  const R = lin(r);
+  const G = lin(g);
+  const B = lin(b);
+  const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
+  const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
+  const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+  return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+}
+function fromLab([L, a, b]) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [gam(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s), gam(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s), gam(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s)];
+}
+function mixLch(c1, c2, t) {
+  const A = toLab(c1);
+  const B = toLab(c2);
+  const C1 = Math.hypot(A[1], A[2]);
+  const C2 = Math.hypot(B[1], B[2]);
+  const h1 = Math.atan2(A[2], A[1]);
+  let dh = Math.atan2(B[2], B[1]) - h1;
+  if (dh > Math.PI) dh -= 2 * Math.PI;
+  if (dh < -Math.PI) dh += 2 * Math.PI;
+  // Lähes harmaan värin sävy ei merkitse: käytetään toisen värin sävyä
+  const h = C1 < 0.02 ? Math.atan2(B[2], B[1]) : C2 < 0.02 ? h1 : h1 + dh * t;
+  const C = lerp(C1, C2, t);
+  return fromLab([lerp(A[0], B[0], t), C * Math.cos(h), C * Math.sin(h)]);
+}
+
+const blendPal = (a, b, t) => a.map((p, i) => [lerp(p[0], b[i][0], t), lerp(p[1], b[i][1], t), lerp(p[2], b[i][2], t), lerp(p[3], b[i][3], t), mixLch(p[4], b[i][4], t), lerp(p[5], b[i][5], t)]);
 
 /** Taustan värikentät auringon korkeuden mukaan: yö, aamu tai ilta (hämärä), päivä. */
 function blobsFor(alt, morning) {
   const dusk = morning ? PAL.aamu : PAL.ilta;
   if (alt <= -8) return PAL.yo;
-  if (alt < 2) return blendPal(PAL.yo, dusk, (alt + 8) / 10);
-  if (alt < 18) return blendPal(dusk, PAL.paiva, (alt - 2) / 16);
+  if (alt < -4) return blendPal(PAL.yo, dusk, (alt + 8) / 4); // hämärän vaihe on lyhyt ja kylläinen
+  if (alt < 14) return blendPal(dusk, PAL.paiva, (alt + 4) / 18);
   return PAL.paiva;
+}
+
+/** Taustan pohjaväri: yö -> violetti hämärä -> vaalea päivä (ei harmaata välivaihetta). */
+const BASE_NIGHT = [19, 15, 41];
+const BASE_DUSK = [128, 104, 190];
+const BASE_DAY = [252, 247, 255];
+function baseColor(light) {
+  return light < 0.5 ? mixLch(BASE_NIGHT, BASE_DUSK, light * 2) : mixLch(BASE_DUSK, BASE_DAY, (light - 0.5) * 2);
 }
 
 const DEFAULT = { alt: 25, bearing: 180, cloud: 0.3, precip: 0, snow: 0, wind: 3, windDir: 225, thunder: 0, fog: 0, moonPhase: 0.5, moonAlt: -90, moonHA: 12 };
@@ -1865,7 +1909,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     if (!raf) draw(0);
   }
 
-  const rainCount = () => (tgt.precip >= 0.05 ? clamp(35 + tgt.precip * 60, 0, 280) * (1 - tgt.snow) : 0);
+  const rainCount = () => (tgt.precip >= 0.05 ? clamp(30 + tgt.precip * 45, 0, 200) * (1 - tgt.snow) : 0);
   const snowCount = () => (tgt.precip >= 0.05 ? clamp(50 + tgt.precip * 90, 0, 200) * tgt.snow : 0);
 
   function step(dt) {
@@ -1891,10 +1935,10 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     const cover = clamp(cur.cloud, 0, 1);
     const gloom = clamp(cover * 0.35 + (cur.precip > 0.3 ? 0.2 : 0) + cur.thunder * 0.25 + cur.fog * 0.3, 0, 0.7);
     const night = clamp((-alt - 3) / 10, 0, 1);
-    const light = clamp((alt + 8) / 10, 0, 1);
+    const light = clamp((alt + 8) / 4, 0, 1);
 
     // Pohja ja liukuvat värikentät (konseptin aamu / päivä / ilta / yö)
-    ctx.fillStyle = rgba(mix([19, 15, 41], [252, 247, 255], light));
+    ctx.fillStyle = rgba(baseColor(light));
     ctx.fillRect(0, 0, w, h);
     const blobs = blobsFor(alt, cur.bearing < 180);
     const grey = mix([60, 55, 92], [206, 201, 226], light);
@@ -1906,7 +1950,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
       const cx = (x + bw / 2 + dx) * sx;
       const cy = (y + bh / 2 + dy) * sy;
       const r = (Math.max(bw, bh) / 2) * 1.2 * Math.max(sx, sy * 0.9);
-      const c = mix(col, grey, gloom * 0.55);
+      const c = mix(col, grey, gloom * 0.4);
       const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
       g.addColorStop(0, rgba(c, o));
       g.addColorStop(0.5, rgba(c, o * 0.62));
@@ -1921,7 +1965,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
         const y = h * (0.4 + i * 0.16);
         const off = Math.sin(time * 0.05 + i * 2) * 40;
         const fg = ctx.createLinearGradient(0, y - h * 0.18, 0, y + h * 0.18);
-        const fogCol = mix([205, 212, 224], hor0, 0.2);
+        const fogCol = mix([205, 212, 224], skyColors(alt)[2], 0.2);
         fg.addColorStop(0, rgba(fogCol, 0));
         fg.addColorStop(0.5, rgba(fogCol, 0.42 * cur.fog * (night > 0.5 ? 0.6 : 1)));
         fg.addColorStop(1, rgba(fogCol, 0));
@@ -1935,15 +1979,16 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     if (nr > 0) {
       const slant = clamp(cur.wind / 14, 0, 1) * 0.55 * -Math.sin((cur.windDir * Math.PI) / 180);
       ctx.strokeStyle = night > 0.5 ? 'rgba(170,195,235,0.42)' : isLightSky(alt) ? 'rgba(84,100,196,0.5)' : 'rgba(205,224,255,0.55)';
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = 1;
       ctx.lineCap = 'round';
       ctx.beginPath();
+      // Rauhallinen sade: hitaat, lyhyet viirut (konsepti: liike on hidasta ja pehmeää)
       for (let i = 0; i < nr; i++) {
         const d = rain[i];
-        const y = (((d.y * h + time * 640 * d.v) % (h + 40)) + h + 40) % (h + 40) - 20;
+        const y = (((d.y * h + time * 260 * d.v) % (h + 40)) + h + 40) % (h + 40) - 20;
         const x = (((d.x * w + y * slant * 0.6) % w) + w) % w;
         ctx.moveTo(x, y);
-        ctx.lineTo(x + slant * 16 * d.l, y + 16 * d.l);
+        ctx.lineTo(x + slant * 11 * d.l, y + 11 * d.l);
       }
       ctx.stroke();
     }
@@ -2077,7 +2122,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
   });
   return { set, resize, start, stop, poke, setAnimated, draw: () => draw(0), state: () => ({ ...cur }) };
 }
-return { isLightSky, skyColors, blobsFor, createSky };
+return { isLightSky, skyColors, mixLch, blobsFor, createSky };
 })();
 
 // ---- meteogram.js ----
@@ -2316,7 +2361,7 @@ function meteogram(hours, o = {}) {
     if (hHi > hSolid + 1.5 && o.band !== false) out.push(`<rect ${cls('mg-hi')} x="${r1(x)}" y="${r1(base - hHi)}" width="${r1(w)}" height="${r1(hHi - hSolid)}" rx="1"/>`);
     if (hSolid > 0) {
       const fill = kind === 'rn' ? cls('mg-rain') : `class="mg-snowbar" fill="url(#${uid}-${kind})"`;
-      out.push(`<rect ${fill} x="${r1(x)}" y="${r1(base - hSolid)}" width="${r1(w)}" height="${r1(hSolid)}" rx="1"/>`);
+      out.push(`<rect ${fill} x="${r1(x)}" y="${r1(base - hSolid)}" width="${r1(w)}" height="${r1(hSolid)}" rx="${r1(Math.min(3, w / 2))}"/>`);
       if (bestB < 0 || b.precip > bins[bestB].precip) bestB = j;
     }
   });
@@ -2357,7 +2402,10 @@ function meteogram(hours, o = {}) {
   }
 
   // --- symbolit ---
-  if (o.icon) {
+  // o.icon3d: 3D-kuvakkeet piirretään HTML:nä kaavion päälle (paikat palautetaan icons-taulukossa), SVG:hen ei tule kuvakkeita
+  const icons = [];
+  const putIcon = (sym, isDay, cx, y) => (o.icon3d ? icons.push({ sym, isDay, x: cx, y: y + 14 }) : out.push(nestedIcon(o.icon, sym, isDay, cx, y, 28)));
+  if (o.icon || o.icon3d) {
     const sy = ySym + 2;
     if (range === '7d') {
       const dates = [...new Set(pts.map((h) => h.t.slice(0, 10)))];
@@ -2366,7 +2414,7 @@ function meteogram(hours, o = {}) {
         if (x1 - x0 < 30) continue;
         const day = bins.filter((b) => b.t.slice(0, 10) === d && hourOf(b.t) >= 6 && hourOf(b.t) < 21);
         const sym = (day.length ? day : bins.filter((b) => b.t.slice(0, 10) === d)).reduce((b, x) => (SEV.indexOf(x.sym) > SEV.indexOf(b) ? x.sym : b), 'clear');
-        out.push(nestedIcon(o.icon, sym, true, (x0 + x1) / 2, sy, 28));
+        putIcon(sym, true, (x0 + x1) / 2, sy);
       }
     } else {
       const every = compact ? R.every * 2 : R.every;
@@ -2375,7 +2423,7 @@ function meteogram(hours, o = {}) {
         if (hourOf(h.t) % every !== 0) continue;
         const x = xAt(i);
         if (x < padL + 14 || x > padL + plotW - 14) continue;
-        out.push(nestedIcon(o.icon, h.sym, h.isDay, x, sy, 28));
+        putIcon(h.sym, h.isDay, x, sy);
       }
     }
   }
@@ -2404,7 +2452,7 @@ function meteogram(hours, o = {}) {
   const total = bins.reduce((s, b) => s + b.precip, 0);
   const label = range === '24h' ? 'Seuraavat 24 tuntia' : range === '48h' ? 'Seuraavat 48 tuntia' : 'Seuraavat 7 päivää';
   const summary = `${label}: lämpötila ${fmtT(tmin)} … ${fmtT(tmax)}. ` + (wet.length ? `Sadetta yhteensä noin ${fmtMmv(total)}, ensimmäisenä ${wdOf(wet[0].t)} klo ${String(hourOf(wet[0].t)).padStart(2, '0')}. ` : 'Merkittävää sadetta ei odoteta. ') + `Tuuli enimmillään ${Math.round(Math.max(...bins.map((b) => b.wind)))} m/s.`;
-  return { svg, width: W, height, bins, readout, summary, inspect: inspect >= 0 ? inspect : null, geom: { padL, plotW, bw, N, ySym, yTemp, yPrec, yWind }, top };
+  return { svg, width: W, height, bins, readout, summary, icons, inspect: inspect >= 0 ? inspect : null, geom: { padL, plotW, bw, N, ySym, yTemp, yPrec, yWind }, top };
 }
 return { RANGES, monotonePath, meteogram };
 })();
@@ -4446,7 +4494,8 @@ function composeRain(X, w, q, { snow = false } = {}) {
       if (anyWet.length) line += ` ${cap(KIND_WORD[anyWet[0].kind])} on kuitenkin tulossa ${spanText(X, anyWet[0].start, anyWet[0].end, ref)}.`;
       else if (f.tmin > 3) line += ` Lämpötila on ${trange(f.tmin, f.tmax)}, joten lumi ei ole tulossa.`;
     } else {
-      line = `**${head} ei sada.**`;
+      // Kuiva vastaus kertoo myös lämpötilan, jotta lyhyt vastaus on silti hyödyllinen
+      line = `**${head} ei sada:** poutaa, ${trange(f.tmin, f.tmax)}.`;
       if (f.popMax >= 0.3 || f.precip >= 0.3) line += ` Pieni kuuron mahdollisuus kuitenkin on (todennäköisyys enintään ${pct(f.popMax)}${f.precip >= 0.1 ? `, yhteensä noin ${fmtMm(f.precip)}` : ''}).`;
       else if (f.popMax >= 0.1) line += ` Sateen todennäköisyys on enintään ${pct(f.popMax)}.`;
     }
@@ -5440,7 +5489,14 @@ const SOURCE_INFO = {
     provider: 'Ilmatieteen laitos',
     url: 'https://www.ilmatieteenlaitos.fi/varoitukset',
     license: 'CC BY 4.0',
-    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle. Haetaan GitHubin kautta, koska Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua.',
+    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle. Haetaan GitHubin kautta, koska Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua. Jos tieto on yli puolitoista tuntia vanha, etusivu kertoo sen.',
+  },
+  obs: {
+    name: 'Havainto',
+    provider: 'Ilmatieteen laitos, avoin data',
+    url: 'https://www.ilmatieteenlaitos.fi/avoin-data',
+    license: 'CC BY 4.0',
+    note: 'Lähimmän sääaseman mitattu lämpötila: vertailukohta ennusteelle (Varmuus-sivu).',
   },
   air: {
     name: 'Ilmanlaatu ja siitepöly',
@@ -5472,8 +5528,9 @@ function createGuard({ storage = store, clock = () => Date.now() } = {}) {
       const e = entry(id);
       return !(Number(e.until) > now);
     },
-    ok(id, now = clock(), note = '') {
-      put(id, { fails: 0, until: 0, lastOk: now, note: String(note).slice(0, 80) });
+    /** limited = lähde vastasi, mutta tietoa ei voinut käyttää (esim. vanhentunut peili tai ei kattavuutta). */
+    ok(id, now = clock(), note = '', limited = false) {
+      put(id, { fails: 0, until: 0, lastOk: now, note: String(note).slice(0, 80), ...(limited ? { limited: true } : {}) });
     },
     fail(id, err, now = clock()) {
       const e = entry(id);
@@ -5497,8 +5554,8 @@ async function runSource(guard, id, fn, { force = false, now = Date.now() } = {}
     const value = await fn();
     if (value && value.ok === false) {
       // Lähde vastasi, mutta ei kata paikkaa tai tieto puuttuu: ei virhe, mutta ei käyttökelpoista tietoa
-      guard.ok(id, now, value.reason || '');
-      return { value: null, reason: value.reason || 'ei kattavuutta' };
+      guard.ok(id, now, value.reason || '', true);
+      return { value: null, reason: value.reason || 'ei kattavuutta', raw: value };
     }
     guard.ok(id, now, value?.note || '');
     return { value };
@@ -5518,7 +5575,7 @@ function sourceLine(id, st, now = Date.now()) {
     const wait = Math.max(0, Math.ceil((Number(st.until) - now) / 60000));
     return `– ${head}: ei vastannut${st.error ? ` (${st.error})` : ''}${wait ? `, uusi yritys ${wait >= 90 ? `${Math.round(wait / 60)} h` : `${wait} min`} päästä` : ''}`;
   }
-  if (st?.lastOk) return `✓ ${head}${st.note ? `: ${st.note}` : ''}`;
+  if (st?.lastOk) return `${st.limited ? '!' : '✓'} ${head}${st.note ? `: ${st.note}` : ''}`;
   return `· ${head}: ei vielä kokeiltu`;
 }
 
@@ -5916,6 +5973,8 @@ function officialRows(list, lat, lon, nowMs, max = 3) {
         severity: w.severity,
         title: w.event || w.headline || 'Säävaroitus',
         when: [area, whenText(w.onset, w.expires, nowMs)].filter(Boolean).join(' · '),
+        time: whenText(w.onset, w.expires, nowMs),
+        area,
         text: clip([w.description, w.instruction].filter(Boolean).join(' '), 600),
       };
     });
@@ -5984,7 +6043,7 @@ function parseMirror(data, nowMs = Date.now()) {
   if (!data || typeof data !== 'object' || data.v !== MIRROR_VERSION || !Array.isArray(data.alerts)) throw new Error('Varoitukset: peilin muoto ei täsmää');
   const at = Date.parse(data.fetchedAt);
   if (!Number.isFinite(at)) throw new Error('Varoitukset: peilin aikaleima puuttuu');
-  if (nowMs - at > MIRROR_MAX_AGE) return { ok: false, reason: `peili on vanhentunut (päivitetty ${fmtStamp(at)})` };
+  if (nowMs - at > MIRROR_MAX_AGE) return { ok: false, reason: `peili on vanhentunut (päivitetty ${fmtStamp(at)})`, fetchedAt: at };
   const alerts = [];
   for (const a of data.alerts.slice(0, MAX_ALERTS)) {
     if (!a || typeof a !== 'object' || typeof a.expires !== 'number' || !Number.isFinite(a.expires)) continue;
@@ -6032,6 +6091,96 @@ async function fetchWarnings({ fetchFn = defaultFetch, timeoutMs = 8000, signal 
   return parseMirror(data, now);
 }
 return { MIRROR_URL, FMI_WARNINGS_PAGE, parseXml, parseCapAlerts, parseCapFeed, inFinland, inPoly, warningsAt, whenText, officialRows, buildMirror, parseMirror, fetchWarnings };
+})();
+
+// ---- observations.js ----
+__m['observations'] = (() => {
+// observations.js: lähimmän Ilmatieteen laitoksen havaintoaseman mitattu lämpötila (avoin data, WFS-latauspalvelu, CC BY 4.0).
+// Havainto on vertailukohta ennusteelle: Varmuus-sivu näyttää, kuinka lähellä SääÄlyn "nyt"-arvo on mitattua.
+// Lähde on lisä. Jos palvelu ei vastaa, ei salli selaimen hakua tai lähellä ei ole asemaa, mitään ei näytetä (sources.js).
+
+const { parseXml } = __m['warnings'];
+const { timedRequest } = __m['sources'];
+const { defaultFetch } = __m['util'];
+
+const OBS_BASE = 'https://opendata.fmi.fi/wfs';
+const MAX_TEXT = 2_000_000;
+const MAX_KM = 35; // tätä kauempana oleva asema ei kuvaa paikan säätä
+
+/** Hakuosoite: viimeisen tunnin lämpötila kymmenen minuutin välein lähimmältä asemalta. */
+function obsUrl(lat, lon, nowMs = Date.now()) {
+  const start = new Date(nowMs - 70 * 60000).toISOString().slice(0, 16) + ':00Z';
+  const q = new URLSearchParams({
+    service: 'WFS',
+    version: '2.0.0',
+    request: 'getFeature',
+    storedquery_id: 'fmi::observations::weather::timevaluepair',
+    latlon: `${Number(lat).toFixed(2)},${Number(lon).toFixed(2)}`, // noin 1 km:n tarkkuus kuten muissa lähteissä; lähin asema löytyy silti
+    maxlocations: '1',
+    parameters: 't2m',
+    timestep: '10',
+    starttime: start,
+  });
+  return `${OBS_BASE}?${q.toString()}`;
+}
+
+function walk(n, fn) {
+  for (const k of n.kids) {
+    fn(k);
+    walk(k, fn);
+  }
+}
+
+const km = (a, b, c, d) => {
+  const R = 6371;
+  const dLat = ((c - a) * Math.PI) / 180;
+  const dLon = ((d - b) * Math.PI) / 180;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos((a * Math.PI) / 180) * Math.cos((c * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+};
+
+/**
+ * Jäsentää WFS-vastauksen (timevaluepair). Palauttaa { name, lat, lon, t, value } viimeisimmästä arvosta, joka ei ole NaN, tai null.
+ * Aineisto ei ole luotettua: arvot tarkistetaan ja rajataan.
+ */
+function parseObs(xml) {
+  const root = parseXml(xml);
+  let name = '';
+  let pos = null;
+  const pts = [];
+  walk(root, (n) => {
+    if (n.name === 'name' && !name && /locationcode\/name/.test(n.attrs.codeSpace || '')) name = n.text.trim().slice(0, 60);
+    if (n.name === 'pos' && !pos) {
+      const p = n.text.trim().split(/\s+/).map(Number);
+      if (p.length >= 2 && p.every(Number.isFinite)) pos = p;
+    }
+    if (n.name === 'MeasurementTVP') {
+      const t = Date.parse((n.kids.find((k) => k.name === 'time')?.text || '').trim());
+      const v = Number((n.kids.find((k) => k.name === 'value')?.text || '').trim());
+      if (Number.isFinite(t) && Number.isFinite(v) && v > -60 && v < 50) pts.push({ t, v });
+    }
+  });
+  if (!pts.length) return null;
+  pts.sort((a, b) => a.t - b.t);
+  const last = pts.at(-1);
+  return { name, lat: pos ? pos[0] : null, lon: pos ? pos[1] : null, t: last.t, value: last.v };
+}
+
+/** Hakee havainnon. { ok:true, name, value, t, km, note } tai { ok:false, reason } (ei asemaa lähellä). Heittää verkko- ja muotovirheistä. */
+async function fetchObs(lat, lon, { fetchFn = defaultFetch, now = Date.now(), timeoutMs = 8000, signal = null } = {}) {
+  const text = await timedRequest(fetchFn, obsUrl(lat, lon, now), {}, { timeoutMs, signal, label: 'Havainto' }, (res) => {
+    if (!res.ok) throw new Error(`Havainto: HTTP ${res.status}`);
+    return res.text();
+  });
+  if (text.length > MAX_TEXT) throw new Error('Havainto: vastaus on liian suuri');
+  const o = parseObs(text);
+  if (!o) return { ok: false, reason: 'ei havaintoa viimeisen tunnin ajalta' };
+  const dist = o.lat != null ? km(lat, lon, o.lat, o.lon) : null;
+  if (dist != null && dist > MAX_KM) return { ok: false, reason: `lähin asema ${Math.round(dist)} km päässä` };
+  if (now - o.t > 90 * 60000) return { ok: false, reason: 'havainto on vanha' };
+  return { ok: true, ...o, km: dist, note: `${o.name || 'asema'}${dist != null ? `, ${Math.round(dist)} km` : ''}` };
+}
+return { OBS_BASE, obsUrl, parseObs, fetchObs };
 })();
 
 // ---- demo.js ----
@@ -6189,6 +6338,16 @@ function syntheticWarningsFeed({ nowMs = Date.now(), scenario = 'mixed' } = {}) 
   return `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Esimerkkivaroitukset</title>${entry}</feed>`;
 }
 
+/** WFS-muotoinen synteettinen havainto (timevaluepair): lämpötila on yhdistelmäennusteen tuntumassa, puoli astetta sivussa. */
+function syntheticObs({ lat, lon, nowMs = Date.now(), scenario = 'mixed' }) {
+  const sc = SCENARIOS[scenario];
+  const base = sc ? sc.temp : 10;
+  const t0 = Math.floor(nowMs / 600000) * 600000;
+  const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z');
+  const pts = Array.from({ length: 6 }, (_, k) => `<wml2:point><wml2:MeasurementTVP><wml2:time>${iso(t0 - (5 - k) * 600000)}</wml2:time><wml2:value>${(base - 0.6 + k * 0.05).toFixed(1)}</wml2:value></wml2:MeasurementTVP></wml2:point>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8"?><wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:wml2="http://www.opengis.net/waterml/2.0" xmlns:target="http://xml.fmi.fi/namespace/om/atmosphericfeatures/1.1"><wfs:member><target:Location gml:id="loc-1"><gml:identifier codeSpace="http://xml.fmi.fi/namespace/stationcode/fmisid">100949</gml:identifier><gml:name codeSpace="http://xml.fmi.fi/namespace/locationcode/name">Esimerkkiasema</gml:name></target:Location><gml:Point gml:id="p-1"><gml:pos>${(lat + 0.04).toFixed(5)} ${(lon - 0.03).toFixed(5)} </gml:pos></gml:Point><wml2:MeasurementTimeseries gml:id="obs-t2m">${pts}</wml2:MeasurementTimeseries></wfs:member></wfs:FeatureCollection>`;
+}
+
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -6223,6 +6382,10 @@ function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
       const now = nowMs ?? Date.now();
       return json(buildMirror(parseCapFeed(syntheticWarningsFeed({ nowMs: now, scenario })).alerts, now)); // sama muoto kuin GitHub Actionsin tekemä peili
     }
+    if (url.hostname === 'opendata.fmi.fi') {
+      const [la, lo] = (url.searchParams.get('latlon') || '60.45,22.27').split(',').map(Number);
+      return new Response(syntheticObs({ lat: la, lon: lo, nowMs: nowMs ?? Date.now(), scenario }), { headers: { 'content-type': 'text/xml' } });
+    }
     if (url.hostname === 'geocoding-api.open-meteo.com') {
       const q = (url.searchParams.get('name') || '').toLowerCase();
       const results = FI_CITIES.filter((c) => c[0].toLowerCase().includes(q))
@@ -6243,7 +6406,422 @@ function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
     return json({ error: { message: 'Demo-tilassa ei ole yhteyttä tähän palveluun' } }, 403);
   };
 }
-return { syntheticResponse, syntheticNowcast, syntheticWarningsFeed, makeDemoFetch };
+return { syntheticResponse, syntheticNowcast, syntheticWarningsFeed, syntheticObs, makeDemoFetch };
+})();
+
+// ---- headline.js ----
+__m['headline'] = (() => {
+// headline.js: etusivun, tuntien, viikon ja varmuuden otsikot yhdestä paikasta.
+// Kaikki sadeajat lasketaan samoista sadejaksoista (wetSpans / rainSpansFrom), jotta eri näkymät kertovat saman ajan.
+// Puhtaita funktioita: ei DOMia, ei verkkoa.
+
+const { nowPosition, rainSpansFrom, wetSpans, confidence, modelSeries } = __m['blend'];
+const { outfit, slippery, ADVICE } = __m['advice'];
+const { fmtTemp, fmtNum, weekday, fmtDM, addDays, cap } = __m['util'];
+
+// ---------- Apuja ----------
+
+/** "07" -> "7": juoksevassa tekstissä tunnit ilman etunollaa ("klo 7"). */
+const H = (iso) => String(+iso.slice(11, 13));
+/** Jakson viimeisen märän tunnin jälkeinen tunti: sade loppuu "klo 16" kun viimeinen märkä tunti on 15. */
+const after = (iso) => String((+iso.slice(11, 13) + 1) % 24);
+/** "klo 16 asti" / "keskiyöhön asti" */
+const kloAsti = (h) => (h === '0' ? 'keskiyöhön' : `klo ${h}`);
+
+const ESS = { su: 'sunnuntaina', ma: 'maanantaina', ti: 'tiistaina', ke: 'keskiviikkona', to: 'torstaina', pe: 'perjantaina', la: 'lauantaina' };
+
+/** Päivä essiivissä: "tänään", "huomenna", "maanantaina". */
+function dayEss(date, today) {
+  if (date === today) return 'tänään';
+  if (date === addDays(today, 1)) return 'huomenna';
+  return ESS[weekday(date)];
+}
+
+/** Hetken nimi tekstissä: "klo 16", "huomenna klo 7", "yöllä klo 2", "ma klo 11". */
+function whenText(iso, today, nowHour = 12) {
+  const d = iso.slice(0, 10);
+  const h = +iso.slice(11, 13);
+  if (d === today) return `klo ${h}`;
+  if (d === addDays(today, 1)) return h === 0 ? 'keskiyöllä' : nowHour >= 18 && h < 6 ? `yöllä klo ${h}` : `huomenna klo ${h}`;
+  return `${weekday(d)} klo ${h}`;
+}
+
+const idxAt = (fc, date, hour) => fc.hours.findIndex((x) => x.t === `${date}T${String(hour).padStart(2, '0')}:00`);
+
+const KIND = {
+  rain: { word: 'Sade', now: 'Sataa nyt.', noun: 'sadetta' },
+  snow: { word: 'Lumisade', now: 'Sataa lunta.', noun: 'lunta' },
+  sleet: { word: 'Räntäsade', now: 'Sataa räntää.', noun: 'räntää' },
+};
+
+/** Tuulee sateen aikana niin kovaa, että sateenvarjo kääntyy. */
+function windyDuring(fc, s) {
+  let w = 0;
+  for (let i = s.start; i <= s.end; i++) w = Math.max(w, fc.hours[i]?.wind ?? 0);
+  return w >= ADVICE.umbrella.windy;
+}
+
+/** Toiminto rivin alkuun: mitä sade tarkoittaa käytännössä. */
+function actionLine(fc, s, now) {
+  if (s.kind === 'snow') return now ? 'Sataa lunta.' : s.pwin != null && s.pwin < 0.6 ? 'Lumikuuro mahdollinen.' : 'Lunta tulossa.';
+  if (s.kind === 'sleet') return now ? 'Sataa räntää.' : s.pwin != null && s.pwin < 0.6 ? 'Räntäkuuro mahdollinen.' : 'Räntää tulossa.';
+  if (windyDuring(fc, s)) return 'Sadetakki mukaan.';
+  return now || s.pwin == null || s.pwin >= 0.6 ? 'Sateenvarjo mukaan.' : 'Sateenvarjo varmuuden vuoksi.';
+}
+
+/** Kuinka pitkään sade jatkuu, kun sataa jo. */
+function untilLine(fc, s, today) {
+  const word = KIND[s.kind]?.word || 'Sade';
+  const len = s.end - s.start + 1;
+  if (len >= 20) return s.kind === 'snow' ? 'Lumisade jatkuu koko vuorokauden.' : `${word} jatkuu koko vuorokauden.`;
+  const endIso = fc.hours[Math.min(fc.hours.length - 1, s.end + 1)]?.t || fc.hours[s.end].t;
+  const d = endIso.slice(0, 10);
+  if (d === today || after(fc.hours[s.end].t) === '0') return `${word} jatkuu ${kloAsti(after(fc.hours[s.end].t))} asti.`;
+  if (d === addDays(today, 1)) return +endIso.slice(11, 13) <= 9 ? `${word} jatkuu huomisaamuun.` : `${word} jatkuu huomiseen klo ${H(endIso)} asti.`;
+  return `${word} jatkuu ${dayEss(d, today)} asti.`;
+}
+
+/** Sadejaksot, jotka osuvat väliin from..to (myös ennen väliä alkaneet). */
+function spansIn(fc, from, to) {
+  return wetSpans(fc, Math.max(0, from - 12), to).filter((s) => s.end >= from && s.start <= to);
+}
+
+/** Seuraava sade hetkestä fromIdx eteenpäin koko ennusteen ajalta, tai null. */
+function nextRain(fc, fromIdx) {
+  const last = fc.hours.length - 1;
+  if (fromIdx > last) return null;
+  return wetSpans(fc, fromIdx, last)[0] || null;
+}
+
+/** "Seuraava sade ma klo 11." tai "Ei sadetta lähipäivinä." */
+function nextRainLine(fc, fromIdx, today, nowHour = 12) {
+  const s = nextRain(fc, fromIdx);
+  if (!s) return 'Ei sadetta lähipäivinä.';
+  const noun = s.kind === 'snow' ? 'lumisade' : s.kind === 'sleet' ? 'räntäsade' : 'sade';
+  return `Seuraava ${noun} ${whenText(fc.hours[s.start].t, today, nowHour)}.`;
+}
+
+function slipperyLine(fc, from, to, today, nowHour) {
+  const sl = slippery(fc, from, to);
+  if (sl.level < 2) return '';
+  const a = fc.hours[sl.start].t;
+  const b = fc.hours[sl.end].t;
+  const prefix = a.slice(0, 10) === today ? '' : a.slice(0, 10) === addDays(today, 1) ? (nowHour >= 18 && +a.slice(11, 13) < 9 ? 'aamulla ' : 'huomenna ') : `${weekday(a.slice(0, 10))} `;
+  const range = sl.start === sl.end ? `klo ${H(a)}` : `klo ${H(a)}–${after(b)}`;
+  return `${sl.level === 3 ? 'Erittäin liukasta' : 'Liukasta'} ${prefix}${range}.`;
+}
+
+function gustLine(fc, from, to) {
+  let g = 0;
+  for (let i = from; i <= to; i++) g = Math.max(g, fc.hours[i]?.gust ?? 0);
+  return g >= ADVICE.gustChip ? `Puuskat jopa ${fmtNum(g)} m/s.` : '';
+}
+
+const coatLine = (o) => (o.ref >= 22 ? 'Takkia ei tarvita.' : `${cap(o.tier.short)}.`);
+
+// ---------- Etusivu ----------
+
+/** Tämän päivän tarkasteluväli: nyt … klo 22 (vähintään 6 tuntia). */
+function todayWindow(fc, nowMs) {
+  const { idx, local } = nowPosition(fc, nowMs);
+  const last = fc.hours.length - 1;
+  const e22 = idxAt(fc, local.date, 22);
+  return { from: idx, to: Math.min(last, Math.max(e22 >= 0 ? e22 : idx, idx + 6)), idx, local };
+}
+
+/** Huomisen päiväväli klo 7–21. null, jos ennuste ei ulotu huomiseen. */
+function tomorrowWindow(fc, nowMs) {
+  const { idx, local } = nowPosition(fc, nowMs);
+  const d = addDays(local.date, 1);
+  const a = idxAt(fc, d, 7);
+  let b = idxAt(fc, d, 21);
+  if (a < 0) return null;
+  if (b < 0) b = fc.hours.length - 1;
+  return { from: a, to: b, idx, local, date: d };
+}
+
+const ILL = { su: 'sunnuntaihin', ma: 'maanantaihin', ti: 'tiistaihin', ke: 'keskiviikkoon', to: 'torstaihin', pe: 'perjantaihin', la: 'lauantaihin' };
+
+/** "klo 16", yöllä "klo 2", huomenna "huomiseen klo 14": käytetään muodossa "Kuivaa … asti". */
+function untilWhen(iso, today, nowHour) {
+  const d = iso.slice(0, 10);
+  const h = +iso.slice(11, 13);
+  if (d === addDays(today, 1) && h === 0) return 'keskiyöhön';
+  if (d === today || (d === addDays(today, 1) && nowHour >= 18 && h < 9)) return `klo ${h}`;
+  if (d === addDays(today, 1)) return `huomiseen klo ${h}`;
+  return `${ILL[weekday(d)]} klo ${h}`;
+}
+
+/**
+ * Etusivun otsikko. Kuivana päivänä ensin takki, sateella ensin sateenvarjo ja todellinen alkamis- tai loppumisaika.
+ * day: 'today' | 'tomorrow'. nowcast: tutkaennusteen tulkinta (nowcast.js) tai null.
+ * Palauttaa { l1, l2, small, wet, kicker, outfit }.
+ */
+function homeHeadline(fc, nowMs, { day = 'today', sensitivity = 0, nowcast = null } = {}) {
+  if (day === 'tomorrow') {
+    const w = tomorrowWindow(fc, nowMs);
+    if (w) return tomorrowHeadline(fc, w, sensitivity);
+  }
+  const { from, to, idx, local } = todayWindow(fc, nowMs);
+  const today = local.date;
+  const hour = local.hour;
+  const o = outfit(fc, from, to, { sensitivity });
+  const spans = rainSpansFrom(fc, idx, 48);
+  const h0 = fc.hours[idx];
+  const nc = nowcast && nowcast.ok ? nowcast : null;
+  // Sataako nyt: tutka ratkaisee, kun se on käytettävissä. Muuten mallien yhteinen sade tällä tunnilla.
+  const cur = spans.find((s) => s.start <= idx);
+  const modelNow = h0.precip >= 0.2 && (h0.popAgree ?? 0) >= 0.5;
+  const wetNow = nc ? nc.state === 'wet' : Boolean(cur && modelNow);
+  const sl = slipperyLine(fc, from, to, today, hour);
+
+  if (wetNow) {
+    const s = cur || { start: idx, end: idx, kind: h0.snowShare >= 0.6 ? 'snow' : h0.snowShare >= 0.25 ? 'sleet' : 'rain', pwin: 1 };
+    let l2 = untilLine(fc, s, today);
+    if (nc && nc.endMin != null && nc.endMin <= 90) l2 = `${KIND[s.kind]?.word || 'Sade'} lakkaa noin ${nc.endMin} min kuluttua.`;
+    return { l1: actionLine(fc, s, true), l2, small: [coatLine(o), sl].filter(Boolean).join(' '), wet: true, kicker: '', outfit: o };
+  }
+
+  // Tuleva sade tämän päivän välillä. Kun tutka sanoo "kuivaa nyt", mallin seuraavan tunnin sade ei riitä.
+  const soon = spans.find((s) => s.start <= to && (!nc || s.end > idx + 1));
+  const ncSoon = nc && nc.startMin != null && nc.startMin <= 120;
+  if (soon || ncSoon) {
+    const s = soon || { start: idx + 1, end: idx + 2, kind: 'rain', pwin: 0.7 };
+    const word = KIND[s.kind]?.word || 'Sade';
+    let l2;
+    if (ncSoon) {
+      l2 = nc.startMin < 60 ? `${word} alkaa noin ${Math.max(5, nc.startMin)} min kuluttua.` : `${word} alkaa noin klo ${clockOf(nowMs + nc.startMin * 60000, fc.tz)}.`;
+    } else if (s.start <= idx) {
+      l2 = `${s.kind === 'snow' ? 'Lumikuuroja' : s.kind === 'sleet' ? 'Räntäkuuroja' : 'Sadekuuroja'} mahdollisia ${kloAsti(after(fc.hours[s.end].t))} asti.`;
+    } else {
+      l2 = `${word} alkaa ${s.timingUncertain ? 'noin ' : ''}${whenText(fc.hours[s.start].t, today, hour)}.`;
+    }
+    return { l1: actionLine(fc, s, false), l2, small: [coatLine(o), sl].filter(Boolean).join(' '), wet: true, kicker: '', outfit: o };
+  }
+
+  // Kuivaa koko tarkasteluvälin
+  const next = spans.find((s) => s.start > to) || nextRain(fc, to + 1);
+  const near = next && next.start - idx < 12;
+  const l2 = near ? `Kuivaa ${untilWhen(fc.hours[next.start].t, today, hour)} asti.` : hour >= 18 || hour < 5 ? 'Kuivaa koko yön.' : 'Kuivaa koko päivän.';
+  const small = sl || gustLine(fc, from, to) || (near ? '' : nextRainLine(fc, to + 1, today, hour));
+  return { l1: coatLine(o), l2, small, wet: false, kicker: '', outfit: o };
+}
+
+function clockOf(ms, tz) {
+  try {
+    return new Date(ms).toLocaleTimeString('fi-FI', { hour: 'numeric', minute: '2-digit', timeZone: tz }).replace(':', '.');
+  } catch {
+    return new Date(ms).toLocaleTimeString('fi-FI', { hour: 'numeric', minute: '2-digit' }).replace(':', '.');
+  }
+}
+
+function tomorrowHeadline(fc, w, sensitivity) {
+  const { from, to, date, local } = w;
+  const today = local.date;
+  const o = outfit(fc, from, to, { sensitivity });
+  const kicker = `Huomenna ${weekday(date)} ${fmtDM(date)}`;
+  const spans = spansIn(fc, from, to);
+  if (spans.length) {
+    const s = spans[0];
+    const word = KIND[s.kind]?.word || 'Sade';
+    const cover = Math.min(s.end, to) - Math.max(s.start, from) + 1;
+    let l2;
+    if (cover >= 10) l2 = s.kind === 'snow' ? 'Lunta koko päivän.' : s.kind === 'sleet' ? 'Räntää koko päivän.' : 'Sataa koko päivän.';
+    else if (s.start < from) l2 = `${cap(KIND[s.kind]?.noun || 'sadetta')} ${kloAsti(after(fc.hours[s.end].t))} asti.`;
+    else l2 = `${word} alkaa ${s.timingUncertain ? 'noin ' : ''}klo ${H(fc.hours[s.start].t)}.`;
+    const sl = slipperyLine(fc, from, to, date, 12);
+    return { l1: actionLine(fc, s, false), l2, small: [coatLine(o), sl].filter(Boolean).join(' '), wet: true, kicker, outfit: o };
+  }
+  const small = slipperyLine(fc, from, to, date, 12) || gustLine(fc, from, to) || nextRainLine(fc, to + 1, today, 12);
+  return { l1: coatLine(o), l2: 'Kuivaa koko päivän.', small, wet: false, kicker, outfit: o };
+}
+
+/** Huomisen tiivis kuva etusivun sankarille: ylin, aamun lämpötila, päivän sää ja tuuli. */
+function tomorrowHero(fc, nowMs) {
+  const w = tomorrowWindow(fc, nowMs);
+  if (!w) return null;
+  const d = fc.days.find((x) => x.date === w.date);
+  if (!d) return null;
+  const morning = fc.hours[idxAt(fc, w.date, 7)] || fc.hours[w.from];
+  let wind = 0;
+  for (let i = w.from; i <= w.to; i++) wind = Math.max(wind, fc.hours[i].wind);
+  return { date: w.date, tmax: d.tmax, tmin: d.tmin, morning: morning.temp, sym: d.sym, wind, from: w.from, to: w.to };
+}
+
+// ---------- Tunnit ----------
+
+/** Tunnit-näkymän otsikko seuraavalle vuorokaudelle. */
+function hoursHeadline(fc, nowMs, nowcast = null) {
+  const { idx, local } = nowPosition(fc, nowMs);
+  const today = local.date;
+  const hour = local.hour;
+  const nc = nowcast && nowcast.ok ? nowcast : null;
+  // Tutka ratkaisee nykyhetken kuten etusivulla: kun se sanoo "ei sada nyt", kuluva tunti ei ole sadetta.
+  const s = rainSpansFrom(fc, nc && nc.state !== 'wet' ? idx + 1 : idx, 24)[0];
+  const endIso = (sp) => fc.hours[Math.min(fc.hours.length - 1, sp.end + 1)].t;
+  const close = s && s.start <= idx + 3 ? s : null; // mallin sade, joka osuu tutkan ajoitukseen
+  if (nc && nc.state === 'wet') {
+    const word = KIND[close?.kind]?.word || 'Sade';
+    let l2 = '';
+    if (nc.endMin != null && nc.endMin <= 90) l2 = `${word} lakkaa noin ${nc.endMin} min kuluttua.`;
+    else if (close) l2 = close.end - idx + 1 >= 24 ? `${word} jatkuu koko vuorokauden.` : `${word} lakkaa ${whenText(endIso(close), today, hour)}.`;
+    return [KIND[close?.kind]?.now || 'Sataa nyt.', l2];
+  }
+  if (nc && nc.startMin != null && nc.startMin <= 120) {
+    const word = KIND[close?.kind]?.word || 'Sade';
+    const noun = cap(KIND[close?.kind]?.noun || 'sadetta');
+    const l1 = nc.startMin < 60 ? `${word} alkaa noin ${Math.max(5, nc.startMin)} min kuluttua.` : `${word} alkaa noin klo ${clockOf(nowMs + nc.startMin * 60000, fc.tz)}.`;
+    let l2 = '';
+    if (close) l2 = close.end - idx + 1 >= 24 ? `${noun} koko vuorokauden.` : close.end - close.start + 1 >= 12 ? `${noun} pitkään.` : `${noun} ${untilWhen(endIso(close), today, hour)} asti.`;
+    return [l1, l2];
+  }
+  if (s && s.start <= idx) {
+    const word = KIND[s.kind]?.word || 'Sade';
+    const l2 = s.end - idx + 1 >= 24 ? `${word} jatkuu koko vuorokauden.` : `${word} lakkaa ${whenText(endIso(s), today, hour)}.`;
+    return [KIND[s.kind]?.now || 'Sataa nyt.', l2];
+  }
+  if (s) {
+    const noun = KIND[s.kind]?.noun || 'sadetta';
+    const l2 = s.end - s.start + 1 >= 12 ? `Sitten ${noun} pitkään.` : `Sitten ${noun} ${untilWhen(endIso(s), today, hour)} asti.`;
+    return [`Kuivaa ${untilWhen(fc.hours[s.start].t, today, hour)} asti.`, l2];
+  }
+  return ['Kuivaa koko vuorokauden.', nextRainLine(fc, idx + 24, today, hour)];
+}
+
+// ---------- Viikko ----------
+
+const isWetDay = (d) => /rain|drizzle|sleet|snow|thunder/.test(d.sym) || d.precip >= 1;
+const kindOfDay = (d) => (/snow/.test(d.sym) ? 'snow' : /sleet/.test(d.sym) ? 'sleet' : 'rain');
+
+/** Viikon otsikko: lämpötilan suunta ja sateet. days: fc.days (7 ensimmäistä). */
+function weekHeadline(days, today) {
+  const ds = days.slice(0, 7);
+  if (!ds.length) return ['', ''];
+  // Lämpötila
+  let t;
+  const firstMax = ds[0].tmax;
+  const thaw = ds.findIndex((d, i) => i > 0 && d.tmax >= 1);
+  const freeze = ds.findIndex((d, i) => i > 0 && d.tmax < -0.5);
+  if (firstMax < 0 && thaw > 0) t = `Pakkanen hellittää ${dayEss(ds[thaw].date, today)}.`;
+  else if (firstMax >= 1 && freeze > 0) t = `Pakkanen palaa ${dayEss(ds[freeze].date, today)}.`;
+  else {
+    const n = Math.min(2, ds.length);
+    const a = ds.slice(0, n).reduce((x, d) => x + d.tmax, 0) / n;
+    const b = ds.slice(-n).reduce((x, d) => x + d.tmax, 0) / n;
+    t = b - a >= 3 ? 'Viikon aikana lämpenee.' : a - b >= 3 ? 'Viikon aikana kylmenee.' : 'Lämpötila pysyy ennallaan.';
+  }
+  // Sade
+  const wet = ds.map((d, i) => ({ d, i })).filter((x) => isWetDay(x.d));
+  let r;
+  const nounOf = (d) => ({ rain: 'sadetta', snow: 'lunta', sleet: 'räntää' })[kindOfDay(d)];
+  if (!wet.length) r = 'Kuivaa koko viikon.';
+  else if (wet.length >= ds.length - 1) r = wet.filter((x) => kindOfDay(x.d) === 'snow').length > wet.length / 2 ? 'Lumisateita lähes koko viikon.' : 'Sateista lähes koko viikon.';
+  else if (wet.length === 1) r = `${cap(dayEss(wet[0].d.date, today))} ${nounOf(wet[0].d)}.`;
+  else {
+    const run = wet.every((x, k) => k === 0 || x.i === wet[k - 1].i + 1);
+    const lastIdx = ds.length - 1;
+    if (run && wet.at(-1).i === lastIdx && wet.length >= 3) r = `Sateinen jakso alkaa ${dayEss(wet[0].d.date, today)}.`;
+    else if (wet.length === 2) r = `${cap(nounOf(wet[0].d))} ${dayEss(wet[0].d.date, today)} ja ${dayEss(wet[1].d.date, today)}.`;
+    else {
+      const most = wet.reduce((m, x) => (x.d.precip > m.d.precip ? x : m), wet[0]);
+      r = `Sadetta useana päivänä, eniten ${dayEss(most.d.date, today)}.`;
+    }
+  }
+  return [t, r];
+}
+
+/** "Viikonloppuna: la −6…+1°, su +1…+4°, su sadetta." tai '' (ei viikonloppua näkyvissä tai on jo sunnuntai). */
+function weekendLine(days, today) {
+  const wd = weekday(today);
+  if (wd === 'su') return '';
+  const we = days.slice(0, 7).filter((d) => ['la', 'su'].includes(weekday(d.date)) && d.date >= today);
+  if (!we.length) return '';
+  const parts = we.map((d) => `${weekday(d.date)} ${fmtTemp(d.tmin)}…${fmtTemp(d.tmax)}`);
+  const wetDays = we.filter(isWetDay).map((d) => `${weekday(d.date)} ${({ rain: 'sadetta', snow: 'lunta', sleet: 'räntää' })[kindOfDay(d)]}`);
+  const label = wd === 'la' ? 'Viikonloppu' : 'Viikonloppuna';
+  return `${label}: ${[...parts, ...wetDays].join(', ')}.`;
+}
+
+/** Liukkaus päivälle: 0 = ei, 2 = liukasta, 3 = erittäin liukasta. */
+function daySlippery(fc, d) {
+  return slippery(fc, d.from, d.to).level >= 2 ? slippery(fc, d.from, d.to).level : 0;
+}
+
+// ---------- Varmuus ----------
+
+const WORD = { high: 'luotettava', mid: 'melko luotettava', low: 'epävarma', single: 'vain yksi malli' };
+const AGREE = { high: 'mallit samaa mieltä', mid: 'mallit osin eri mieltä', low: 'mallit eri mieltä', single: 'vain yksi malli vastasi' };
+
+/** Yhden mallin keskimääräinen poikkeama yhdistelmästä välillä from..to. null, jos mallilla ei ole dataa välille. */
+function modelDeviation(r, fc, from, to) {
+  const T = modelSeries(r, fc, 'temperature_2m');
+  if (!T) return null;
+  let n = 0;
+  let sum = 0;
+  for (let i = from; i <= to; i++) {
+    const v = T[i];
+    if (v == null) continue;
+    n++;
+    sum += v - fc.hours[i].temp;
+  }
+  return n >= Math.max(1, (to - from + 1) * 0.5) ? sum / n : null;
+}
+
+/** Varmuus yhdelle välille: sama mittari (confidence) kuin muualla sovelluksessa, helmet malleittain ja sateen ajoitus. */
+function certFor(fc, results, from, to, leadH) {
+  const len = to - from + 1;
+  const c = confidence(fc, from, len, leadH);
+  const pearls = (results || [])
+    .map((r, k) => ({ r, k }))
+    .filter(({ r }) => !r.skipped && !r.coverage)
+    .map(({ r, k }) => {
+      const dev = r.ok ? modelDeviation(r, fc, from, to) : null;
+      return { key: r.model.key, short: r.model.short || r.model.label, k, dev };
+    });
+  // Sateen alkamisaika vain, jos sade alkaa välin aikana (ei jo valmiiksi sataessa)
+  const span = wetSpans(fc, Math.max(0, from - 6), to).find((x) => x.end >= from && x.start <= to) || null;
+  let rain = '';
+  if (span && span.start > from) {
+    const noun = span.kind === 'snow' ? 'lumisade' : span.kind === 'sleet' ? 'räntäsade' : 'sade';
+    const at = (i) => (+fc.hours[i].t.slice(11, 13) === 0 ? 'keskiyöllä' : `klo ${H(fc.hours[i].t)}`);
+    const lo = span.startLo ?? span.start;
+    const hi = span.startHi ?? span.start;
+    if (hi - lo >= 2 && fc.hours[lo] && fc.hours[hi]) rain = `${noun} alkaa klo ${H(fc.hours[lo].t)}–${H(fc.hours[hi].t)} mallista riippuen`;
+    else rain = `${noun} alkaa ${at(span.start)}`;
+  }
+  const sd = c.avg;
+  const parts = [];
+  const temp = `lämpötilassa useimmat mallit ±${fmtNum(Math.max(0.1, sd), 1)}°`;
+  if (c.level === 'single') parts.push('vertailua ei voi tehdä');
+  else if (c.why === 'rain') parts.push(rain ? `ero sateen ajoituksessa: ${rain}` : 'ero sateen ajoituksessa', temp);
+  else if (c.why === 'wind') parts.push('ero tuulen voimakkuudessa', temp);
+  else {
+    parts.push(temp);
+    if (rain) parts.push(rain);
+  }
+  return { level: c.level, word: WORD[c.level], agree: AGREE[c.level], sd, why: c.why, pearls, rain, sub: parts.join(' · '), from, to };
+}
+
+/** Tänään (nyt … klo 22) ja huomenna (klo 6–22). results: mallien vastaukset (helmiä varten). */
+function certaintyInfo(fc, results, nowMs) {
+  const tw = todayWindow(fc, nowMs);
+  const today = certFor(fc, results, tw.from, tw.to, 0);
+  const d1 = addDays(tw.local.date, 1);
+  const a = idxAt(fc, d1, 6);
+  let b = idxAt(fc, d1, 22);
+  if (b < 0) b = fc.hours.length - 1;
+  const tomorrow = a >= 0 ? certFor(fc, results, a, b, Math.max(0, a - tw.idx)) : null;
+  const l1 = today.level === 'single' ? 'Vain yksi malli vastasi.' : `Tänään ${today.word}.`;
+  let l2 = '';
+  if (tomorrow && tomorrow.level !== 'single') l2 = tomorrow.level === today.level && today.level === 'high' ? 'Huomennakin luotettava.' : `Huomenna ${tomorrow.word}.`;
+  return { today, tomorrow, l1, l2 };
+}
+
+/** Lyhyt varmuussana muualle (esim. tuntirivin lisätiedot). */
+function certaintyWord(level) {
+  return WORD[level] || '';
+}
+return { dayEss, whenText, nextRain, nextRainLine, todayWindow, tomorrowWindow, homeHeadline, tomorrowHero, hoursHeadline, weekHeadline, weekendLine, daySlippery, certaintyInfo, certaintyWord };
 })();
 
 // ---- icons.js ----
@@ -6396,7 +6974,8 @@ __m['views'] = (() => {
 // Kaikki dynaaminen teksti kulkee esc()-funktion kautta.
 
 const { escapeHtml: esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, mdToHtml, zonedToUtcMs, localNow } = __m['util'];
-const { SYMBOLS, nowPosition, snapshot, modelRows, confidence, describeNow, describeDay, describeHour, popText } = __m['blend'];
+const { SYMBOLS, nowPosition, snapshot, modelRows, describeNow, describeDay, describeHour, popText } = __m['blend'];
+const { homeHeadline, hoursHeadline, weekHeadline, weekendLine, daySlippery, certaintyInfo, tomorrowHero, tomorrowWindow } = __m['headline'];
 const { icon, icon3d } = __m['icons'];
 const { meteogram, RANGES } = __m['meteogram'];
 const { sunEvents, dayLengthMs } = __m['sun'];
@@ -6472,10 +7051,10 @@ function sunLine(fc, localDate) {
   const ev = sunEvents(dayStart, fc.lat, fc.lon);
   if (ev.polar === 'day') return 'Aurinko ei laske (yötön yö)';
   if (ev.polar === 'night') return 'Aurinko ei nouse (kaamos)';
-  const fmt = (ms) => (ms == null ? '–' : localNow(ms, fc.tz).iso.slice(11));
+  const fmt = (ms) => (ms == null ? '–' : localNow(ms, fc.tz).iso.slice(11).replace(':', '.'));
   const len = dayLengthMs(ev);
   const prev = dayLengthMs(sunEvents(dayStart - 86400000, fc.lat, fc.lon));
-  let txt = `${fmt(ev.rise)}–${fmt(ev.set)}`;
+  let txt = `Aurinko ${fmt(ev.rise)}–${fmt(ev.set)}`;
   if (len != null && len > 0 && len < 86400000) {
     const m = Math.floor(len / 60000);
     txt += `, päivä ${Math.floor(m / 60)} h ${m % 60} min`;
@@ -6488,154 +7067,151 @@ function sunLine(fc, localDate) {
   return txt;
 }
 
-/** Sankarin yläosa: iso lämpötila, 3D-kuvake, tuntuu kuin, tila ja päivän ääriarvot. Sijoittelu: app.css, .stage. */
-function heroHtml({ fc, nowMs }) {
+const hr = (iso) => (iso.slice(11, 13) === '00' ? '00' : String(+iso.slice(11, 13)));
+
+/**
+ * Sankari: iso lämpötila, 3D-objekti ja kolme pientä riviä. Tilat: nyt, radalta valittu tunti ja huomenna.
+ * Sijoittelu: app.css, .stage.
+ */
+function heroHtml({ fc, nowMs, sel = { type: 'now' }, day = 'today' }) {
   const { idx, frac, local } = nowPosition(fc, nowMs);
-  const s = snapshot(fc, idx, frac);
-  const day = fc.days.find((d) => d.date === local.date) || fc.days[0];
-  const t = fmtTemp(s.temp);
-  const feelsDiff = Math.abs(s.feels - s.temp) >= 2 ? `, tuntuu kuin ${fmtTemp(s.feels)}` : '';
+  let temp;
+  let sym;
+  let isDay;
+  let lines;
+  let sr;
+  let chip = '';
+  const th = sel.type !== 'hour' && day === 'tomorrow' ? tomorrowHero(fc, nowMs) : null;
+  if (sel.type === 'hour' && fc.hours.some((x) => x.t === sel.iso)) {
+    const h = fc.hours.find((x) => x.t === sel.iso);
+    const d = h.t.slice(0, 10);
+    const lbl = `${d === local.date ? 'tänään' : d === addDays(local.date, 1) ? 'huomenna' : weekday(d)} klo ${hr(h.t)}`;
+    temp = h.temp;
+    sym = h.sym;
+    isDay = h.isDay;
+    chip = `<button class="hero-chip" type="button" data-act="now" aria-label="${esc(`Näytetään ${lbl}. Palaa nykyhetkeen`)}">${esc(cap(lbl))}${SVG.close}</button>`;
+    lines = [`tuntuu kuin ${fmtTemp(h.feels)}`, `${SYMBOLS[h.sym].toLowerCase()} · ${fmtNum(h.wind)} m/s`];
+    sr = `${cap(lbl)}: ${fmtTemp(h.temp)}, tuntuu kuin ${fmtTemp(h.feels)}, ${SYMBOLS[h.sym].toLowerCase()}, tuuli ${fmtNum(h.wind)} m/s.`;
+  } else if (th) {
+    temp = th.tmax;
+    sym = th.sym;
+    isDay = true;
+    chip = `<span class="hero-chip still">Huomenna ${esc(weekday(th.date))} ${esc(fmtDM(th.date))}</span>`;
+    lines = [`aamulla ${fmtTemp(th.morning)} · alin ${fmtTemp(th.tmin)}`, `${SYMBOLS[th.sym].toLowerCase()} · ${fmtNum(th.wind)} m/s`];
+    sr = `Huomenna ${weekday(th.date, true)} ${fmtDM(th.date)}: ylin ${fmtTemp(th.tmax)}, aamulla ${fmtTemp(th.morning)}, alin ${fmtTemp(th.tmin)}, ${SYMBOLS[th.sym].toLowerCase()}.`;
+  } else {
+    const s = snapshot(fc, idx, frac);
+    const d = fc.days.find((x) => x.date === local.date) || fc.days[0];
+    temp = s.temp;
+    sym = s.sym;
+    isDay = s.isDay;
+    lines = [`tuntuu kuin ${fmtTemp(s.feels)}`, `${SYMBOLS[s.sym].toLowerCase()} · ${fmtNum(s.wind)} m/s`, `tänään ${fmtTemp(d.tmin)}…${fmtTemp(d.tmax)}`];
+    sr = `Sää nyt: ${fmtTemp(s.temp)}, tuntuu kuin ${fmtTemp(s.feels)}, ${SYMBOLS[s.sym].toLowerCase()}, tuuli ${fmtNum(s.wind)} m/s. Tänään alin ${fmtTemp(d.tmin)}, ylin ${fmtTemp(d.tmax)}.`;
+  }
   return `
-    <div class="temp" aria-hidden="true">${/^[+−]/.test(t) ? `<span class="t-sign">${esc(t[0])}</span>` : ''}<span class="t-num">${esc(t.replace(/^[+−]/, '').slice(0, -1))}</span><span class="t-deg">°</span></div>
-    <div class="hero-icon">${icon3d(s.sym, s.isDay, 0)}</div>
-    <p class="sr-only">Sää nyt: ${esc(fmtTemp(s.temp))}${esc(feelsDiff)}, ${esc(SYMBOLS[s.sym].toLowerCase())}.</p>
-    <div class="st-f1" aria-hidden="true">tuntuu kuin ${esc(fmtTemp(s.feels))}</div>
-    <div class="st-f2 cond" aria-hidden="true">${esc(SYMBOLS[s.sym].toLowerCase())} · ${fmtNum(s.wind)} m/s</div>
-    <div class="st-f3 range">Tänään ylin ${esc(fmtTemp(day.tmax))}, alin ${esc(fmtTemp(day.tmin))}</div>`;
+    <div class="temp" aria-hidden="true">${esc(fmtTemp(temp))}</div>
+    <div class="hero-icon">${icon3d(sym, isDay, 0)}</div>
+    <p class="sr-only">${esc(sr)}</p>
+    <div class="hero-lines">${chip}${lines.map((l, k) => `<span class="hl-${k}" aria-hidden="true">${esc(l)}</span>`).join('')}</div>`;
 }
 
-/** Sankarin alaosa: tuntuu kuin, tuuli, sade, ennusteen luotettavuus, lisätiedot ja päivitysaika. */
-function heroRestHtml({ fc, nowMs, fetchedAt, loading, modelsUsed, modelsTotal }) {
+/** "Nyt"-rivin lisätiedot Tunnit-näkymässä: kosteus, paine, pilvisyys, aurinko ja päivitysaika. */
+function nowExtrasHtml({ fc, nowMs, fetchedAt = 0, loading = false }) {
   const { idx, frac, local } = nowPosition(fc, nowMs);
   const s = snapshot(fc, idx, frac);
-  const conf = confidence(fc, idx);
-  const gust = s.gust - s.wind >= 3 ? `<small>puuskat ${fmtNum(s.gust)} m/s</small>` : '';
-  const dot = { high: 'good', mid: 'warn', low: 'bad', single: 'warn' }[conf.level];
-  const rainSmall = s.precip >= 0.05 || s.pop >= 0.2 ? popText(s) : 'ei sadetta';
   const age = nowMs - fetchedAt;
-  const stale = !loading && age >= STALE_MIN * 60000;
-  const updated = loading ? 'Päivitetään…' : `Päivitetty ${agoText(age)}`;
-  return `
-    <dl class="stats">
-      <div><dt>Tuntuu kuin</dt><dd>${esc(fmtTemp(s.feels))}</dd></div>
-      <div><dt>Tuuli</dt><dd>${fmtNum(s.wind)} m/s<small>${esc(windFrom(s.dir))}</small>${gust}</dd></div>
-      <div><dt>Sade tunnissa</dt><dd>${esc(fmtMm(s.precip))}<small>${esc(rainSmall)}</small></dd></div>
-    </dl>
-    <div class="meta conf">
-      <span class="dot ${dot}"></span>
-      <span>${esc(conf.text)} (${modelsUsed}/${modelsTotal} mallia)</span>
-    </div>
-    <details class="more">
-      <summary><span>Lisätiedot</span>${SVG.caret}</summary>
-      <dl class="stats stats-more">
-        <div><dt>Kosteus</dt><dd>${Math.round(s.hum ?? 0)} %</dd></div>
-        <div><dt>Ilmanpaine</dt><dd>${Math.round(s.press ?? 0)} hPa</dd></div>
-        <div><dt>Pilvisyys</dt><dd>${Math.round(s.cloud)} %</dd></div>
-      </dl>
-      <div class="sun">${SVG.sun}<span>${esc(sunLine(fc, local.date))}</span></div>
-    </details>
-    <div class="meta sub${stale ? ' stale' : ''}">${esc(updated)}${stale ? ' <span class="stale-tag">vanhentunut</span>' : ''}</div>`;
+  const stale = !loading && fetchedAt && age >= STALE_MIN * 60000;
+  const updated = loading ? 'Päivitetään…' : fetchedAt ? `Päivitetty ${agoText(age)}` : '';
+  return `<li>Kosteus ${Math.round(s.hum ?? 0)} % · ilmanpaine ${Math.round(s.press ?? 0)} hPa</li>
+    <li>${esc(sunLine(fc, local.date))}</li>
+    ${updated ? `<li class="${stale ? 'stale' : ''}">${esc(updated)}${stale ? ' <span class="stale-tag">vanhentunut</span>' : ''}</li>` : ''}`;
 }
 
 // ---------- Huomiot ja neuvot ----------
 
 const OWN_COVERED_BY = { thunder: /ukkos/i, gust: /tuuli|myrsky|puusk/i, storm: /tuuli|myrsky/i, rain: /sade/i, heat: /helle|kuuma/i, cold: /pakkas|kylm/i };
 const SEV = { Moderate: ['yellow', 'Keltainen varoitus'], Severe: ['orange', 'Oranssi varoitus'], Extreme: ['red', 'Punainen varoitus'] };
+const FMI_WARN = 'https://www.ilmatieteenlaitos.fi/varoitukset';
 
-/** Sivun yläreunan huomiokaista: viralliset varoitukset (täytetty väri) ja SääÄlyn omat huomiot (katkoviiva, neutraali). */
-function alertsHtml({ alerts = [], official = [], officialState = 'ok' }) {
+/**
+ * Etusivun varoitusrivi radan yläpuolella: viralliset varoitukset (värillinen rengas) ja SääÄlyn omat huomiot (katkoviiva).
+ * officialState 'unknown' tai varoitustiedon ikä yli 90 min: rauhallinen siru, jossa tiedon ikä ja linkki Ilmatieteen laitokselle.
+ */
+function alertsHtml({ alerts = [], official = [], officialState = 'ok', checkedAt = 0, nowMs = 0 }) {
   const off = official.slice(0, 3);
-  // Viralliset ensin. Oma huomio, jonka virallinen varoitus jo kattaa (esim. ukkonen), jätetään pois, ja rivejä on yhteensä enintään kolme,
-  // ettei huomiokaista työnnä lämpötilaa ja vastauskaistaa ruudun alareunaan.
   const dup = (a) => off.some((o) => OWN_COVERED_BY[a.key]?.test(o.title || ''));
-  const unknown = officialState === 'unknown' && !off.length;
-  const own = alerts.filter((a) => a.level >= 1 && !dup(a)).slice(0, 3 - off.length - (unknown ? 1 : 0));
+  const old = checkedAt && nowMs && nowMs - checkedAt > 90 * 60000;
+  const unknown = officialState === 'unknown' || old;
+  const own = alerts.filter((a) => a.level >= 1 && !dup(a)).slice(0, Math.max(0, 2 - off.length));
   if (!own.length && !off.length && !unknown) return '';
   const rows = [];
   for (const o of off) {
     const [cls, word] = SEV[o.severity] || SEV.Moderate;
-    rows.push({
-      title: o.title,
-      html: `<details class="alert off sev-${cls}"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(word)} · ${esc(o.title)}</b><small>${esc(o.when || '')}</small><span class="badge">Ilmatieteen laitos</span></span>${SVG.caret}</summary><p>${esc(o.text || '')}</p></details>`,
-    });
+    // Tiivis yhteenveto (otsikko + voimassaoloaika yhdellä rivillä); alue ja lähde avautuvassa osassa.
+    const src = [o.area, 'Ilmatieteen laitos'].filter(Boolean).join(' · ');
+    rows.push(`<details class="alert off sev-${cls}"><summary><i class="sev-dot" aria-hidden="true"></i><span class="a-txt"><b>${esc(word)} · ${esc(o.title)}</b><small>${esc(o.time || o.when || '')}</small></span>${SVG.caret}</summary>${o.text ? `<p>${esc(o.text)}</p>` : ''}<p class="fine">${esc(src)}</p></details>`);
   }
   for (const a of own) {
-    rows.push({
-      title: a.title,
-      html: `<details class="alert own"><summary>${GLYPH.alert}<span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')}</small><span class="badge">SääÄlyn huomio</span></span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`,
-    });
-  }
-  let body = rows.length ? rows[0].html : '';
-  if (rows.length > 1) {
-    const rest = rows.slice(1);
-    body += `<details class="alert own more-alerts"><summary>${GLYPH.alert}<span class="a-txt"><b>Lisäksi ${rest.length} huomiota</b><small>${esc(rest.map((r) => r.title).join(' · '))}</small></span>${SVG.caret}</summary><div class="more-body">${rest.map((r) => r.html).join('')}</div></details>`;
+    rows.push(`<details class="alert own"><summary><i class="sev-dot" aria-hidden="true"></i><span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')} · SääÄlyn huomio</small></span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="${FMI_WARN}" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`);
   }
   if (unknown) {
-    body += `<p class="alert-unknown">Virallisia varoituksia ei voitu tarkistaa. <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Katso Ilmatieteen laitoksen varoitukset</a></p>`;
+    const d = checkedAt ? new Date(checkedAt) : null;
+    const t = d ? `${d.toDateString() === new Date(nowMs || Date.now()).toDateString() ? '' : `${d.getDate()}.${d.getMonth() + 1}. `}klo ${d.getHours()}.${String(d.getMinutes()).padStart(2, '0')}` : '';
+    const txt = d ? `Varoitustieto ${t}` : 'Varoituksia ei voitu tarkistaa';
+    rows.push(`<a class="alert-chip" href="${FMI_WARN}" target="_blank" rel="noopener"><i aria-hidden="true"></i>${esc(txt)} · tarkista Ilmatieteen laitokselta</a>`);
   }
-  return `<div class="alert-list" role="region" aria-label="Säähuomiot">${body}</div>`;
+  return `<div class="alert-list" role="region" aria-label="Varoitukset ja huomiot">${rows.join('')}</div>`;
 }
 
-const ROW_GLYPH = { slippery: 'ice', wind: 'wind', uv: 'uv', frost: 'frost', fog: 'fog' };
-
-/** Vastauskaista: takki ja sateenvarjo isoina, loput kapeina riveinä. nowcastLine: tutkaennusteen lause tai ''. */
-const sentence = (t) => {
-  const x = String(t || '').trim();
-  return x ? cap(x).replace(/[.!?]*$/, '.') : '';
-};
-
-/** Etusivun iso lause: sateenvarjo, sen tarkennus ja takki. Ei laatikoita. */
-function verdictHtml({ v }) {
-  const [coat, umb] = v.chips;
-  const tomorrow = v.win.kind === 'tomorrow';
-  const coatSub = [coat.sub, ...(coat.extras || [])].filter(Boolean).join(' · ');
-  const askCoat = tomorrow ? 'Mitä pukisin huomenna?' : 'Mitä pukisin tänään?';
-  const askRain = tomorrow ? 'Sataako huomenna?' : 'Sataako tänään?';
-  const sub = String(umb.sub || '').split(' · ')[0];
-  return `
-    <button class="vsay" type="button" data-act="ask-open" data-q="${esc(askRain)}"><b>${esc(sentence(umb.text))}</b>${sub ? `<span>${esc(sentence(sub))}</span>` : ''}</button>
-    <button class="vcoat" type="button" data-act="ask-open" data-q="${esc(askCoat)}">${esc([coat.text, coatSub].filter(Boolean).join(' · '))}</button>`;
-}
-
-/** Etusivun hiljaiset lisäyksiä: tutkalause ja lisähuomiot radan alla. */
-function verdictMoreHtml({ v, nowcastLine = '', range = '' }) {
-  const rest = v.chips.slice(2);
-  const rows = rest
-    .map((c) => `<li class="vrow ${esc(c.level)}">${GLYPH[ROW_GLYPH[c.key]] || SVG.info}<span><b>${esc(c.text)}</b>${c.sub ? `<small>${esc(c.sub)}</small>` : ''}</span></li>`)
-    .join('');
-  return `
-    <p class="fine vmore-top">${esc([v.win.caption, range].filter(Boolean).join(' · '))}</p>
-    ${nowcastLine ? `<p class="vnow" role="status" aria-live="polite">${GLYPH.radar}<span>${esc(nowcastLine)}</span></p>` : ''}
-    ${rows ? `<ul class="vrows">${rows}</ul>` : ''}
-    <p class="fine">SääÄlyn oma arvio mallidatasta, ei virallinen ohje.</p>`;
+/** Etusivun otsikko: kaksi riviä (toiminto + aika) ja pieni lisärivi. Ei laatikoita eikä painikkeita. */
+function verdictHtml({ hl }) {
+  return `<p class="vsay"><b>${esc(hl.l1)}</b><span>${esc(hl.l2)}</span></p>${hl.small ? `<p class="vsmall">${esc(hl.small)}</p>` : ''}`;
 }
 
 // ---------- Tuntirata ----------
 
-// Radan tuntipaikat (esirenderöidyn radan kuvassa, 412 x 750 -yksikön alue): q = merkin keskipiste, d = piste radan vieressä, c = kuvakkeen keskipiste.
-const TRACK = [{"c": [377.7, 158.4], "q": [377.7, 204.4], "d": [356.4, 187.1]}, {"c": [290.7, 295.7], "q": [290.7, 341.7], "d": [316.6, 273.3]}, {"c": [361.3, 384.6], "q": [361.3, 430.6], "d": [326.8, 364.4]}, {"c": [243.1, 431.9], "q": [243.1, 477.9], "d": [238.7, 399.1]}, {"c": [173.4, 436.7], "q": [173.4, 482.7], "d": [162.7, 404.8]}, {"c": [30.1, 348.1], "q": [30.1, 394.1], "d": [67.6, 389.9]}, {"c": [117.9, 457.0], "q": [117.9, 503.0], "d": [87.1, 480.0]}, {"c": [62.9, 596.6], "q": [62.9, 642.6], "d": [88.8, 570.3]}, {"c": [171.0, 622.5], "q": [171.0, 668.5], "d": [176.4, 589.8]}, {"c": [236.6, 635.3], "q": [236.6, 681.3], "d": [250.2, 604.0]}, {"c": [380.0, 540.7], "q": [380.0, 586.7], "d": [345.0, 602.9]}, {"c": [291.0, 670.5], "q": [291.0, 716.5], "d": [313.9, 692.1]}];
-const TRACK_ICON_W = 64;
+// Radan tuntipaikat esirenderöidyssä radassa (412 x 750 -yksikön alue): c = kuvakkeen keskipiste, d = piste radan pinnalla.
+// Paikat on valittu käsin radan ulkokaarteisiin niin, että teksti (vasen yläkulma) ja Kysy-pilleri (alareuna) jäävät vapaiksi.
+const TRACK_START = [290, 170];
+const TRACK = [
+  { c: [380, 236], d: [359.5, 238.0] },
+  { c: [380, 330], d: [351.3, 317.2] },
+  { c: [300, 420], d: [283.4, 379.0] },
+  { c: [226, 424], d: [224.0, 390.1] },
+  { c: [152, 430], d: [142.3, 400.1] },
+  { c: [96, 624], d: [113.3, 570.2] },
+  { c: [168, 628], d: [172.8, 579.4] },
+  { c: [240, 636], d: [250.7, 593.8] },
+  { c: [382, 560], d: [331.1, 601.2] },
+  { c: [382, 650], d: [357.1, 654.2] },
+];
+const TRACK_HOURS = TRACK.length;
 const pct = (v, total) => `${((v / total) * 100).toFixed(2)}%`;
 
-/** Seuraavat 12 tuntia kromiradalla: jokaisella tunnilla oma paikka, sääkuvake, lämpötila ja kellonaika. */
-function trackHtml({ fc, nowMs, sel }) {
+/** Tunnit kromiradalla: jokaisella tunnilla oma 3D-objekti, lämpötila ja kellonaika. Huomenna-tilassa huomisen aamusta alkaen. */
+function trackHtml({ fc, nowMs, sel, day = 'today' }) {
   const { idx } = nowPosition(fc, nowMs);
-  const out = [];
-  TRACK.forEach((pt, i) => {
-    const h = fc.hours[idx + i];
+  let start = idx + 1;
+  let label = 'nyt';
+  if (day === 'tomorrow') {
+    const w = tomorrowWindow(fc, nowMs);
+    if (w) (start = w.from), (label = 'huomenna');
+  }
+  const out = [`<span class="th-start" style="left:${pct(TRACK_START[0], 412)};top:${pct(TRACK_START[1], 750)}" aria-hidden="true">${label}</span>`];
+  TRACK.forEach((pt, k) => {
+    const h = fc.hours[start + k];
     if (!h) return;
-    const first = i === 0;
-    const pressed = first ? sel.type === 'now' : sel.type === 'hour' && sel.iso === h.t;
-    const act = first ? 'now' : 'hour';
-    const label = `${weekday(h.t.slice(0, 10))} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`;
+    const pressed = sel.type === 'hour' && sel.iso === h.t;
+    const name = `${weekday(h.t.slice(0, 10))} klo ${hr(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`;
     out.push(`<i class="td" style="left:${pct(pt.d[0], 412)};top:${pct(pt.d[1], 750)}"></i>`);
-    out.push(`<span class="th-ic" style="left:${pct(pt.c[0], 412)};top:${pct(pt.c[1], 750)};--s:${((TRACK_ICON_W / 412) * 100).toFixed(2)}cqw">${icon3d(h.sym, h.isDay, 0)}</span>`);
-    out.push(`<button class="th th-big" type="button" style="left:${pct(pt.q[0], 412)};top:${pct(pt.q[1], 750)}" data-act="${act}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(label)}"><b>${esc(fmtTemp(h.temp))}</b><span>${first ? 'nyt' : `klo ${hh(h.t)}`}</span></button>`);
+    out.push(
+      `<button class="th" type="button" style="left:${pct(pt.c[0], 412)};top:${pct(pt.c[1], 750)}" data-act="hour" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(name)}"><span class="th-ic">${icon3d(h.sym, h.isDay, 0)}</span><b>${esc(fmtTemp(h.temp))}</b><span>klo ${hh(h.t)}</span></button>`,
+    );
   });
   return `<div class="trk-img" aria-hidden="true"></div>${out.join('')}`;
 }
 
-// ---------- Tekoälykortti ----------
+// ---------- Selitys ----------
 
 function selectionLines(fc, sel, nowMs) {
   if (sel.type === 'hour') {
@@ -6644,36 +7220,6 @@ function selectionLines(fc, sel, nowMs) {
   }
   if (sel.type === 'day') return describeDay(fc, sel.date, nowMs);
   return describeNow(fc, nowMs);
-}
-
-function aiHtml({ fc, nowMs, sel, ai, hasKey, mode = 'internal' }) {
-  const lines = selectionLines(fc, sel, nowMs);
-  const internal = mode === 'internal';
-  let body;
-  let tag;
-  let action = '';
-  if (!internal && ai.status === 'done' && ai.text) {
-    body = `<div class="md">${mdToHtml(ai.text)}</div>`;
-    tag = 'Tekoäly (Gemini)';
-    action = `<button class="pill" data-act="ai-run" type="button">${SVG.refresh}Päivitä</button>`;
-  } else {
-    body = `<p>${esc(lines.join(' '))}</p>`;
-    if (internal) tag = `Sovelluksen oma laskenta · ${fc.modelsUsed}/${fc.modelsTotal} mallia`;
-    else if (ai.status === 'loading') tag = 'Tekoäly kirjoittaa selitystä…';
-    else if (ai.status === 'error') tag = 'Tekoälyn selitys ei onnistunut';
-    else tag = 'Laskennallinen yhteenveto';
-    if (internal) action = hasKey ? `<button class="pill" data-act="mode-on" type="button">${SVG.spark}Ota Gemini käyttöön</button>` : `<button class="pill" data-act="open-settings" type="button">${SVG.spark}Lisää Gemini-avain</button>`;
-    else if (ai.status !== 'loading') action = `<button class="pill" data-act="ai-run" type="button">${SVG.spark}${ai.status === 'error' ? 'Yritä uudelleen' : 'Selitä tekoälyllä'}</button>`;
-  }
-  const err = !internal && ai.status === 'error' ? `<p class="warn-text" role="alert">${esc(ai.error)}</p>` : '';
-  const chip =
-    sel.type === 'now'
-      ? '<span class="chip-sm">nyt</span>'
-      : `<button class="chip-sm active" data-act="now" type="button" aria-label="Palaa nykyhetkeen">${esc(selLabel(sel))}${SVG.close}</button>`;
-  return `
-    <div class="row between"><h2 class="label">SääÄly kertoo</h2>${chip}</div>
-    <div class="ai-text ${!internal && ai.status === 'loading' ? 'busy' : ''}">${body}${err}</div>
-    <div class="row between ai-foot"><span class="tag">${esc(tag)}</span>${action}</div>`;
 }
 
 // ---------- Sääkaavio ----------
@@ -6701,7 +7247,8 @@ function meteoHtml({ fc, nowMs, range = '24h', inspectIso = null, width = 360, c
   const { idx, frac } = nowPosition(fc, nowMs);
   const hours = fc.hours.slice(idx);
   if (hours.length < 6) return '';
-  const mg = meteogram(hours, { range: r, width, nowFrac: frac, icon, night: nightSpans(hours), inspectIso, compact, uid: 'mg' });
+  const mg = meteogram(hours, { range: r, width, nowFrac: frac, icon3d: true, night: nightSpans(hours), inspectIso, compact, uid: 'mg' });
+  const ics = (mg.icons || []).map((c) => `<span class="mg-ic" style="left:${((c.x / mg.width) * 100).toFixed(2)}%;top:${((c.y / mg.height) * 100).toFixed(2)}%">${icon3d(c.sym, c.isDay, 0)}</span>`).join('');
   const n = mg.bins.length;
   const sel = mg.inspect;
   const ro = sel != null ? mg.readout(sel) : null;
@@ -6718,131 +7265,214 @@ function meteoHtml({ fc, nowMs, range = '24h', inspectIso = null, width = 360, c
     ? `<b>${esc(ro.when)}</b> · ${esc(ro.temp)} · ${esc(ro.sym)} · ${esc(ro.rain)} · tuuli ${esc(ro.wind)}${ro.from ? ` ${esc(ro.from)}` : ''}`
     : esc(mg.summary);
   return `
-    <div class="mg-head"><h2 class="label">Sääkaavio</h2><div class="modebar mg-seg" role="group" aria-label="Kaavion aikaväli">${seg}</div></div>
-    <div class="mg-wrap" id="mgWrap" tabindex="0" role="slider" aria-label="Tarkastele sääkaaviota nuolinäppäimillä tai koskettamalla" aria-orientation="horizontal" aria-valuemin="0" aria-valuemax="${n - 1}" aria-valuenow="${sel ?? 0}" aria-valuetext="${esc(ro ? ro.aria : mg.summary)}" data-w="${mg.width}" data-n="${n}" data-range="${r}">${mg.svg}</div>
+    <div class="mg-head"><div class="modebar mg-seg" role="group" aria-label="Kaavion aikaväli">${seg}</div></div>
+    <div class="mg-wrap" id="mgWrap" tabindex="0" role="slider" aria-label="Tarkastele sääkaaviota nuolinäppäimillä tai koskettamalla" aria-orientation="horizontal" aria-valuemin="0" aria-valuemax="${n - 1}" aria-valuenow="${sel ?? 0}" aria-valuetext="${esc(ro ? ro.aria : mg.summary)}" data-w="${mg.width}" data-n="${n}" data-range="${r}">${mg.svg}${ics}</div>
     <p class="mg-read" id="mgRead">${readText}</p>
     <p class="mg-legend">Viiva: lämpötila · vaalea alue: mallien vaihteluväli · palkit: sade mm/${r === '7d' ? '3 h' : 'h'} · nuolet: tuulen suunta ja m/s</p>
     <details class="mg-table"><summary>Kaavio taulukkona</summary><div class="tbl-wrap"><table class="tbl"><thead><tr><th scope="col">Aika</th><th scope="col">Lämpö</th><th scope="col">Sää</th><th scope="col">Sade</th><th scope="col">Tuuli</th></tr></thead><tbody>${rows.join('')}</tbody></table></div></details>`;
 }
 
-// ---------- Tunnit ja päivät ----------
+// ---------- Tunnit ----------
 
-function hoursHeadline(hs) {
-  const wet = (h) => h.pop >= 0.5 && h.precip >= 0.1;
-  const first = hs.findIndex(wet);
-  if (first < 0) return ['Kuivaa pitkään.', 'Ei sadetta seuraavaan vuorokauteen.'];
-  if (first === 0) {
-    const dry = hs.findIndex((h) => !wet(h));
-    return ['Sataa nyt.', dry < 0 ? 'Sade jatkuu koko vuorokauden.' : `Kuivuu klo ${hh(hs[dry].t)}.`];
+/** Tunnin lisätiedot riville avattuna: tuntuu kuin, tuuli, sade, pilvisyys ja mallien ero. */
+function hourDetailsHtml(fc, i, { now = false, nowMs, fetchedAt = 0, loading = false, obs = null } = {}) {
+  const h = fc.hours[i];
+  const gust = h.gust - h.wind >= 3 ? `, puuskat ${fmtNum(h.gust)} m/s` : '';
+  const rain = h.precip >= 0.05 ? `Sade ${fmtMm(h.precip)} tunnissa · ${popText(h)}` : h.pop >= 0.15 ? `Ei sadetta todennäköisesti · ${popText(h)}` : 'Ei sadetta';
+  const spread = Number.isFinite(h.spread) ? ` · mallien ero ${fmtNum(h.spread, 1)}°` : '';
+  const q = `Millainen sää on ${now ? 'nyt' : `klo ${hr(h.t)}`}?`;
+  return `<div class="hv-more" id="hm-${esc(h.t)}"><ul class="plain">
+    <li>Tuntuu kuin ${esc(fmtTemp(h.feels))}</li>
+    <li>Tuuli ${fmtNum(h.wind)} m/s ${esc(windFrom(h.dir))}${esc(gust)}</li>
+    <li>${esc(rain)}</li>
+    <li>Pilvisyys ${Math.round(h.cloud ?? 0)} %${esc(spread)}</li>
+    ${now && obs ? `<li>Mitattu ${esc(fmtTemp(obs.value, { digits: 1 }))} · ${esc(obs.name || 'lähin asema')}</li>` : ''}
+    ${now ? nowExtrasHtml({ fc, nowMs, fetchedAt, loading }) : ''}
+  </ul><button class="pill sm" type="button" data-act="ask-open" data-q="${esc(q)}">${SVG.spark}Kysy tästä tunnista</button></div>`;
+}
+
+/** Tutkan kahden tunnin sadekäyrä, kun sade on lähellä. raw: nowcast.js:n jäsentämä { steps:[{t, rate}] }. */
+function radarHtml({ raw, nc, nowMs, tz }) {
+  if (!raw?.steps?.length || !nc?.ok) return '';
+  const near = nc.state === 'wet' || (nc.startMin != null && nc.startMin <= 120);
+  if (!near) return '';
+  const steps = raw.steps.filter((s) => s.t >= nowMs - 5 * 60000 && s.t <= nowMs + 125 * 60000);
+  if (steps.length < 3) return '';
+  const max = Math.max(1, ...steps.map((s) => s.rate));
+  const bars = steps.map((s) => `<i style="height:${Math.max(2, Math.round((Math.min(s.rate, max) / max) * 100))}%"${s.rate >= 0.2 ? '' : ' class="dry"'}></i>`).join('');
+  const clock = (ms) => new Date(ms).toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit', timeZone: tz }).replace(':', '.');
+  // Otsikko kertoo jo ajoituksen: kuvateksti kertoo voimakkuuden. Ruudunlukija saa koko lauseen.
+  const cap2 = nc.word ? `Tutka: ${nc.word} sadetta ${nc.state === 'wet' ? 'nyt' : 'tulossa'}` : 'Tutka: sadetta lähellä';
+  return `<div class="radar" role="img" aria-label="${esc(`Tutka: ${nc.line || ''}`)}"><p class="radar-t">${GLYPH.radar}<span>${esc(cap2)}</span></p>
+    <div class="radar-bars">${bars}</div><div class="radar-ax"><span>nyt</span><span>${esc(clock(nowMs + 60 * 60000))}</span><span>${esc(clock(nowMs + 120 * 60000))}</span></div></div>`;
+}
+
+/**
+ * Tunnit-sivu: otsikko, Lista/Kaavio-valinta ja tuntilista kromipunoksen vieressä. Rivin napautus avaa lisätiedot paikallaan.
+ * day 'tomorrow': huomisen tunnit klo 6–23. more: 48 tuntia 13 sijaan.
+ */
+function hoursPageHtml({ fc, nowMs, day = 'today', open = null, more = false, view = 'list', radar = '', fetchedAt = 0, loading = false, obs = null, nowcast = null }) {
+  const { idx, local } = nowPosition(fc, nowMs);
+  let hs;
+  let kick;
+  let l1;
+  let l2;
+  if (day === 'tomorrow' && tomorrowWindow(fc, nowMs)) {
+    const w = tomorrowWindow(fc, nowMs);
+    const a = fc.hours.findIndex((x) => x.t === `${w.date}T06:00`);
+    hs = fc.hours.slice(a >= 0 ? a : w.from, (a >= 0 ? a : w.from) + 18).map((h, k) => ({ h, i: (a >= 0 ? a : w.from) + k }));
+    const th = homeHeadline(fc, nowMs, { day: 'tomorrow' });
+    const d = fc.days.find((x) => x.date === w.date);
+    kick = `Tunnit · huomenna ${weekday(w.date)} ${fmtDM(w.date)}`;
+    l1 = th.l2;
+    l2 = d ? `Ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}.` : '';
+  } else {
+    hs = fc.hours.slice(idx, idx + (more ? 48 : 13)).map((h, k) => ({ h, i: idx + k }));
+    kick = `Tunnit · ${weekday(local.date, true)}`;
+    [l1, l2] = hoursHeadline(fc, nowMs, nowcast);
   }
-  const end = hs.findIndex((h, i) => i > first && !wet(h));
-  return [`Kuivaa klo ${hh(hs[first].t)} asti.`, end < 0 ? 'Sade jatkuu sen jälkeen.' : `Sade ${hh(hs[end].t)} asti.`];
-}
-
-function hourlyHtml({ fc, nowMs, sel }) {
-  const { idx } = nowPosition(fc, nowMs);
-  const hs = fc.hours.slice(idx, idx + 24);
-  const [h1, h2] = hoursHeadline(hs);
-  const rows = hs.map((h, i) => {
+  const dry = hs.every(({ h }) => (h.pop ?? 0) < 0.1 && h.precip < 0.1);
+  const isNow = (i) => day !== 'tomorrow' && i === idx;
+  const rows = [];
+  let block = [];
+  const flush = () => {
+    if (block.length) rows.push(`<div class="hv-block"><div class="braid" aria-hidden="true"></div>${block.join('')}</div>`);
+    block = [];
+  };
+  hs.forEach(({ h, i }, k) => {
     const date = h.t.slice(0, 10);
-    const first = i === 0;
-    const pressed = first ? sel.type === 'now' : sel.type === 'hour' && sel.iso === h.t;
-    const pc = Math.round((h.pop || 0) * 100);
-    const day = !first && hh(h.t) === '00' ? `<span class="hv-day">${esc(weekday(date))}</span>` : '';
-    return `<button class="hv${first ? ' now' : ''}" type="button" data-act="${first ? 'now' : 'hour'}" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`${weekday(date)} klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}, sateen todennäköisyys ${pc} %`)}">
-      <span class="hv-t"><i></i>${first ? 'nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 40)}<span class="hv-temp">${esc(fmtTemp(h.temp))}</span>
-      <span class="hv-bar" aria-hidden="true"><b style="width:${pc}%"></b></span><span class="hv-pc">${pc} %</span>${day}</button>`;
+    if (k > 0 && hr(h.t) === '00') {
+      flush();
+      rows.push(`<p class="hv-sep">${esc(cap(weekday(date, true)))} ${esc(fmtDM(date))}</p>`);
+    }
+    const now = isNow(i);
+    const pc = popPctRow(h);
+    const expanded = open === h.t;
+    const name = `${now ? 'Nyt' : `${weekday(date)} klo ${hr(h.t)}`}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}${dry ? '' : `, sateen todennäköisyys ${pc} %`}`;
+    block.push(`<div class="hv-item"><button class="hv${now ? ' now' : ''}" type="button" data-act="hrow" data-iso="${esc(h.t)}" aria-expanded="${expanded}" aria-controls="hm-${esc(h.t)}" aria-label="${esc(name)}">
+      <span class="hv-t"><i></i>${now ? 'nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 0)}<span class="hv-temp">${esc(fmtTemp(h.temp))}</span>${dry ? '' : `<span class="hv-bar" aria-hidden="true"><b style="width:${pc}%"></b></span><span class="hv-pc">${pc} %</span>`}</button>
+      ${expanded ? hourDetailsHtml(fc, i, { now, nowMs, fetchedAt, loading, obs }) : ''}</div>`);
   });
-  return `<p class="kick">Tunnit · ${esc(weekday(hs[0].t.slice(0, 10), true))}</p><h2 class="hl"><b>${esc(h1)}</b><span>${esc(h2)}</span></h2>
-    <p class="hv-cap">sateen todennäköisyys</p><div class="hvs" id="strip">${rows.join('')}</div>`;
+  flush();
+  const moreBtn = day === 'tomorrow' ? '' : `<button class="more-btn" type="button" data-act="hours-more" aria-expanded="${more}">${more ? 'Näytä vähemmän' : 'Näytä 48 tuntia'}</button>`;
+  const seg = `<div class="modebar hv-seg" role="group" aria-label="Näkymä"><button class="seg" type="button" data-act="hours-view" data-view="list" aria-pressed="${view !== 'chart'}">Lista</button><button class="seg" type="button" data-act="hours-view" data-view="chart" aria-pressed="${view === 'chart'}">Kaavio</button></div>`;
+  return `<p class="kick">${esc(kick)}</p><h2 class="hl"><b>${esc(l1)}</b><span>${esc(l2)}</span></h2>${seg}${radar}
+    ${view === 'chart' ? '<p class="hint">Liu\'uta sormea kaaviossa, niin näet tunnin tiedot.</p>' : `${dry ? '' : '<p class="hv-cap" aria-hidden="true">sateen todennäköisyys</p>'}<div class="hvs${dry ? ' dry' : ''}" id="strip">${rows.join('')}</div>${moreBtn}`}`;
 }
 
-/** Yhden päivän tuntiruudut: tälle päivälle jäljellä olevat tunnit (tänään) tai koko päivä. */
-function dayHoursHtml({ fc, nowMs, sel, day }) {
+/** Sateen todennäköisyys riville kymmenen prosentin tarkkuudella (0, 10 … 90). */
+function popPctRow(h) {
+  const p = h.popSrc === 'ens' ? h.pop : Math.max(h.pop ?? 0, h.popAgree ?? 0);
+  return Math.min(90, Math.round(Math.max(0, p) * 10) * 10);
+}
+
+// ---------- Viikko ----------
+
+/** Päivän tunnit vaakasuuntaisena nauhana päivän rivin alla. */
+function dayHoursHtml({ fc, nowMs, day }) {
   const { idx, local } = nowPosition(fc, nowMs);
   const hours = fc.hours.filter((h, i) => h.t.slice(0, 10) === day.date && (day.date !== local.date || i >= idx));
   if (!hours.length) return '';
   const wind = Math.max(...hours.map((h) => h.wind || 0));
   const bits = [`ylin ${fmtTemp(day.tmax)}, alin ${fmtTemp(day.tmin)}`, day.precip >= 0.1 ? `sadetta ${fmtMm(day.precip)}` : 'ei merkittävää sadetta', `tuulta enintään ${fmtNum(wind)} m/s`];
   const cells = hours.map((h) => {
-    const pressed = sel.type === 'hour' && sel.iso === h.t;
     const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
-    return `<button class="hr" type="button" data-act="hour" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(`klo ${hh(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`)}">
-      <span class="hr-t">${hh(h.t)}</span>${icon3d(h.sym, h.isDay, 46)}<span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></button>`;
+    return `<div class="hr" role="listitem" data-iso="${esc(h.t)}" aria-label="${esc(`klo ${hr(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}${p ? `, sadetta ${p} mm` : ''}`)}">
+      <span class="hr-t">${hh(h.t)}</span>${icon3d(h.sym, h.isDay, 0)}<span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></div>`;
   });
   return `<div class="day-hours" id="dh-${esc(day.date)}" role="region" aria-label="${esc(`Tuntiennuste ${weekday(day.date)} ${fmtDM(day.date)}`)}">
-    <p class="dh-sum">${esc(bits.join(' · '))}</p><div class="strip dstrip" data-date="${esc(day.date)}">${cells.join('')}</div></div>`;
+    <p class="dh-sum">${esc(bits.join(' · '))}</p><div class="dstrip" role="list" data-date="${esc(day.date)}">${cells.join('')}</div></div>`;
 }
 
-function weekHeadline(days) {
-  const cold = days.reduce((m, d) => (d.tmax < m.tmax ? d : m), days[0]);
-  const warm = days.reduce((m, d) => (d.tmax > m.tmax ? d : m), days[0]);
-  const snow = days.find((d) => /snow/.test(d.sym));
-  const wet = days.find((d) => /rain|drizzle|sleet|thunder/.test(d.sym));
-  const first = days[0];
-  const trend = days[days.length - 1].tmax - first.tmax;
-  const h1 = trend <= -4 ? 'Viikon aikana kylmenee.' : trend >= 4 ? 'Viikon aikana lämpenee.' : 'Lämpötila pysyy samoissa.';
-  const h2 = snow ? `${cap(weekday(snow.date, true))}na lunta.` : wet ? `${cap(weekday(wet.date, true))}na sadetta.` : `Lämpimin ${weekday(warm.date, true)}, kylmin ${weekday(cold.date, true)}.`;
-  return [h1, h2];
-}
-
-function dailyHtml({ fc, nowMs, sel, openDate = null }) {
-  const today = nowPosition(fc, nowMs).local.date;
+/** Viikko-sivu: otsikko, viikonloppu, ja päivät kromikapseleina yhteisellä lämpöasteikolla. Päivän napautus avaa sen tunnit. */
+function weekPageHtml({ fc, nowMs, open = null }) {
+  const { idx, frac, local } = nowPosition(fc, nowMs);
+  const today = local.date;
   const days = fc.days.slice(0, 7);
   const lo = Math.min(...days.map((d) => d.tmin));
   const hi = Math.max(...days.map((d) => d.tmax));
   const span = hi - lo || 1;
-  const rows = days.map((d) => {
-    const left = ((d.tmin - lo) / span) * 100;
-    const width = Math.max(5, ((d.tmax - d.tmin) / span) * 100);
-    const label = d.date === today ? 'Tänään' : `${weekday(d.date)} ${fmtDM(d.date)}`;
-    const open = openDate === d.date;
-    const pressed = sel.type === 'day' && sel.date === d.date;
-    const row = `<button class="day" type="button" data-act="day" data-date="${esc(d.date)}" aria-pressed="${pressed}" aria-expanded="${open}" aria-controls="dh-${esc(d.date)}" aria-label="${esc(`${label}, ${SYMBOLS[d.sym]}, ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}. ${open ? 'Piilota tunnit' : 'Näytä tunnit'}`)}">
-      <span class="day-n">${esc(label)}</span>${icon3d(d.sym, true, 46)}
-      <span class="rng"><span class="lo">${esc(fmtTemp(d.tmin))}</span><span class="track"><span class="fill" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"></span></span><span class="hi">${esc(fmtTemp(d.tmax))}</span></span>
-      <span class="day-p">${d.precip >= 0.1 ? esc(fmtMm(d.precip)) : '–'}</span><svg class="day-c" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`;
-    return row + (open ? dayHoursHtml({ fc, nowMs, sel, day: d }) : '');
+  const pos = (t) => ((t - lo) / span) * 100;
+  const nowT = snapshot(fc, idx, frac).temp;
+  const rows = days.map((d, k) => {
+    const left = pos(d.tmin);
+    const width = Math.max(0, pos(d.tmax) - left);
+    const name = k === 0 ? 'Tänään' : cap(weekday(d.date));
+    const sub = k === 0 ? `${weekday(d.date)} ${fmtDM(d.date)}` : fmtDM(d.date);
+    const wetSym = /rain|drizzle|sleet|snow|thunder/.test(d.sym);
+    const rain = wetSym && d.precip >= 0.1 ? fmtMm(d.precip) : d.precip >= 0.5 && (d.pwin ?? 0) >= 0.2 ? `${Math.round((d.pwin ?? 0) * 10) * 10} %` : '';
+    const slip = daySlippery(fc, d);
+    const expanded = open === d.date;
+    const dot = d.date === today ? `<i class="wd-now" style="left:${Math.max(0, Math.min(100, pos(nowT))).toFixed(1)}%" aria-hidden="true"></i>` : '';
+    const label = `${k === 0 ? 'Tänään' : weekday(d.date, true)} ${fmtDM(d.date)}, ${SYMBOLS[d.sym]}, alin ${fmtTemp(d.tmin)}, ylin ${fmtTemp(d.tmax)}${rain ? `, sade ${rain}` : ''}${slip ? ', liukasta' : ''}. ${expanded ? 'Piilota tunnit' : 'Näytä tunnit'}`;
+    return `<div class="wd-item"><button class="wd" type="button" data-act="day" data-date="${esc(d.date)}" aria-expanded="${expanded}" aria-controls="dh-${esc(d.date)}" aria-label="${esc(label)}">
+      <span class="wd-n"><b>${esc(name)}</b><small>${esc(sub)}</small></span>${icon3d(d.sym, true, 0)}
+      <span class="wd-r" aria-hidden="true"><span class="wd-cap" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"><em class="lo">${esc(fmtTemp(d.tmin))}</em><em class="hi">${esc(fmtTemp(d.tmax))}</em></span>${dot}</span>
+      <span class="wd-x" aria-hidden="true">${rain ? `<span>${esc(rain)}</span>` : ''}${slip ? '<span class="slip">liukasta</span>' : ''}</span></button>
+      ${expanded ? dayHoursHtml({ fc, nowMs, day: d }) : ''}</div>`;
   });
-  const [w1, w2] = weekHeadline(days);
-  return `<p class="kick">Seuraavat ${days.length} päivää</p><h2 class="hl"><b>${esc(w1)}</b><span>${esc(w2)}</span></h2><p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="days">${rows.join('')}</div>`;
+  const [w1, w2] = weekHeadline(days, today);
+  const we = weekendLine(days, today);
+  return `<p class="kick">Seuraavat ${days.length} päivää</p><h2 class="hl"><b>${esc(w1)}</b><span>${esc(w2)}</span></h2>
+    ${we ? `<p class="wk-sub">${esc(we)}</p>` : ''}<p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="wds">${rows.join('')}</div>`;
 }
 
 // ---------- Varmuus ----------
 
-/** Yhden päivän (tänään/huomenna) mallien hajonta lämpötilassa: keskiarvo päivän tunneilta. */
-function daySpread(fc, date) {
-  const hs = fc.hours.filter((h) => h.t.slice(0, 10) === date && Number.isFinite(h.spread));
-  return hs.length ? hs.reduce((a, h) => a + h.spread, 0) / hs.length : 0;
-}
-
-/** Helmirypäs: tiivis, kun hajonta on pieni; levinnyt, kun suuri. Sijainnit lasketaan luvuista, ei satunnaisesti. */
-function pearls(spread, n = 14) {
-  const r = Math.min(46, 8 + spread * 14);
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const a = i * 2.399963;
-    const d = Math.sqrt((i + 0.5) / n) * r;
-    out.push(`<i style="left:${(50 + Math.cos(a) * d).toFixed(1)}%;top:${(50 + Math.sin(a) * d * 0.8).toFixed(1)}%"></i>`);
+/**
+ * Helmet: yksi helmi per malli. Vaakasijainti = mallin keskimääräinen ero SääÄlyn ennusteesta (±4 °C koko leveydellä).
+ * Päällekkäiset helmet asettuvat tiiviiksi rykelmäksi lähimpään vapaaseen kohtaan, joten yksimieliset mallit näkyvät rypäänä.
+ */
+function pearlsHtml(c, label) {
+  const PX = 3.9; // noin 390 px leveä alue: 1 % ≈ 3,9 px
+  const D = 36; // helmien keskipisteiden vähimmäisetäisyys (px)
+  const items = c.pearls
+    .filter((p) => p.dev != null)
+    .map((p) => ({ ...p, tx: Math.max(6, Math.min(94, 50 + (p.dev / 4) * 44)) }))
+    .sort((a, b) => Math.abs(a.dev) - Math.abs(b.dev));
+  const placed = [];
+  for (const p of items) {
+    let best = null;
+    for (let dy = -60; dy <= 60; dy += 4) {
+      for (let dx = -80; dx <= 80; dx += 4) {
+        const x = p.tx * PX + dx;
+        if (x < 6 * PX || x > 94 * PX) continue;
+        if (placed.some((q) => Math.hypot(q.x - x, q.y - dy) < D)) continue;
+        const score = dx * dx + 1.7 * dy * dy;
+        if (!best || score < best.score) best = { x, y: dy, score };
+      }
+    }
+    if (!best) best = { x: p.tx * PX, y: 0 };
+    p.x = best.x;
+    p.y = best.y;
+    placed.push(p);
   }
-  return out.join('');
+  const missing = c.pearls.filter((p) => p.dev == null).map((p) => p.short);
+  const sign = (v) => `${v > 0.05 ? '+' : v < -0.05 ? '−' : '±'}${fmtNum(Math.abs(v), 1)}°`;
+  const desc = `${label}: ${items.map((p) => `${p.short} ${sign(p.dev)}`).join(', ')}`;
+  return `<div class="pearls" role="img" aria-label="${esc(desc)}"><span class="pl-axis"></span><span class="pl-lab l">kylmempi</span><span class="pl-lab c">SääÄly</span><span class="pl-lab r">lämpimämpi</span>
+    ${placed.map((p) => `<i class="pearl pk${p.k % 8}" style="left:${(p.x / PX).toFixed(1)}%;--o:${p.y}px" title="${esc(`${p.short} ${sign(p.dev)}`)}"></i>`).join('')}</div>
+    ${missing.length ? `<p class="pl-miss">Ei mukana: ${esc(missing.join(', '))}</p>` : ''}`;
 }
 
-function certaintyHtml({ fc, nowMs }) {
-  const { local } = nowPosition(fc, nowMs);
-  const d0 = local.date;
-  const d1 = addDays(d0, 1);
-  const s0 = daySpread(fc, d0);
-  const s1 = daySpread(fc, d1);
-  const word = (x) => (x < 1.2 ? 'luotettava' : x < 2.5 ? 'kohtalainen' : 'epävarma');
-  const sameMind = (x) => (x < 1.2 ? 'mallit samaa mieltä' : x < 2.5 ? 'mallit hieman eri mieltä' : 'mallit eri mieltä');
-  const head = s1 < 1.2 ? 'Huomennakin varma.' : s1 < 2.5 ? 'Huomenna hieman eroa.' : 'Huomenna epävarmaa.';
-  return `<p class="kick">Varmuus</p><h2 class="hl"><b>Tänään ${word(s0)}.</b><span>${esc(head)}</span></h2>
-    <p class="cert-d">Jokainen helmi on yksi säämalli. Mitä tiiviimpi rypäs, sitä varmempi ennuste.</p>
-    <div class="cert-row"><div class="pearls" role="img" aria-label="Tänään: mallien hajonta ${esc(fmtNum(s0, 1))} astetta">${pearls(s0)}<em>Tänään</em></div>
-      <div class="pearls" role="img" aria-label="Huomenna: mallien hajonta ${esc(fmtNum(s1, 1))} astetta">${pearls(s1)}<em>Huomenna</em></div></div>
-    <div class="glass cert-c"><b>Tänään · ${esc(sameMind(s0))}</b><span>ero ${esc(fmtNum(s0, 1))}° lämpötilassa</span></div>
-    <div class="glass cert-c"><b>Huomenna · ${esc(word(s1))} varmuus</b><span>${esc(fmtNum(s1, 1))}° eroa mallien välillä</span></div>`;
+/** Varmuus-sivu: otsikko, helmirypäät tänään ja huomenna, selityskortit, mallivertailu. */
+function certPageHtml({ fc, results, nowMs, obs = null }) {
+  const ci = certaintyInfo(fc, results, nowMs);
+  const card = (c, label) => `<div class="glass cert-c"><b>${esc(label)} · ${esc(c.agree)}</b><span>${esc(c.sub)}</span></div>`;
+  let obsCard = '';
+  if (obs && Number.isFinite(obs.value)) {
+    const { idx, frac } = nowPosition(fc, nowMs);
+    const s = snapshot(fc, idx, frac);
+    const diff = s.temp - obs.value;
+    const at = new Date(obs.t).toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit', timeZone: fc.tz }).replace(':', '.');
+    const verdict = Math.abs(diff) < 1 ? 'ennuste osuu' : Math.abs(diff) < 2.5 ? 'ennuste lähellä' : diff > 0 ? 'ennuste liian lämmin' : 'ennuste liian kylmä';
+    obsCard = `<div class="glass cert-c obs"><b>Havainto · ${esc(verdict)}</b><span>${esc(`${obs.name || 'Lähin asema'}${Number.isFinite(obs.km) ? ` (${Math.round(obs.km)} km)` : ''} mittasi ${fmtTemp(obs.value, { digits: 1 })} klo ${at}. SääÄly: ${fmtTemp(s.temp, { digits: 1 })}, ero ${fmtNum(Math.abs(diff), 1)}°.`)}</span><small>Ilmatieteen laitoksen avoin data</small></div>`;
+  }
+  return `<p class="kick">Varmuus</p><h2 class="hl"><b>${esc(ci.l1)}</b><span>${esc(ci.l2)}</span></h2>
+    <p class="cert-d">Jokainen helmi on yksi säämalli: vasemmalla kylmempi, oikealla lämpimämpi kuin SääÄlyn ennuste. Mitä tiiviimpi rypäs, sitä varmempi ennuste.</p>
+    ${pearlsHtml(ci.today, 'Tänään')}${card(ci.today, 'Tänään')}
+    ${obsCard}
+    ${ci.tomorrow ? pearlsHtml(ci.tomorrow, 'Huomenna') + card(ci.tomorrow, 'Huomenna') : ''}`;
 }
 
 // ---------- Mallivertailu ----------
@@ -6865,7 +7495,7 @@ function modelsHtml({ results, fc, nowMs }) {
     .join('');
   return `
     <details class="models-d">
-      <summary><span class="label">Mallivertailu</span><span class="sum">${fc.modelsUsed}/${fc.modelsTotal} mallia, hajonta nyt ${fmtNum(s.spread, 1)}°</span>${SVG.caret}</summary>
+      <summary><span class="label">Mallivertailu</span><span class="sum">${fc.modelsUsed}/${fc.modelsTotal} mallia · suurin ero nyt ${fmtNum(s.spread, 1)}°</span>${SVG.caret}</summary>
       <div class="tbl-wrap"><table class="tbl">
         <thead><tr><th scope="col">Malli</th><th scope="col">Lämpö nyt</th><th scope="col">Ero</th><th scope="col">Sade 24 h</th></tr></thead>
         <tbody>${body}
@@ -6927,7 +7557,7 @@ function resultsHtml(list, status) {
   return list.map((p, i) => `<button class="row-btn" type="button" data-act="pick" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>`).join('');
 }
 
-function settingsSheetHtml({ hasKey, mode = 'internal', model, refreshMin, models, demo, sens = 0, anim = true }) {
+function settingsSheetHtml({ hasKey, mode = 'internal', model, refreshMin, models, demo, sens = 0, anim = true, advOpen = false }) {
   const opts = [5, 10, 15, 30].map((m) => `<option value="${m}" ${m === refreshMin ? 'selected' : ''}>${m} min</option>`).join('');
   const datalist = (models || []).map((m) => `<option value="${esc(m)}"></option>`).join('');
   return `
@@ -6936,24 +7566,8 @@ function settingsSheetHtml({ hasKey, mode = 'internal', model, refreshMin, model
       <div class="quick"><button id="refreshBtn" class="btn ghost" type="button" data-act="refresh">${SVG.refresh}<span>Päivitä sää</span></button><button class="btn ghost" type="button" data-act="locate">${SVG.locate}<span>Käytä sijaintiani</span></button></div>
       ${demo ? '<p class="note demo-note">Esimerkkitila: sää, paikkahaku ja nimet ovat tekaistuja, eikä Gemini ole käytössä. Chat vastaa silti sovelluksen omalla laskennalla.</p>' : ''}
       <section class="set">
-        <h3>Vastausten lähde</h3>
-        <p class="note">Valitse, mistä chatin vastaukset ja tekoälykortin selitykset tulevat.</p>
-        ${modeSwitchHtml({ mode, hasKey })}
-        <p class="note" id="modeNote">${esc(modeNote({ mode, hasKey }))}</p>
-      </section>
-      <section class="set">
-        <h3>Gemini-avain</h3>
-        <p class="note">Avain tallentuu vain tämän laitteen selaimeen. Hae ilmainen avain osoitteesta <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</p>
-        <label for="key">Gemini API -avain</label>
-        <div class="inline"><input id="key" class="secret" type="text" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${hasKey ? 'Avain tallennettu' : 'AIza…'}"><button class="btn" type="button" data-act="save-key">Tallenna</button></div>
-        <label for="model">Malli</label>
-        <div class="inline"><input id="model" list="modelList" value="${esc(model)}" autocomplete="off" spellcheck="false"><datalist id="modelList">${datalist}</datalist><button class="btn" type="button" data-act="list-models">Hae mallit</button></div>
-        <div class="inline"><button class="btn" type="button" data-act="test-ai">Testaa yhteys</button>${hasKey ? '<button class="btn ghost" type="button" data-act="clear-key">Poista avain</button>' : ''}</div>
-        <p class="note" id="aiNote" aria-live="polite"></p>
-      </section>
-      <section class="set">
         <h3>Pukeutuminen</h3>
-        <p class="note">Vastauskaista ja chat arvioivat pukeutumisen "tuntuu kuin" -lämpötilasta. Säädä, jos palelet helposti tai kestät kylmää hyvin.</p>
+        <p class="note">Etusivun vaateneuvo ja chat arvioivat pukeutumisen "tuntuu kuin" -lämpötilasta. Säädä, jos palelet helposti tai kestät kylmää hyvin.</p>
         <label for="sens">Kylmänsietokyky</label>
         <select id="sens">${[[-3, 'Palelen helposti'], [0, 'Normaali'], [3, 'Kestän kylmää']].map(([v, l]) => `<option value="${v}" ${v === sens ? 'selected' : ''}>${l}</option>`).join('')}</select>
       </section>
@@ -6969,15 +7583,34 @@ function settingsSheetHtml({ hasKey, mode = 'internal', model, refreshMin, model
         <p class="note">Tausta pysähtyy myös, kun puhelimen virransäästö on päällä tai akku on lähes tyhjä.</p>
       </section>
       <section class="set">
-        <h3>Diagnostiikka</h3>
-        <p class="note">Tarkistaa, vastaako jokainen säämalli ja palvelu. Jos jokin ei toimi, kopioi raportti ja lähetä se kehittäjälle.</p>
-        <div class="inline"><button class="btn" type="button" data-act="diag">Aja diagnostiikka</button><button class="btn ghost" type="button" data-act="diag-copy">Kopioi raportti</button></div>
-        <pre id="diag" class="diag" aria-live="polite"></pre>
-      </section>
-      <section class="set">
         <h3>Tiedot</h3>
         <div class="inline"><button class="btn ghost" type="button" data-act="open-about">Tietoja ja tietolähteet</button><button class="btn ghost" type="button" data-act="wipe">Tyhjennä tallennetut tiedot</button></div>
       </section>
+      <details class="set adv" id="advSet"${advOpen ? ' open' : ''}>
+        <summary><h3>Lisäasetukset</h3><span class="note">Chatin vastausten lähde, Gemini ja diagnostiikka</span>${SVG.caret}</summary>
+        <section class="set">
+          <h3>Vastausten lähde</h3>
+          <p class="note">Valitse, mistä chatin vastaukset ja selitykset tulevat.</p>
+          ${modeSwitchHtml({ mode, hasKey })}
+          <p class="note" id="modeNote">${esc(modeNote({ mode, hasKey }))}</p>
+        </section>
+        <section class="set">
+          <h3>Gemini-avain</h3>
+          <p class="note">Avain tallentuu vain tämän laitteen selaimeen. Hae ilmainen avain osoitteesta <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</p>
+          <label for="key">Gemini API -avain</label>
+          <div class="inline"><input id="key" class="secret" type="text" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${hasKey ? 'Avain tallennettu' : 'AIza…'}"><button class="btn" type="button" data-act="save-key">Tallenna</button></div>
+          <label for="model">Malli</label>
+          <div class="inline"><input id="model" list="modelList" value="${esc(model)}" autocomplete="off" spellcheck="false"><datalist id="modelList">${datalist}</datalist><button class="btn" type="button" data-act="list-models">Hae mallit</button></div>
+          <div class="inline"><button class="btn" type="button" data-act="test-ai">Testaa yhteys</button>${hasKey ? '<button class="btn ghost" type="button" data-act="clear-key">Poista avain</button>' : ''}</div>
+          <p class="note" id="aiNote" aria-live="polite"></p>
+        </section>
+        <section class="set">
+          <h3>Diagnostiikka</h3>
+          <p class="note">Tarkistaa, vastaako jokainen säämalli ja palvelu. Jos jokin ei toimi, kopioi raportti ja lähetä se kehittäjälle.</p>
+          <div class="inline"><button class="btn" type="button" data-act="diag">Aja diagnostiikka</button><button class="btn ghost" type="button" data-act="diag-copy">Kopioi raportti</button></div>
+          <pre id="diag" class="diag" aria-live="polite"></pre>
+        </section>
+      </details>
     </div>`;
 }
 
@@ -7035,15 +7668,16 @@ function aboutSheetHtml({ version, demo, sources = [] }) {
     </div>`;
 }
 
-const CHAT_CHIPS = ['Mitä pukisin huomenna?', 'Sataako huomenna?', 'Mitä pukisin tänään?', 'Milloin on paras hetki lenkille?', 'Millainen sää on Rovaniemellä?'];
+const CHAT_CHIPS = ['Milloin sataa seuraavan kerran?', 'Mitä pukisin huomenna?', 'Millainen viikonloppu on tulossa?', 'Milloin on paras hetki lenkille?', 'Millainen sää on Rovaniemellä?'];
 
-function chatSheetHtml({ mode = 'internal', hasKey = false, hasMessages = false }) {
-  const chips = CHAT_CHIPS.map((q) => `<button class="pill" type="button" data-act="ask" data-q="${esc(q)}">${esc(q)}</button>`).join('');
+function chatSheetHtml({ mode = 'internal', hasKey = false, hasMessages = false, chips = CHAT_CHIPS }) {
+  const list = chips.map((q) => `<button class="pill" type="button" data-act="ask" data-q="${esc(q)}">${esc(q)}</button>`).join('');
+  const src = MODE_INFO[hasKey ? mode : 'internal']?.label || MODE_INFO.internal.label;
   return `
     <div class="sheet-head"><h2>Kysy SääÄlyltä</h2><div class="head-actions"><button class="pill sm" id="chatClear" type="button" data-act="chat-clear" ${hasMessages ? '' : 'hidden'}>Tyhjennä</button><button class="icon-btn" type="button" data-act="close" aria-label="Sulje">${SVG.close}</button></div></div>
-    ${modeSwitchHtml({ mode, hasKey })}
-    <div class="sheet-scroll chat-scroll" id="msgs" aria-live="polite"></div>
-    <div class="chips">${chips}</div>
+    <p class="chat-src">Vastaa: ${esc(src)} · <button class="linkish" type="button" data-act="open-adv">vaihda</button></p>
+    <div class="sheet-scroll chat-scroll" id="msgs" role="log" aria-live="polite"></div>
+    <div class="chips">${list}</div>
     <form class="composer" data-form="chat">
       <textarea id="msg" rows="1" placeholder="Kysy mitä tahansa säästä" aria-label="Viesti"></textarea>
       <button class="send" type="submit" aria-label="Lähetä">${SVG.send}</button>
@@ -7059,12 +7693,13 @@ function messageHtml(m) {
 
 const typingHtml = '<div class="msg bot typing" aria-label="SääÄly kirjoittaa"><span></span><span></span><span></span></div>';
 
-function chatEmptyHtml({ mode = 'internal' }) {
-  if (mode === 'internal') return '<p class="note center">Vastaan sovelluksen keräämän säädatan perusteella: yhdistelmäennusteen ja yksittäisten säämallien lukujen avulla. Kysy esimerkiksi sateesta, tuulesta, pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.</p>';
-  if (mode === 'free') return '<p class="note center">Gemini vastaa sovelluksen keräämän säädatan perusteella ja voi käyttää lisäksi yleistietoa ilmiöiden selittämiseen. Kysy esimerkiksi pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.</p>';
-  return '<p class="note center">Gemini vastaa vain sovelluksen keräämän säädatan perusteella. Kysy esimerkiksi pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.</p>';
+/** Tyhjän chatin aloitus: SääÄlyn selitys nykyhetkestä ensimmäisenä viestinä. intro: { text, md, src }. */
+function chatEmptyHtml({ mode = 'internal', intro = null }) {
+  const first = intro?.text ? `<div class="msg bot intro"><div class="md">${intro.md ? mdToHtml(intro.text) : `<p>${esc(intro.text)}</p>`}</div>${intro.src ? `<div class="src">${esc(intro.src)}</div>` : ''}</div>` : '';
+  const note = mode === 'internal' ? 'Vastaan sovelluksen keräämän säädatan perusteella. Kysy esimerkiksi sateesta, tuulesta, pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.' : 'Gemini vastaa sovelluksen keräämän säädatan perusteella. Kysy esimerkiksi pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.';
+  return `${first}<p class="note center">${note}</p>`;
 }
-return { SVG, GLYPH, agoText, STALE_MIN, selLabel, placeHtml, heroHtml, heroRestHtml, alertsHtml, verdictHtml, verdictMoreHtml, trackHtml, selectionLines, aiHtml, nightSpans, meteoHtml, hourlyHtml, dailyHtml, certaintyHtml, modelsHtml, MODE_INFO, modeNote, modeSwitchHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, welcomeHtml, aboutSheetHtml, CHAT_CHIPS, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml };
+return { SVG, GLYPH, agoText, STALE_MIN, selLabel, placeHtml, sunLine, heroHtml, alertsHtml, verdictHtml, TRACK_HOURS, trackHtml, selectionLines, nightSpans, meteoHtml, radarHtml, hoursPageHtml, weekPageHtml, certPageHtml, modelsHtml, MODE_INFO, modeNote, modeSwitchHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, welcomeHtml, aboutSheetHtml, CHAT_CHIPS, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml };
 })();
 
 // ---- app.js ----
@@ -7086,11 +7721,13 @@ const { verdict } = __m['advice'];
 const { fetchNowcast, summarizeNowcast, nowcastUrl } = __m['nowcast'];
 const { createGuard, runSource, memoryStorage, sourceLine } = __m['sources'];
 const { fetchWarnings, officialRows, inFinland, MIRROR_URL } = __m['warnings'];
+const { fetchObs } = __m['observations'];
 const { makeDemoFetch } = __m['demo'];
-const { agoText, selLabel, placeHtml, heroHtml, heroRestHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, aiHtml, hourlyHtml, dailyHtml, certaintyHtml, verdictMoreHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
+const { agoText, selLabel, placeHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
+const { homeHeadline } = __m['headline'];
 
-const VERSION = '0.6.0';
-const BUILD = '70e4ca8e7f'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
+const VERSION = '0.7.0';
+const BUILD = 'ee81e1553b'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
 // ---------- Ympäristö ----------
@@ -7124,21 +7761,21 @@ const el = {
   update: $('#update'),
   app: $('#app'),
   welcome: $('#welcome'),
+  pages: $('#pages'),
+  pgHome: $('#pgHome'),
   alerts: $('#alerts'),
   hero: $('#hero'),
-  heroRest: $('#heroRest'),
   verdict: $('#verdict'),
-  verdictMore: $('#verdictMore'),
   stage: $('#stage'),
   track: $('#track'),
-  ai: $('#ai'),
-  forecast: $('#forecast'),
   hourly: $('#hourly'),
   daily: $('#daily'),
   meteo: $('#meteo'),
   models: $('#models'),
   certainty: $('#certainty'),
   fab: $('#fab'),
+  dots: $('#dots'),
+  hint: $('#swipeHint'),
   sheet: $('#sheet'),
   panel: $('#sheetPanel'),
   theme: $('meta[name="theme-color"]'),
@@ -7156,7 +7793,11 @@ const state = {
   manualLoad: false,
   error: '',
   sel: { type: 'now' },
-  dayOpen: null, // päivä, jonka tunnit näytetään päiväennusteen alla
+  dayOpen: null, // Viikko-sivun päivä, jonka tunnit näytetään sen rivin alla
+  page: 0, // näkyvä sivu: 0 koti, 1 tunnit, 2 viikko, 3 varmuus
+  hourOpen: null, // Tunnit-sivun avattu tunti (lisätiedot rivin alla)
+  hoursMore: false, // Tunnit-sivulla 48 tuntia 13 sijaan
+  hoursView: store.str('hoursView', 'list') === 'chart' ? 'chart' : 'list',
   ai: { status: 'idle', text: '', error: '', fp: '' },
   refreshMin: REFRESH_OPTIONS.includes(savedRefresh) ? savedRefresh : 10,
   sheet: null,
@@ -7169,12 +7810,13 @@ const state = {
   banner: null,
   first: false, // ensimmäinen käynnistys: näytetään paikan valintakortti, eikä sijaintilupaa kysytä ennen kuin käyttäjä painaa
   sens: Math.max(-3, Math.min(3, store.num('sens', 0))), // kylmänsietokyky: −3 (palelen helposti) … +3 (kestän kylmää)
-  vday: 'auto', // vastauskaistan ajankohta: 'auto' | 'today' | 'tomorrow'
+  vday: 'today', // yläpalkin valinta: 'today' | 'tomorrow' (etusivu ja Tunnit näyttävät valitun päivän)
   mg: { range: Object.hasOwn(MG_RANGES, store.str('mgRange', '24h')) ? store.str('mgRange', '24h') : '24h', inspectIso: null }, // sääkaavio: aikaväli ja tarkastettu hetki
   nowcast: null, // tutkaennusteen tulkinta nykyhetkelle (nowcast.js), jos saatavilla
   nc: { raw: null, key: '', at: 0, ttl: 0 }, // viimeisin haettu tutkaennuste, paikka ja haun ajankohta
   warn: { raw: null, at: 0 }, // koko maan CAP-varoitukset (warnings.js); oma alue valitaan piirrettäessä
   official: [], // viralliset varoitukset (warnings.js), jos saatavilla
+  obs: { raw: null, key: '', at: 0 }, // lähimmän sääaseman havainto (observations.js), jos saatavilla
 };
 
 // Gemini on käytettävissä vain, kun avain on tallennettu (esimerkkitilassa ei koskaan). Ilman sitä vastataan sovelluksen omalla laskennalla.
@@ -7229,42 +7871,62 @@ function renderHeader() {
   $('#refreshBtn')?.classList.toggle('spin', state.loading && (state.manualLoad || !state.fc));
 }
 
+/** SääÄlyn selitys nykyhetkestä näkyy chatin ensimmäisenä viestinä (aiemmin etusivun kortti). */
 function renderAi() {
-  if (!state.fc) {
-    el.ai.hidden = true;
-    patch('ai', el.ai, '');
-    return;
-  }
-  el.ai.hidden = false;
-  patch('ai', el.ai, aiHtml({ fc: state.fc, nowMs: nowMs(), sel: state.sel, ai: state.ai, hasKey: keyOn(), mode: aiMode() }));
+  if (state.sheet === 'chat' && !state.chat.length) renderChat();
 }
 
-/** Päivän ääriarvot pienenä lisärivinä etusivun lisähuomioissa. */
-function rangeText(fc, now) {
-  const { local } = nowPosition(fc, now);
-  const d = fc.days.find((x) => x.date === local.date) || fc.days[0];
-  return d ? `tänään ylin ${fmtTemp(d.tmax)}, alin ${fmtTemp(d.tmin)}` : '';
+function chatIntro() {
+  if (!state.fc) return null;
+  if (geminiOn() && state.ai.status === 'done' && state.ai.text) return { text: state.ai.text, md: true, src: 'SääÄly kertoo · Gemini' };
+  const lines = selectionLines(state.fc, { type: 'now' }, nowMs());
+  return lines.length ? { text: lines.join(' '), md: false, src: `SääÄly kertoo · oma laskenta, ${state.fc.modelsUsed}/${state.fc.modelsTotal} mallia` } : null;
 }
 
-/** Vastauskaista ja huomiot: laskenta neuvomoduulissa, tässä vain piirretään. */
+/** Etusivun otsikko ja varoitusrivi: laskenta headline.js:ssä ja advice.js:ssä, tässä vain piirretään. */
 function renderAdvice(fc, now) {
-  let v = null;
   state.nowcast = currentNowcast(now);
   state.official = currentOfficial(now);
+  let hl = null;
+  let v = null;
   try {
-    v = verdict(fc, now, { window: state.vday, lat: state.place?.lat, sensitivity: state.sens, nowcast: state.nowcast });
+    hl = homeHeadline(fc, now, { day: state.vday, sensitivity: state.sens, nowcast: state.nowcast });
   } catch {
-    v = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
+    hl = null; // neuvot ovat lisä, eivätkä saa kaataa muuta näkymää
   }
-  const tomorrow = v?.win?.kind === 'tomorrow';
-  document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.day === 'tomorrow') === tomorrow)));
-  el.verdict.hidden = !v;
-  patch('verdict', el.verdict, v ? verdictHtml({ v }) : '');
-  el.verdictMore.hidden = !v;
-  patch('verdictMore', el.verdictMore, v ? verdictMoreHtml({ v, range: rangeText(fc, now), nowcastLine: state.nowcast?.ok && v.win?.kind !== 'tomorrow' ? state.nowcast.line : '' }) : '');
-  const html = v ? alertsHtml({ alerts: v.alerts, official: state.official, officialState: officialState(now) }) : '';
+  try {
+    v = verdict(fc, now, { window: 'today', lat: state.place?.lat, sensitivity: state.sens, nowcast: state.nowcast });
+  } catch {
+    v = null;
+  }
+  document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.day === state.vday)));
+  el.verdict.hidden = !hl;
+  patch('verdict', el.verdict, hl ? verdictHtml({ hl }) : '');
+  const html = alertsHtml({ alerts: v?.alerts || [], official: state.official, officialState: officialState(now), checkedAt: state.warn.fetchedAt || 0, nowMs: now });
   el.alerts.hidden = !html;
-  patch('alerts', el.alerts, html);
+  if (patch('alerts', el.alerts, html)) sizeStage();
+}
+
+/** Etusivun näyttämö mahtuu ruudulle: korkeus = sivu − varoitusrivi − alapalkki. Leveys seuraa radan kuvasuhdetta (412 x 750). */
+function sizeStage() {
+  const pg = el.pgHome;
+  if (!pg || el.stage.classList.contains('stage-off')) {
+    el.stage.style.width = '';
+    return;
+  }
+  const H = pg.clientHeight;
+  const W = pg.clientWidth;
+  if (!H || !W) return;
+  const top = el.alerts.hidden ? 0 : el.alerts.offsetHeight + 6;
+  const pill = el.fab ? el.fab.getBoundingClientRect().height + 8 : 110;
+  // Radan alimmat merkit ovat 94 %:n korkeudella: niiden on jäätävä alapalkin yläpuolelle. Kuvan loppu saa jäädä palkin alle.
+  const h = (H - top - pill) / 0.94;
+  const fit = (h * 412) / 750;
+  const w = Math.round(Math.max(260, Math.min(W, fit)));
+  el.stage.style.width = `${w}px`;
+  // Hyvin lyhyellä ruudulla (monta varoitusta) näyttämö ei mahdu: sivu vierii, ja loppuun jää tilaa palkin yli.
+  // Väli on ::after-elementti (muuttuja), ei sivun täyte: sivun oma koko ei muutu, joten ResizeObserver ei kierrä.
+  pg.style.setProperty('--stage-pad', fit < 260 ? `${Math.ceil(pill)}px` : '0px');
 }
 
 // ---------- Valinnaiset lähteet ----------
@@ -7297,7 +7959,40 @@ async function refreshNowcast({ ignoreAge = false } = {}) {
   } finally {
     ncBusy = false;
   }
-  if (state.fc) renderAdvice(state.fc, nowMs());
+  if (state.fc) {
+    renderAdvice(state.fc, nowMs());
+    renderHours();
+  }
+}
+
+const OBS_TTL = 10 * 60000; // asemat mittaavat kymmenen minuutin välein
+let obsBusy = false;
+
+/** Lähimmän aseman havainto, jos se on haettu tälle paikalle eikä ole vanha. */
+function currentObs(now) {
+  const o = state.obs;
+  if (!o.raw || o.key !== ncKey(state.place) || now - o.raw.t > 90 * 60000) return null;
+  return o.raw;
+}
+
+/** Hakee havainnon Suomessa olevalle paikalle. Hiljainen lisälähde kuten tutkaennuste. */
+async function refreshObs({ ignoreAge = false } = {}) {
+  const p = state.place;
+  const key = ncKey(p);
+  if (!key || obsBusy || !inFinland(p.lat, p.lon)) return;
+  const now = nowMs();
+  if (!ignoreAge && state.obs.key === key && now - state.obs.at < OBS_TTL) return;
+  obsBusy = true;
+  try {
+    const r = await runSource(sources, 'obs', () => fetchObs(p.lat, p.lon, { fetchFn, now }), { now });
+    if (ncKey(state.place) === key && 'value' in r) state.obs = { raw: r.value, key, at: now };
+  } finally {
+    obsBusy = false;
+  }
+  if (state.fc) {
+    renderHours();
+    patch('certainty', el.certainty, certPageHtml({ fc: state.fc, results: state.results, nowMs: nowMs(), obs: currentObs(nowMs()) }));
+  }
 }
 
 const WARN_TTL = 15 * 60000; // CAP-syöte päivittyy useita kertoja päivässä; neljännestunnin välein riittää
@@ -7336,7 +8031,7 @@ async function refreshWarnings({ ignoreAge = false } = {}) {
   try {
     const r = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn, now }), { now });
     // Vanhentunut peili (value null) ei ole virhe, mutta uutta tietoa ei ole: edellinen lista jää voimaan ja seuraavaa hakua odotetaan normaalisti
-    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now, stale: !r.value, fetchedAt: r.value ? r.value.fetchedAt : state.warn.fetchedAt };
+    if ('value' in r) state.warn = { raw: r.value ? r.value.alerts : state.warn.raw, at: now, stale: !r.value, fetchedAt: r.value ? r.value.fetchedAt : (r.raw?.fetchedAt ?? state.warn.fetchedAt) };
   } finally {
     warnBusy = false;
   }
@@ -7449,58 +8144,108 @@ function renderAll() {
     el.stage.classList.add('stage-off');
     el.track.hidden = true;
     patch('track', el.track, '');
-    el.verdictMore.hidden = true;
     el.verdict.hidden = true;
     el.alerts.hidden = true;
-    el.heroRest.hidden = true;
-    patch('heroRest', el.heroRest, '');
     patch('verdict', el.verdict, '');
     patch('alerts', el.alerts, '');
-    renderAi();
-    el.forecast.hidden = true;
+    for (const k of ['hourly', 'daily', 'certainty', 'models']) patch(k, el[k], '');
+    el.meteo.hidden = true;
+    sizeStage();
     return;
   }
   const now = nowMs();
   const { fc, sel } = state;
-  patch('hero', el.hero, heroHtml({ fc, nowMs: now }));
+  const day = state.vday;
+  patch('hero', el.hero, heroHtml({ fc, nowMs: now, sel, day }));
   el.stage.classList.remove('stage-off');
   el.track.hidden = false;
-  patch('track', el.track, trackHtml({ fc, nowMs: now, sel }));
-  el.heroRest.hidden = false;
-  patch(
-    'heroRest',
-    el.heroRest,
-    heroRestHtml({ fc, nowMs: now, fetchedAt: state.fetchedAt, loading: state.loading && state.manualLoad, modelsUsed: fc.modelsUsed, modelsTotal: fc.modelsTotal }),
-  );
+  patch('track', el.track, trackHtml({ fc, nowMs: now, sel, day }));
   renderAdvice(fc, now);
-  renderAi();
-  el.forecast.hidden = false;
-  renderMeteo(now);
+  renderHours(now);
+  renderWeek(now);
+  patch('certainty', el.certainty, certPageHtml({ fc, results: state.results, nowMs: now, obs: currentObs(now) }));
+  const wasOpen = $('.models-d', el.models)?.open;
+  if (patch('models', el.models, modelsHtml({ results: state.results, fc, nowMs: now })) && wasOpen) $('.models-d', el.models).open = true;
+  sizeStage();
+}
 
-  const strip = $('#strip', el.hourly);
-  const left = strip ? strip.scrollLeft : 0;
-  if (patch('hourly', el.hourly, hourlyHtml({ fc, nowMs: now, sel }))) {
-    const next = $('#strip', el.hourly);
-    if (next && left) next.scrollLeft = left;
-  }
+/** Tunnit-sivu: lista tai kaavio. Tutkan käyrä näkyy, kun sade on alle kahden tunnin päässä. */
+function renderHours(now = nowMs()) {
+  const { fc } = state;
+  if (!fc) return;
+  const chart = state.hoursView === 'chart';
+  const raw = state.nc.key === ncKey(state.place) ? state.nc.raw : null;
+  const radar = state.vday === 'today' ? radarHtml({ raw, nc: state.nowcast, nowMs: now, tz: fc.tz }) : '';
+  patch('hourly', el.hourly, hoursPageHtml({ fc, nowMs: now, day: state.vday, open: state.hourOpen, more: state.hoursMore, view: state.hoursView, radar, fetchedAt: state.fetchedAt, loading: state.loading && state.manualLoad, obs: currentObs(now), nowcast: state.vday === 'today' ? state.nowcast : null }));
+  el.meteo.hidden = !chart;
+  if (chart) renderMeteo(now);
+}
+
+/** Viikko-sivu. Avatun päivän tuntinauha aloittaa aamusta (tänään nykyhetkestä). */
+function renderWeek(now = nowMs()) {
+  const { fc } = state;
+  if (!fc) return;
   if (state.dayOpen && !fc.days.slice(0, 7).some((d) => d.date === state.dayOpen)) state.dayOpen = null;
   const dayLeft = $('.dstrip', el.daily)?.scrollLeft || 0;
-  if (patch('daily', el.daily, dailyHtml({ fc, nowMs: now, sel, openDate: state.dayOpen }))) {
+  if (patch('daily', el.daily, weekPageHtml({ fc, nowMs: now, open: state.dayOpen }))) {
     const ds = $('.dstrip', el.daily);
     if (ds) {
       if (dayLeft && ds.dataset.date === state.dayScrolled) ds.scrollLeft = dayLeft;
       else {
-        // uusi päivä: aloita aamusta (tänään jo alkavasta tunnista)
         const first = ds.querySelector('.hr');
-        const morning = ds.querySelector(`.hr[data-iso$="T07:00"]`);
+        const morning = ds.querySelector('.hr[data-iso$="T07:00"]');
         ds.scrollLeft = morning && first ? Math.max(0, morning.offsetLeft - first.offsetLeft) : 0;
         state.dayScrolled = ds.dataset.date;
       }
     }
   }
-  patch('certainty', el.certainty, certaintyHtml({ fc, nowMs: now }));
-  const wasOpen = $('.models-d', el.models)?.open;
-  if (patch('models', el.models, modelsHtml({ results: state.results, fc, nowMs: now })) && wasOpen) $('.models-d', el.models).open = true;
+}
+
+// ---------- Sivut ----------
+
+let pageEntry = false; // alisivulle siirtyminen lisää historiaan yhden merkinnän: Androidin takaisin palaa kotiin
+let ignorePop = false;
+
+function goPage(i, { smooth = true } = {}) {
+  const w = el.pages.clientWidth || innerWidth;
+  el.pages.scrollTo({ left: i * w, behavior: smooth && !reduceMotion ? 'smooth' : 'auto' });
+}
+
+function onPageChange() {
+  const i = Math.max(0, Math.min(3, Math.round(el.pages.scrollLeft / Math.max(1, el.pages.clientWidth))));
+  if (i === state.page) return;
+  const prev = state.page;
+  state.page = i;
+  el.dots?.querySelectorAll('button').forEach((b) => (+b.dataset.page === i ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current')));
+  if (prev === 0 && i > 0 && !pageEntry && !state.sheet) {
+    try {
+      history.pushState({ saaalyPage: true }, '');
+      pageEntry = true;
+    } catch {
+      pageEntry = false;
+    }
+  } else if (i === 0 && pageEntry && !state.sheet) {
+    pageEntry = false;
+    ignorePop = true;
+    try {
+      history.back();
+    } catch {
+      ignorePop = false;
+    }
+  }
+  if (el.hint && !el.hint.hidden) {
+    el.hint.hidden = true;
+    store.set('swiped', true);
+  }
+}
+
+/** Kerran laitteella: vihje sivujen pyyhkäisystä, kunnes käyttäjä vaihtaa sivua. */
+function maybeHint() {
+  if (DEMO || store.bool('swiped', false) || !el.hint || !state.fc) return;
+  el.hint.hidden = false;
+  setTimeout(() => {
+    if (!el.hint.hidden) el.hint.hidden = true;
+  }, 9000);
 }
 
 /** Uuden version ilmoitus: oma elementtinsä, jota paikan vaihto tai haku ei tyhjennä. */
@@ -7574,29 +8319,14 @@ function skyIdle() {
   setThemeColor(sun.altitudeDeg);
 }
 
-/** Taivaan tila valitulle ajalle: nyt, valittu tunti tai valitun päivän iltapäivä. */
+/** Taivaan tila nykyhetkelle. Valittu tunti ei vaihda taustaa eikä teemaa: tausta kertoo aina, millainen sää on nyt. */
 function skyStateFor() {
-  const { fc, sel } = state;
+  const { fc } = state;
   const now = nowMs();
-  const { idx, frac, local } = nowPosition(fc, now);
-  let ms = now;
-  let h = snapshot(fc, idx, frac);
-  if (sel.type === 'hour') {
-    const i = fc.hours.findIndex((x) => x.t === sel.iso);
-    if (i >= 0) {
-      h = fc.hours[i];
-      ms = zonedToUtcMs(h.t, fc.tz) + 30 * 60000;
-    }
-  } else if (sel.type === 'day' && sel.date !== local.date) {
-    const d = fc.days.find((x) => x.date === sel.date);
-    if (d) {
-      const at = fc.hours.findIndex((x) => x.t === `${sel.date}T14:00`);
-      h = fc.hours[at >= 0 ? at : Math.floor((d.from + d.to) / 2)];
-      ms = zonedToUtcMs(h.t, fc.tz) + 30 * 60000;
-    }
-  }
-  const sun = sunPosition(ms, fc.lat, fc.lon);
-  const moon = moonInfo(ms, fc.lat, fc.lon);
+  const { idx, frac } = nowPosition(fc, now);
+  const h = snapshot(fc, idx, frac);
+  const sun = sunPosition(now, fc.lat, fc.lon);
+  const moon = moonInfo(now, fc.lat, fc.lon);
   return {
     moonPhase: moon.phase,
     moonAlt: moon.altitudeDeg,
@@ -7673,9 +8403,9 @@ function validateSelection() {
   if (sel.type === 'hour') {
     const i = fc.hours.findIndex((h) => h.t === sel.iso);
     if (i < idx) state.sel = { type: 'now' };
-  } else if (sel.type === 'day') {
-    if (!fc.days.some((d) => d.date === sel.date) || sel.date < local.date) state.sel = { type: 'now' };
-  }
+  } else if (sel.type !== 'now') state.sel = { type: 'now' };
+  if (state.hourOpen && !fc.hours.some((h, i) => h.t === state.hourOpen && i >= idx)) state.hourOpen = null;
+  void local;
 }
 
 /** Yksi haku kerrallaan: sama paikka käynnissä -> odotetaan sitä; toinen paikka -> vanha haku perutaan. */
@@ -7739,9 +8469,11 @@ async function runLoad({ manual = false, signal } = {}) {
   persistCache();
   renderAll();
   updateSky();
-  syncAi({ immediate: true });
+  maybeHint();
+  if (state.sheet === 'chat') syncAi({ immediate: true });
   void refreshNowcast({ ignoreAge: manual });
   void refreshWarnings({ ignoreAge: manual });
+  void refreshObs({ ignoreAge: manual });
 }
 
 // ---------- Paikka ----------
@@ -7834,7 +8566,7 @@ let aiSeq = 0;
 let aiAbort = null;
 
 function selection() {
-  return { type: state.sel.type, label: selLabel(state.sel) };
+  return { type: 'now', label: 'nyt' };
 }
 
 /** Selityksen tunniste: sama paikka, valinta ja tunti + sateiden ajoitus. Näin selitystä ei pyydetä turhaan joka päivityksellä. */
@@ -7846,12 +8578,13 @@ function aiFingerprint() {
     .map((h, i) => (h.precip >= 0.2 ? i : -1))
     .filter((i) => i >= 0)
     .join(',');
-  const key = sel.type === 'hour' ? sel.iso : sel.type === 'day' ? sel.date : 'nyt';
-  return [placeKey(place), sel.type, key, local.iso.slice(0, 13), wet, Math.round(fc.hours[idx].temp / 3), aiSettings.model(), aiMode()].join('|');
+  void sel;
+  return [placeKey(place), 'now', 'nyt', local.iso.slice(0, 13), wet, Math.round(fc.hours[idx].temp / 3), aiSettings.model(), aiMode()].join('|');
 }
 
 function syncAi({ immediate = false } = {}) {
-  if (!state.fc || !state.place?.name) return;
+  // Selitys näkyy vain chatin ensimmäisenä viestinä: Geminiä ei kutsuta, kun chat on kiinni
+  if (!state.fc || !state.place?.name || state.sheet !== 'chat') return;
   const fp = aiFingerprint();
   if (state.ai.fp === fp && state.ai.status !== 'idle') return;
   const cached = aiCache.get(fp);
@@ -7895,17 +8628,10 @@ async function runAi({ force = false } = {}) {
 }
 const runAiSoon = debounce(() => runAi(), 450);
 
-function select(sel, { reveal = true } = {}) {
+/** Radan tunnin valinta näkyy etusivun sankarissa paikallaan: sivu ei vieritä minnekään. */
+function select(sel) {
   state.sel = sel;
   renderAll();
-  updateSky();
-  syncAi();
-  if (reveal && sel.type !== 'now') revealAi();
-}
-
-function revealAi() {
-  const r = el.ai.getBoundingClientRect();
-  if (r.top < 8 || r.bottom > innerHeight - 76) el.ai.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
 }
 
 // ---------- Päivityssilmukka ----------
@@ -7920,6 +8646,7 @@ function tick() {
   }
   void refreshNowcast();
   void refreshWarnings();
+  void refreshObs();
   validateSelection();
   renderAll();
   updateSky();
@@ -7940,7 +8667,7 @@ const TITLES = { search: 'Paikkakunta', settings: 'Asetukset', chat: 'Kysy Sää
 function sheetContent(kind) {
   if (kind === 'search') return searchSheetHtml({ recent: state.recent });
   if (kind === 'chat') return chatSheetHtml({ mode: aiMode(), hasKey: keyOn(), hasMessages: state.chat.length > 0 });
-  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
+  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
   return settingsSheetHtml({ hasKey: keyOn(), mode: aiMode(), model: aiSettings.model(), refreshMin: state.refreshMin, models: state.models, demo: DEMO, sens: state.sens, anim: store.bool('anim', true) });
 }
 
@@ -7951,7 +8678,11 @@ function openSheet(kind) {
   el.panel.dataset.kind = kind;
   el.panel.setAttribute('aria-label', TITLES[kind]);
   el.panel.innerHTML = sheetContent(kind);
-  if (kind === 'chat') renderChat();
+  if (kind === 'chat') {
+    chatShown = 0;
+    renderChat();
+    syncAi();
+  }
   el.sheet.hidden = false;
   el.app.inert = true;
   el.fab.inert = true;
@@ -8007,11 +8738,21 @@ function trapTab(ev) {
 
 // ---------- Chat ----------
 
+/** Chat: uudet viestit lisätään loppuun (ruudunlukija lukee vain uuden viestin), tyhjä keskustelu piirretään kokonaan. */
+let chatShown = 0;
 function renderChat() {
   const box = $('#msgs');
   if (!box || state.sheet !== 'chat') return;
-  const html = state.chat.length ? state.chat.map(messageHtml).join('') : chatEmptyHtml({ mode: aiMode() });
-  box.innerHTML = html + (state.chatBusy ? typingHtml : '');
+  const n = state.chat.length;
+  box.querySelector('.typing')?.remove();
+  if (n && box.dataset.mode === 'msgs' && n >= chatShown) {
+    for (const m of state.chat.slice(chatShown)) box.insertAdjacentHTML('beforeend', messageHtml(m));
+  } else {
+    box.innerHTML = n ? state.chat.map(messageHtml).join('') : chatEmptyHtml({ mode: aiMode(), intro: chatIntro() });
+    box.dataset.mode = n ? 'msgs' : 'empty';
+  }
+  chatShown = n;
+  if (state.chatBusy) box.insertAdjacentHTML('beforeend', typingHtml);
   box.scrollTop = box.scrollHeight;
   const send = $('.send');
   if (send) send.disabled = state.chatBusy;
@@ -8430,34 +9171,57 @@ const ACTIONS = {
   },
   'open-diag': () => {
     openSheet('settings');
+    const adv = $('#advSet', el.panel);
+    if (adv) adv.open = true;
     setTimeout(runDiagnostics, 80);
+  },
+  'open-adv': () => {
+    openSheet('settings');
+    const adv = $('#advSet', el.panel);
+    if (adv) {
+      adv.open = true;
+      setTimeout(() => adv.scrollIntoView({ block: 'start' }), 80);
+    }
+  },
+  page: (t) => goPage(+t.dataset.page || 0),
+  hrow: (t) => {
+    const iso = t.dataset.iso;
+    state.hourOpen = state.hourOpen === iso ? null : iso;
+    renderHours();
+  },
+  'hours-more': () => {
+    state.hoursMore = !state.hoursMore;
+    renderHours();
+  },
+  'hours-view': (t) => {
+    const v = t.dataset.view === 'chart' ? 'chart' : 'list';
+    if (v === state.hoursView) return;
+    state.hoursView = v;
+    store.set('hoursView', v);
+    renderHours();
   },
   locate: () => locate(),
   refresh: () => load({ manual: true }),
   now: () => select({ type: 'now' }),
-  hour: (t) => select({ type: 'hour', iso: t.dataset.iso }, { reveal: !t.closest('.day-hours') }),
+  hour: (t) => select(state.sel.type === 'hour' && state.sel.iso === t.dataset.iso ? { type: 'now' } : { type: 'hour', iso: t.dataset.iso }),
   day: (t) => {
     const date = t.dataset.date;
-    if (state.dayOpen === date) {
-      state.dayOpen = null;
-      select({ type: 'now' }, { reveal: false });
-    } else {
-      state.dayOpen = date;
-      state.dayScrolled = '';
-      select({ type: 'day', date }, { reveal: false });
+    state.dayOpen = state.dayOpen === date ? null : date;
+    state.dayScrolled = '';
+    renderWeek();
+    if (state.dayOpen)
       requestAnimationFrame(() => {
-        const row = $(`.day[data-date="${CSS.escape(date)}"]`, el.daily);
         const box = $('.day-hours', el.daily);
-        if (!row || !box) return;
-        const bottom = box.getBoundingClientRect().bottom;
-        const top = row.getBoundingClientRect().top;
-        if (bottom > innerHeight - 76 || top < 8) row.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+        if (box) box.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'nearest' });
       });
-    }
   },
   vday: (t) => {
-    state.vday = t.dataset.day === 'tomorrow' ? 'tomorrow' : 'today';
-    if (state.fc) renderAdvice(state.fc, nowMs());
+    const d = t.dataset.day === 'tomorrow' ? 'tomorrow' : 'today';
+    if (d === state.vday) return;
+    state.vday = d;
+    state.sel = { type: 'now' };
+    state.hourOpen = null;
+    renderAll();
   },
   'ai-run': () => runAi({ force: true }),
   pick: (t) => pickPlace(state.found[+t.dataset.i]),
@@ -8487,6 +9251,7 @@ function bindPullToRefresh() {
   const ind = $('#ptr');
   if (!ind) return;
   let y0 = null;
+  let x0 = 0;
   let pulled = 0;
   const reset = () => {
     y0 = null;
@@ -8499,9 +9264,10 @@ function bindPullToRefresh() {
     'touchstart',
     (ev) => {
       const t = ev.target;
-      const inStrip = t.closest?.('#strip, .sheet, textarea, input, select');
-      if (state.sheet || inStrip || window.scrollY > 0 || ev.touches.length !== 1) y0 = null;
-      else (y0 = ev.touches[0].clientY), (pulled = 0);
+      const inStrip = t.closest?.('.dstrip, #mgWrap, .sheet, textarea, input, select');
+      const page = t.closest?.('.page');
+      if (state.sheet || inStrip || !page || page.scrollTop > 0 || ev.touches.length !== 1) y0 = null;
+      else (y0 = ev.touches[0].clientY), (x0 = ev.touches[0].clientX), (pulled = 0);
     },
     { passive: true },
   );
@@ -8509,6 +9275,11 @@ function bindPullToRefresh() {
     'touchmove',
     (ev) => {
       if (y0 == null) return;
+      // Sivujen vaakapyyhkäisy ei ole päivitysveto
+      if (Math.abs(ev.touches[0].clientX - x0) > Math.abs(ev.touches[0].clientY - y0) + 6) {
+        reset();
+        return;
+      }
       pulled = Math.max(0, ev.touches[0].clientY - y0);
       if (pulled < 12) return;
       ind.hidden = false;
@@ -8590,8 +9361,27 @@ function bindEvents() {
     if (state.sheet) {
       hasEntry = false;
       closeSheet();
+      return;
+    }
+    if (ignorePop) {
+      ignorePop = false;
+      return;
+    }
+    if (state.page > 0) {
+      pageEntry = false;
+      goPage(0);
     }
   });
+  let pageRaf = 0;
+  el.pages?.addEventListener(
+    'scroll',
+    () => {
+      if (!pageRaf) pageRaf = requestAnimationFrame(() => ((pageRaf = 0), onPageChange()));
+    },
+    { passive: true },
+  );
+  if (typeof ResizeObserver === 'function' && el.pgHome) new ResizeObserver(() => sizeStage()).observe(el.pgHome);
+  window.addEventListener('resize', debounce(() => goPage(state.page, { smooth: false }), 120));
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       tick();
@@ -8605,7 +9395,7 @@ function bindEvents() {
   });
   // Animaatio pysähtyy, kun ruutuun ei kosketa (akku): kosketus, vieritys tai näppäin herättää sen.
   for (const type of ['pointerdown', 'touchstart', 'keydown']) document.addEventListener(type, () => sky?.poke(), { passive: true, capture: true });
-  window.addEventListener('scroll', () => sky?.poke(), { passive: true });
+  document.addEventListener('scroll', () => sky?.poke(), { passive: true, capture: true });
 }
 
 // ---------- Käynnistys ----------

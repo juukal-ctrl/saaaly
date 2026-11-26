@@ -79,12 +79,14 @@ const CSP_CONNECT = [
   'https://generativelanguage.googleapis.com',
   'https://api.met.no',
   'https://raw.githubusercontent.com', // varoitusten peili (haara warnings-data), ks. js/warnings.js
+  'https://opendata.fmi.fi', // lähimmän sääaseman havainto, ks. js/observations.js
 ];
 const CSP = [
   "default-src 'none'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
+  "font-src 'self'",
   `connect-src 'self' ${CSP_CONNECT.join(' ')}`,
   "manifest-src 'self'",
   "worker-src 'self'",
@@ -99,6 +101,7 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 if (!bundle.includes("'__BUILD__'")) throw new Error("app.js:stä puuttuu BUILD-paikanvaraaja '__BUILD__'");
 const hash = createHash('sha1').update(bundle).update(CSP);
 for (const f of ['css/app.css', 'index.html', 'crash.js', 'manifest.webmanifest', 'sw.js']) hash.update(readFileSync(join(root, f)));
+for (const f of readdirSync(join(root, 'icons')).concat(readdirSync(join(root, 'fonts')).map((x) => '../fonts/' + x))) hash.update(readFileSync(join(root, 'icons', f)));
 const BUILD = hash.digest('hex').slice(0, 10);
 bundle = bundle.replace("'__BUILD__'", `'${BUILD}'`);
 
@@ -107,7 +110,9 @@ console.log(`saaaly.js: ${order.length} moduulia, ${(bundle.length / 1024).toFix
 
 // ---- Yksitiedostoinen esikatselu (esimerkkidata, ei verkkoyhteyksiä) ----
 let html = readFileSync(join(root, 'index.html'), 'utf8');
-const css = readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/icons\/([\w-]+\.webp)\)/g, (m, f) => `url(data:image/webp;base64,${readFileSync(join(root, 'icons', f)).toString('base64')})`); // esikatselussa kuvat upotetaan sivuun
+const css = readFileSync(join(root, 'css/app.css'), 'utf8')
+  .replace(/url\(\.\.\/icons\/([\w-]+\.webp)\)/g, (m, f) => `url(data:image/webp;base64,${readFileSync(join(root, 'icons', f)).toString('base64')})`) // esikatselussa kuvat ja fontit upotetaan sivuun
+  .replace(/url\(\.\.\/fonts\/([\w-]+\.woff)\)/g, (m, f) => `url(data:font/woff;base64,${readFileSync(join(root, 'fonts', f)).toString('base64')})`);
 const svgPath = join(root, 'icons/icon.svg');
 const svg = existsSync(svgPath) ? readFileSync(svgPath, 'utf8') : '';
 html = html
@@ -140,20 +145,21 @@ console.log(`dist/preview.html: ${(html.length / 1024).toFixed(1)} kt`);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out);
   for (const f of ['index.html', 'manifest.webmanifest', 'sw.js']) {
-    let text = readFileSync(join(root, f), 'utf8').replace(/(["'])(?:css|icons)\//g, '$1').replace("'__BUILD__'", `'${BUILD}'`);
+    let text = readFileSync(join(root, f), 'utf8').replace(/(["'])(?:css|icons|fonts)\//g, '$1').replace("'__BUILD__'", `'${BUILD}'`);
     // Content-Security-Policy vain julkaistuun sivuun (esikatselu upottaa skriptin sivuun, joten se ei kelpaa samalla säännöllä)
     if (f === 'index.html') {
       if (!text.includes(CSP_ANCHOR)) throw new Error('index.html:stä puuttuu <meta charset>, jonka perään CSP lisätään');
       text = text.replace(CSP_ANCHOR, `${CSP_ANCHOR}\n<meta http-equiv="Content-Security-Policy" content="${CSP}">`);
     }
-    if (/\b(?:css|icons)\//.test(text)) throw new Error(`julkaise/${f}: alikansiopolku jäi korjaamatta`);
+    if (/\b(?:css|icons|fonts)\//.test(text)) throw new Error(`julkaise/${f}: alikansiopolku jäi korjaamatta`);
     writeFileSync(join(out, f), text);
   }
   copyFileSync(join(root, 'saaaly.js'), join(out, 'saaaly.js'));
   copyFileSync(join(root, 'crash.js'), join(out, 'crash.js'));
   writeFileSync(join(out, 'version.json'), JSON.stringify({ version: pkg.version, build: BUILD }) + '\n');
-  writeFileSync(join(out, 'app.css'), readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/icons\//g, 'url('));
+  writeFileSync(join(out, 'app.css'), readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/(?:icons|fonts)\//g, 'url('));
   for (const f of readdirSync(join(root, 'icons'))) copyFileSync(join(root, 'icons', f), join(out, f));
+  for (const f of readdirSync(join(root, 'fonts'))) copyFileSync(join(root, 'fonts', f), join(out, f === 'OFL.txt' ? 'inter-OFL.txt' : f));
   const files = readdirSync(out).sort();
   console.log(`julkaise/: ${files.length} tiedostoa (${files.join(', ')})`);
 }

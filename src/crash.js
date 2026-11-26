@@ -48,6 +48,8 @@
   }
 
   window.addEventListener('error', function (e) {
+    // Selaimen vaaraton ilmoitus (ResizeObserver ehti muuttaa asettelua kesken kierroksen): ei virhe.
+    if (/ResizeObserver loop/.test(e.message || '')) return;
     show('Virhe: ' + (e.message || e.type) + (e.filename ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : ''));
   });
   window.addEventListener('unhandledrejection', function (e) {

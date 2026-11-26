@@ -475,7 +475,8 @@ function composeRain(X, w, q, { snow = false } = {}) {
       if (anyWet.length) line += ` ${cap(KIND_WORD[anyWet[0].kind])} on kuitenkin tulossa ${spanText(X, anyWet[0].start, anyWet[0].end, ref)}.`;
       else if (f.tmin > 3) line += ` Lämpötila on ${trange(f.tmin, f.tmax)}, joten lumi ei ole tulossa.`;
     } else {
-      line = `**${head} ei sada.**`;
+      // Kuiva vastaus kertoo myös lämpötilan, jotta lyhyt vastaus on silti hyödyllinen
+      line = `**${head} ei sada:** poutaa, ${trange(f.tmin, f.tmax)}.`;
       if (f.popMax >= 0.3 || f.precip >= 0.3) line += ` Pieni kuuron mahdollisuus kuitenkin on (todennäköisyys enintään ${pct(f.popMax)}${f.precip >= 0.1 ? `, yhteensä noin ${fmtMm(f.precip)}` : ''}).`;
       else if (f.popMax >= 0.1) line += ` Sateen todennäköisyys on enintään ${pct(f.popMax)}.`;
     }

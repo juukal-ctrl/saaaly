@@ -6,10 +6,10 @@ import { clamp, lerp } from './util.js';
 // Auringon korkeus (astetta) -> taivaan kolme väriä [ylä, keski, horisontti]
 const STOPS = [
   [-18, ['#03060f', '#060b1c', '#0a1330']],
-  [-12, ['#060b1e', '#0d1735', '#17275a']],
-  [-6, ['#101b45', '#2f3573', '#b55f6b']],
-  [-5, ['#2a2f66', '#6a5a9c', '#d98a9a']],
-  [-2.5, ['#e8c5cf', '#d3b4e2', '#b8baf0']], // aamu/ilta: pastellinen persikka ja laventeli, vaalea jo ennen auringonnousua
+  [-12, ['#0a0d26', '#141a45', '#1f2a66']],
+  [-8, ['#1d1f52', '#3d3486', '#7a4f96']],
+  [-6, ['#4a3d93', '#8a6ec2', '#d690b6']], // syvä hämärä: kylläinen violetti, ei harmaata välivaihetta
+  [-4, ['#e8c5cf', '#d3b4e2', '#b8baf0']], // aamu/ilta: pastellinen persikka ja laventeli, vaalea jo ennen auringonnousua
   [1, ['#f6cfc6', '#eabcd8', '#c9c4f2']],
   [6, ['#ffe4cc', '#f6cae4', '#c7d3fb']],
   [14, ['#fdebd3', '#e2cbfb', '#bcdcff']],
@@ -64,15 +64,56 @@ const PAL = {
 };
 for (const k of Object.keys(PAL)) PAL[k] = PAL[k].map(([x, y, bw, bh, c, o]) => [x, y, bw, bh, hex3(c), o]);
 
-const blendPal = (a, b, t) => a.map((p, i) => [lerp(p[0], b[i][0], t), lerp(p[1], b[i][1], t), lerp(p[2], b[i][2], t), lerp(p[3], b[i][3], t), mix(p[4], b[i][4], t), lerp(p[5], b[i][5], t)]);
+// Värien sekoitus OKLCH-avaruudessa: sävy kiertää ja kylläisyys säilyy, joten hämärän välivaiheet eivät muutu harmaiksi.
+const lin = (v) => ((v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+const gam = (v) => clamp((v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055) * 255, 0, 255);
+function toLab([r, g, b]) {
+  const R = lin(r);
+  const G = lin(g);
+  const B = lin(b);
+  const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
+  const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
+  const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+  return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+}
+function fromLab([L, a, b]) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [gam(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s), gam(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s), gam(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s)];
+}
+export function mixLch(c1, c2, t) {
+  const A = toLab(c1);
+  const B = toLab(c2);
+  const C1 = Math.hypot(A[1], A[2]);
+  const C2 = Math.hypot(B[1], B[2]);
+  const h1 = Math.atan2(A[2], A[1]);
+  let dh = Math.atan2(B[2], B[1]) - h1;
+  if (dh > Math.PI) dh -= 2 * Math.PI;
+  if (dh < -Math.PI) dh += 2 * Math.PI;
+  // Lähes harmaan värin sävy ei merkitse: käytetään toisen värin sävyä
+  const h = C1 < 0.02 ? Math.atan2(B[2], B[1]) : C2 < 0.02 ? h1 : h1 + dh * t;
+  const C = lerp(C1, C2, t);
+  return fromLab([lerp(A[0], B[0], t), C * Math.cos(h), C * Math.sin(h)]);
+}
+
+const blendPal = (a, b, t) => a.map((p, i) => [lerp(p[0], b[i][0], t), lerp(p[1], b[i][1], t), lerp(p[2], b[i][2], t), lerp(p[3], b[i][3], t), mixLch(p[4], b[i][4], t), lerp(p[5], b[i][5], t)]);
 
 /** Taustan värikentät auringon korkeuden mukaan: yö, aamu tai ilta (hämärä), päivä. */
 export function blobsFor(alt, morning) {
   const dusk = morning ? PAL.aamu : PAL.ilta;
   if (alt <= -8) return PAL.yo;
-  if (alt < 2) return blendPal(PAL.yo, dusk, (alt + 8) / 10);
-  if (alt < 18) return blendPal(dusk, PAL.paiva, (alt - 2) / 16);
+  if (alt < -4) return blendPal(PAL.yo, dusk, (alt + 8) / 4); // hämärän vaihe on lyhyt ja kylläinen
+  if (alt < 14) return blendPal(dusk, PAL.paiva, (alt + 4) / 18);
   return PAL.paiva;
+}
+
+/** Taustan pohjaväri: yö -> violetti hämärä -> vaalea päivä (ei harmaata välivaihetta). */
+const BASE_NIGHT = [19, 15, 41];
+const BASE_DUSK = [128, 104, 190];
+const BASE_DAY = [252, 247, 255];
+function baseColor(light) {
+  return light < 0.5 ? mixLch(BASE_NIGHT, BASE_DUSK, light * 2) : mixLch(BASE_DUSK, BASE_DAY, (light - 0.5) * 2);
 }
 
 const DEFAULT = { alt: 25, bearing: 180, cloud: 0.3, precip: 0, snow: 0, wind: 3, windDir: 225, thunder: 0, fog: 0, moonPhase: 0.5, moonAlt: -90, moonHA: 12 };
@@ -133,7 +174,7 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     if (!raf) draw(0);
   }
 
-  const rainCount = () => (tgt.precip >= 0.05 ? clamp(35 + tgt.precip * 60, 0, 280) * (1 - tgt.snow) : 0);
+  const rainCount = () => (tgt.precip >= 0.05 ? clamp(30 + tgt.precip * 45, 0, 200) * (1 - tgt.snow) : 0);
   const snowCount = () => (tgt.precip >= 0.05 ? clamp(50 + tgt.precip * 90, 0, 200) * tgt.snow : 0);
 
   function step(dt) {
@@ -159,10 +200,10 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     const cover = clamp(cur.cloud, 0, 1);
     const gloom = clamp(cover * 0.35 + (cur.precip > 0.3 ? 0.2 : 0) + cur.thunder * 0.25 + cur.fog * 0.3, 0, 0.7);
     const night = clamp((-alt - 3) / 10, 0, 1);
-    const light = clamp((alt + 8) / 10, 0, 1);
+    const light = clamp((alt + 8) / 4, 0, 1);
 
     // Pohja ja liukuvat värikentät (konseptin aamu / päivä / ilta / yö)
-    ctx.fillStyle = rgba(mix([19, 15, 41], [252, 247, 255], light));
+    ctx.fillStyle = rgba(baseColor(light));
     ctx.fillRect(0, 0, w, h);
     const blobs = blobsFor(alt, cur.bearing < 180);
     const grey = mix([60, 55, 92], [206, 201, 226], light);
@@ -174,7 +215,7 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
       const cx = (x + bw / 2 + dx) * sx;
       const cy = (y + bh / 2 + dy) * sy;
       const r = (Math.max(bw, bh) / 2) * 1.2 * Math.max(sx, sy * 0.9);
-      const c = mix(col, grey, gloom * 0.55);
+      const c = mix(col, grey, gloom * 0.4);
       const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
       g.addColorStop(0, rgba(c, o));
       g.addColorStop(0.5, rgba(c, o * 0.62));
@@ -189,7 +230,7 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
         const y = h * (0.4 + i * 0.16);
         const off = Math.sin(time * 0.05 + i * 2) * 40;
         const fg = ctx.createLinearGradient(0, y - h * 0.18, 0, y + h * 0.18);
-        const fogCol = mix([205, 212, 224], hor0, 0.2);
+        const fogCol = mix([205, 212, 224], skyColors(alt)[2], 0.2);
         fg.addColorStop(0, rgba(fogCol, 0));
         fg.addColorStop(0.5, rgba(fogCol, 0.42 * cur.fog * (night > 0.5 ? 0.6 : 1)));
         fg.addColorStop(1, rgba(fogCol, 0));
@@ -203,15 +244,16 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     if (nr > 0) {
       const slant = clamp(cur.wind / 14, 0, 1) * 0.55 * -Math.sin((cur.windDir * Math.PI) / 180);
       ctx.strokeStyle = night > 0.5 ? 'rgba(170,195,235,0.42)' : isLightSky(alt) ? 'rgba(84,100,196,0.5)' : 'rgba(205,224,255,0.55)';
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = 1;
       ctx.lineCap = 'round';
       ctx.beginPath();
+      // Rauhallinen sade: hitaat, lyhyet viirut (konsepti: liike on hidasta ja pehmeää)
       for (let i = 0; i < nr; i++) {
         const d = rain[i];
-        const y = (((d.y * h + time * 640 * d.v) % (h + 40)) + h + 40) % (h + 40) - 20;
+        const y = (((d.y * h + time * 260 * d.v) % (h + 40)) + h + 40) % (h + 40) - 20;
         const x = (((d.x * w + y * slant * 0.6) % w) + w) % w;
         ctx.moveTo(x, y);
-        ctx.lineTo(x + slant * 16 * d.l, y + 16 * d.l);
+        ctx.lineTo(x + slant * 11 * d.l, y + 11 * d.l);
       }
       ctx.stroke();
     }

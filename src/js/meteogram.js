@@ -232,7 +232,7 @@ export function meteogram(hours, o = {}) {
     if (hHi > hSolid + 1.5 && o.band !== false) out.push(`<rect ${cls('mg-hi')} x="${r1(x)}" y="${r1(base - hHi)}" width="${r1(w)}" height="${r1(hHi - hSolid)}" rx="1"/>`);
     if (hSolid > 0) {
       const fill = kind === 'rn' ? cls('mg-rain') : `class="mg-snowbar" fill="url(#${uid}-${kind})"`;
-      out.push(`<rect ${fill} x="${r1(x)}" y="${r1(base - hSolid)}" width="${r1(w)}" height="${r1(hSolid)}" rx="1"/>`);
+      out.push(`<rect ${fill} x="${r1(x)}" y="${r1(base - hSolid)}" width="${r1(w)}" height="${r1(hSolid)}" rx="${r1(Math.min(3, w / 2))}"/>`);
       if (bestB < 0 || b.precip > bins[bestB].precip) bestB = j;
     }
   });
@@ -273,7 +273,10 @@ export function meteogram(hours, o = {}) {
   }
 
   // --- symbolit ---
-  if (o.icon) {
+  // o.icon3d: 3D-kuvakkeet piirretään HTML:nä kaavion päälle (paikat palautetaan icons-taulukossa), SVG:hen ei tule kuvakkeita
+  const icons = [];
+  const putIcon = (sym, isDay, cx, y) => (o.icon3d ? icons.push({ sym, isDay, x: cx, y: y + 14 }) : out.push(nestedIcon(o.icon, sym, isDay, cx, y, 28)));
+  if (o.icon || o.icon3d) {
     const sy = ySym + 2;
     if (range === '7d') {
       const dates = [...new Set(pts.map((h) => h.t.slice(0, 10)))];
@@ -282,7 +285,7 @@ export function meteogram(hours, o = {}) {
         if (x1 - x0 < 30) continue;
         const day = bins.filter((b) => b.t.slice(0, 10) === d && hourOf(b.t) >= 6 && hourOf(b.t) < 21);
         const sym = (day.length ? day : bins.filter((b) => b.t.slice(0, 10) === d)).reduce((b, x) => (SEV.indexOf(x.sym) > SEV.indexOf(b) ? x.sym : b), 'clear');
-        out.push(nestedIcon(o.icon, sym, true, (x0 + x1) / 2, sy, 28));
+        putIcon(sym, true, (x0 + x1) / 2, sy);
       }
     } else {
       const every = compact ? R.every * 2 : R.every;
@@ -291,7 +294,7 @@ export function meteogram(hours, o = {}) {
         if (hourOf(h.t) % every !== 0) continue;
         const x = xAt(i);
         if (x < padL + 14 || x > padL + plotW - 14) continue;
-        out.push(nestedIcon(o.icon, h.sym, h.isDay, x, sy, 28));
+        putIcon(h.sym, h.isDay, x, sy);
       }
     }
   }
@@ -320,5 +323,5 @@ export function meteogram(hours, o = {}) {
   const total = bins.reduce((s, b) => s + b.precip, 0);
   const label = range === '24h' ? 'Seuraavat 24 tuntia' : range === '48h' ? 'Seuraavat 48 tuntia' : 'Seuraavat 7 päivää';
   const summary = `${label}: lämpötila ${fmtT(tmin)} … ${fmtT(tmax)}. ` + (wet.length ? `Sadetta yhteensä noin ${fmtMmv(total)}, ensimmäisenä ${wdOf(wet[0].t)} klo ${String(hourOf(wet[0].t)).padStart(2, '0')}. ` : 'Merkittävää sadetta ei odoteta. ') + `Tuuli enimmillään ${Math.round(Math.max(...bins.map((b) => b.wind)))} m/s.`;
-  return { svg, width: W, height, bins, readout, summary, inspect: inspect >= 0 ? inspect : null, geom: { padL, plotW, bw, N, ySym, yTemp, yPrec, yWind }, top };
+  return { svg, width: W, height, bins, readout, summary, icons, inspect: inspect >= 0 ? inspect : null, geom: { padL, plotW, bw, N, ySym, yTemp, yPrec, yWind }, top };
 }

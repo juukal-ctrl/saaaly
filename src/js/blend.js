@@ -691,9 +691,12 @@ export function wetSpans(fc, from, to, { minPwin = 0.3 } = {}) {
       }
     }
     const timingUncertain = !!s.smeared || (starts.length >= 3 && wQuantile(starts, 0.75) - wQuantile(starts, 0.25) > 2);
+    // Alkamisajan vaihteluväli mallien kesken (20. ja 80. persentiili): "sade alkaa klo 15–17 mallista riippuen"
+    const startLo = starts.length >= 3 ? Math.round(wQuantile(starts, 0.2)) : s.start;
+    const startHi = starts.length >= 3 ? Math.round(wQuantile(starts, 0.8)) : s.start;
     const sh = s.total ? s.snowW / s.total : 0;
     out.push({
-      start: s.start, end: s.end, total: s.total, snowW: s.snowW, pwin, timingUncertain,
+      start: s.start, end: s.end, total: s.total, snowW: s.snowW, pwin, timingUncertain, startLo, startHi,
       startT: hours[s.start].t, endT: hours[s.end].t, kind: sh >= 0.6 ? 'snow' : sh >= 0.25 ? 'sleet' : 'rain',
     });
   }

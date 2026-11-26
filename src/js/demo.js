@@ -151,6 +151,16 @@ export function syntheticWarningsFeed({ nowMs = Date.now(), scenario = 'mixed' }
   return `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Esimerkkivaroitukset</title>${entry}</feed>`;
 }
 
+/** WFS-muotoinen synteettinen havainto (timevaluepair): lämpötila on yhdistelmäennusteen tuntumassa, puoli astetta sivussa. */
+export function syntheticObs({ lat, lon, nowMs = Date.now(), scenario = 'mixed' }) {
+  const sc = SCENARIOS[scenario];
+  const base = sc ? sc.temp : 10;
+  const t0 = Math.floor(nowMs / 600000) * 600000;
+  const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z');
+  const pts = Array.from({ length: 6 }, (_, k) => `<wml2:point><wml2:MeasurementTVP><wml2:time>${iso(t0 - (5 - k) * 600000)}</wml2:time><wml2:value>${(base - 0.6 + k * 0.05).toFixed(1)}</wml2:value></wml2:MeasurementTVP></wml2:point>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8"?><wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:wml2="http://www.opengis.net/waterml/2.0" xmlns:target="http://xml.fmi.fi/namespace/om/atmosphericfeatures/1.1"><wfs:member><target:Location gml:id="loc-1"><gml:identifier codeSpace="http://xml.fmi.fi/namespace/stationcode/fmisid">100949</gml:identifier><gml:name codeSpace="http://xml.fmi.fi/namespace/locationcode/name">Esimerkkiasema</gml:name></target:Location><gml:Point gml:id="p-1"><gml:pos>${(lat + 0.04).toFixed(5)} ${(lon - 0.03).toFixed(5)} </gml:pos></gml:Point><wml2:MeasurementTimeseries gml:id="obs-t2m">${pts}</wml2:MeasurementTimeseries></wfs:member></wfs:FeatureCollection>`;
+}
+
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -184,6 +194,10 @@ export function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
     if (url.hostname === 'raw.githubusercontent.com' && url.pathname.includes('/warnings-data/')) {
       const now = nowMs ?? Date.now();
       return json(buildMirror(parseCapFeed(syntheticWarningsFeed({ nowMs: now, scenario })).alerts, now)); // sama muoto kuin GitHub Actionsin tekemä peili
+    }
+    if (url.hostname === 'opendata.fmi.fi') {
+      const [la, lo] = (url.searchParams.get('latlon') || '60.45,22.27').split(',').map(Number);
+      return new Response(syntheticObs({ lat: la, lon: lo, nowMs: nowMs ?? Date.now(), scenario }), { headers: { 'content-type': 'text/xml' } });
     }
     if (url.hostname === 'geocoding-api.open-meteo.com') {
       const q = (url.searchParams.get('name') || '').toLowerCase();

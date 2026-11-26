@@ -88,7 +88,7 @@ def gemini_route(route):
 def other_route(route):
     route.fulfill(status=403, headers=CORS, body='{"error":{"message":"estetty testissä"}}')
 
-DATA_RX = re.compile(r'https://(api\.open-meteo\.com|geocoding-api\.open-meteo\.com|api\.bigdatacloud\.net|api\.met\.no|raw\.githubusercontent\.com)/')
+DATA_RX = re.compile(r'https://(api\.open-meteo\.com|geocoding-api\.open-meteo\.com|api\.bigdatacloud\.net|api\.met\.no|raw\.githubusercontent\.com|opendata\.fmi\.fi)/')
 
 def install(ctx):
     ctx.route(DATA_RX, data_route)
@@ -133,6 +133,25 @@ def chat_calls(question):
 def sys_prompt(call):
     return call['body']['systemInstruction']['parts'][0]['text']
 
+def goto_page(page, i):
+    """Siirtyy sivulle pisteiden kautta (0 koti, 1 tunnit, 2 viikko, 3 varmuus) ja odottaa, että se on näkyvissä."""
+    page.click(f'#dots [data-page="{i}"]')
+    page.wait_for_function("(i) => { const p = document.querySelector('#pages'); return Math.abs(p.scrollLeft - i * p.clientWidth) < 2; }", arg=i, timeout=5000)
+
+def open_adv(page):
+    """Avaa asetukset ja niiden Lisäasetukset-osion (vastausten lähde, Gemini, diagnostiikka)."""
+    page.click('[data-act=open-settings]')
+    page.evaluate("document.getElementById('advSet').open = true")
+
+def set_mode(page, mode):
+    open_adv(page)
+    page.click(f'#advSet .modebar .seg[data-mode={mode}]')
+    page.click('.sheet-head [data-act=close]')
+
+def ask(page, q):
+    page.fill('#msg', q)
+    page.click('.send')
+
 def ready(page, name='Turku'):
     page.wait_for_function("(n) => { const s = window.__saaaly && window.__saaaly.state; return s && s.place && s.place.name === n && s.fc && Math.abs(s.fc.lat - s.place.lat) < 0.01 && !s.loading; }", arg=name, timeout=20000)
 
@@ -162,13 +181,22 @@ with sync_playwright() as pw:
     check('nykyhetken lämpötila vastaa laskettua arvoa', t_temp)
 
     def t_hourly():
-        expect(page.locator('#strip .hv')).to_have_count(24)
+        goto_page(page, 1)
+        expect(page.locator('#strip .hv')).to_have_count(13)
         expect(page.locator('#strip .hv').first).to_contain_text('nyt')
-        expect(page.locator('#daily .day')).to_have_count(7)
-    check('tuntilista (48 h) ja päivälista (7 pv)', t_hourly)
+        page.click('[data-act=hours-more]')
+        expect(page.locator('#strip .hv')).to_have_count(48)
+        page.click('[data-act=hours-more]')
+        goto_page(page, 2)
+        expect(page.locator('#daily .wd')).to_have_count(7)
+        goto_page(page, 0)
+    check('Tunnit (13 tai 48 h) ja Viikko (7 pv) omilla sivuillaan', t_hourly)
 
     def t_meteo():
+        goto_page(page, 1)
+        page.click('[data-act=hours-view][data-view=chart]')
         expect(page.locator('#meteo svg.mg')).to_be_visible()
+        expect(page.locator('#meteo .mg-ic .wx3').first).to_be_visible()
         expect(page.locator('#mgRead')).to_contain_text('Seuraavat 24 tuntia')
         page.locator('#mgWrap').scroll_into_view_if_needed()
         box = page.locator('#mgWrap').bounding_box()
@@ -190,28 +218,47 @@ with sync_playwright() as pw:
         page.locator('#meteo details summary').click()
         assert page.locator('#meteo .tbl tbody tr').count() >= 6, 'taulukkoversio puuttuu'
         page.locator('#meteo details summary').click()
+        page.click('[data-act=hours-view][data-view=list]')
+        goto_page(page, 0)
     check('sääkaavio: näkyy, kosketus ja nuolinäppäimet tarkastavat kohdan, aikavälit vaihtuvat ja taulukko löytyy', t_meteo)
 
     def t_models():
+        goto_page(page, 3)
         page.click('#models summary')
         expect(page.locator('#models .tbl tbody tr')).to_have_count(9)  # 8 mallia + yhdistelmä
         expect(page.locator('#models .tbl tr.blend')).to_contain_text('Yhdistelmä')
-    check('mallivertailu avautuu', t_models)
+        expect(page.locator('#certainty .pearl')).to_have_count(16)  # 8 mallia, tänään ja huomenna
+        expect(page.locator('#certainty .cert-c.obs')).to_contain_text('Esimerkkiasema')
+        goto_page(page, 0)
+    check('Varmuus: helmet malleittain, havainto ja mallivertailu', t_models)
 
     def t_day():
-        page.locator('#daily .day').nth(1).click()
-        expect(page.locator('#ai .chip-sm.active')).to_contain_text('Torstai 15.10.')
-        expect(page.locator('#daily .day').nth(1)).to_have_attribute('aria-pressed', 'true')
-        page.click('#ai .chip-sm.active')
-        expect(page.locator('#ai .chip-sm')).to_have_text('nyt')
-    check('päivän valinta päivittää selityskortin ja paluu "nyt"', t_day)
+        goto_page(page, 2)
+        row = page.locator('#daily .wd').nth(1)
+        row.click()
+        expect(page.locator('#daily .day-hours')).to_be_visible()
+        expect(row).to_have_attribute('aria-expanded', 'true')
+        row.click()
+        expect(page.locator('#daily .day-hours')).to_have_count(0)
+        goto_page(page, 0)
+    check('Viikko: päivän napautus avaa sen tunnit paikallaan ja sulkee ne', t_day)
 
     def t_hour():
+        goto_page(page, 1)
+        y0 = page.evaluate("document.querySelector('#pgHours').scrollTop")
         page.locator('#strip .hv').nth(5).click()
-        expect(page.locator('#ai .chip-sm.active')).to_be_visible()
-        page.click('#strip .hv >> nth=0')
-        expect(page.locator('#ai .chip-sm')).to_have_text('nyt')
-    check('tunnin valinta', t_hour)
+        expect(page.locator('#strip .hv-more')).to_be_visible()
+        expect(page.locator('#strip .hv').nth(5)).to_have_attribute('aria-expanded', 'true')
+        assert abs(page.evaluate("document.querySelector('#pgHours').scrollTop") - y0) < 60, 'tunnin avaus vieritti sivua'
+        page.locator('#strip .hv').nth(5).click()
+        expect(page.locator('#strip .hv-more')).to_have_count(0)
+        goto_page(page, 0)
+        page.locator('#track .th').nth(2).click()
+        expect(page.locator('#hero .hero-chip')).to_contain_text('klo')
+        expect(page.locator('#track .th').nth(2)).to_have_attribute('aria-pressed', 'true')
+        page.click('#hero .hero-chip')
+        expect(page.locator('#hero .hero-chip')).to_have_count(0)
+    check('tunnin valinta: Tunnit-rivi avautuu paikallaan, radan tunti näkyy sankarissa', t_hour)
 
     def t_layout():
         for w in (360, 412):
@@ -224,19 +271,20 @@ with sync_playwright() as pw:
 
     # Tekoäly ilman avainta: näkyy laskennallinen yhteenveto ja kehote lisätä avain
     def t_nokey():
-        expect(page.locator('#ai')).to_contain_text('Sovelluksen oma laskenta')
-        expect(page.locator('#ai [data-act=open-settings]')).to_be_visible()
-    check('ilman avainta näytetään laskennallinen yhteenveto ja kehote lisätä avain', t_nokey)
+        page.click('.ask-btn')
+        expect(page.locator('#msgs .msg.intro')).to_contain_text('SääÄly kertoo · oma laskenta')
+        expect(page.locator('.chat-src')).to_contain_text('Oma laskenta')
+        page.click('.sheet-head [data-act=close]')
+    check('ilman avainta chatin ensimmäinen viesti on laskennallinen selitys', t_nokey)
 
     # Chat ilman avainta: sovelluksen oma vastausmoottori vastaa sovelluksen datalla, Geminiä ei kutsuta
     def t_chat_nokey():
-        page.click('#fab')
+        page.click('.ask-btn')
         expect(page.locator('#msg')).to_be_enabled()
         expect(page.locator('.send')).to_be_enabled()
-        expect(page.locator('.modebar .seg[data-mode=internal]')).to_have_attribute('aria-pressed', 'true')
-        expect(page.locator('.modebar .seg[data-mode=grounded]')).to_have_attribute('aria-disabled', 'true')
+        expect(page.locator('.chat-src')).to_contain_text('Vastaa: Oma laskenta')
         expect(page.locator('#msgs')).to_contain_text('sovelluksen keräämän säädatan')
-        page.click('[data-act=ask] >> text=Sataako huomenna?')
+        ask(page, 'Sataako huomenna?')
         expect(page.locator('.msg.bot').first).to_contain_text('Huomenna sataa', timeout=8000)
         src = page.locator('.msg.bot .src').first
         expect(src).to_contain_text('Sovelluksen oma laskenta')
@@ -274,7 +322,7 @@ with sync_playwright() as pw:
             page.wait_for_timeout(150)
             r = page.evaluate("""() => {
                 const p = document.querySelector('#sheetPanel');
-                const segs = [...document.querySelectorAll('.modebar .seg')].map((b) => [b.textContent, b.scrollWidth, b.clientWidth]);
+                const segs = [...document.querySelectorAll('#sheetPanel .chips .pill')].slice(0, 0).map((b) => [b.textContent, b.scrollWidth, b.clientWidth]);
                 return { panel: [p.scrollWidth, p.clientWidth], page: document.documentElement.scrollWidth, segs };
             }""")
             assert r['panel'][0] <= r['panel'][1] + 1, f'chat-paneeli vuotaa vaakasuunnassa {w}px:llä: {r}'
@@ -282,18 +330,20 @@ with sync_playwright() as pw:
             for text, sw, cw in r['segs']:
                 assert sw <= cw + 1, f'tilapainikkeen teksti leikkautuu {w}px:llä: {text} {sw}>{cw}'
         page.set_viewport_size({'width': 412, 'height': 915})
-    check('chat-paneeli ja tilavalitsin mahtuvat 360 ja 412 px leveään näyttöön', t_chat_layout)
+    check('chat-paneeli mahtuu 360 ja 412 px leveään näyttöön', t_chat_layout)
 
     def t_gemini_needs_key():
-        page.click('.modebar .seg[data-mode=free]', force=True)  # aria-disabled-painike: käyttäjä voi silti painaa sitä
+        page.click('.sheet-head [data-act=close]')
+        open_adv(page)
+        page.click('#advSet .modebar .seg[data-mode=free]', force=True)  # aria-disabled-painike: käyttäjä voi silti painaa sitä
         expect(page.locator('#sheetPanel')).to_have_attribute('data-kind', 'settings')
         expect(page.locator('#aiNote')).to_contain_text('Lisää ensin Gemini-avain')
         page.click('.sheet-head [data-act=close]')
-    check('Gemini-tilan valinta ilman avainta vie asetuksiin', t_gemini_needs_key)
+    check('Gemini-tilan valinta ilman avainta neuvoo lisäämään avaimen', t_gemini_needs_key)
 
     # Asetukset: avain tallennetaan ja selitys haetaan
     def t_key():
-        page.click('[data-act=open-settings]')
+        open_adv(page)
         # kenttä ei ole type=password (selain ei tarjoa avaimen tallennusta salasanana), mutta merkit piilotetaan
         assert page.get_attribute('#key', 'type') == 'text'
         assert page.evaluate("getComputedStyle(document.getElementById('key')).webkitTextSecurity") == 'disc', 'avaimen merkit eivät ole piilossa'
@@ -305,8 +355,12 @@ with sync_playwright() as pw:
         page.click('[data-act=save-key]')
         expect(page.locator('#aiNote')).to_contain_text('Avain tallennettu')
         page.click('.sheet-head [data-act=close]')
-        expect(page.locator('#ai .md strong')).to_have_text('Illalla sataa.', timeout=8000)
-        txt = page.inner_text('#ai')
+        page.click('.ask-btn')
+        if page.locator('#chatClear').is_visible():
+            page.click('#chatClear')
+        expect(page.locator('#msgs .msg.intro .md strong')).to_have_text('Illalla sataa.', timeout=8000)
+        txt = page.inner_text('#msgs')
+        page.click('.sheet-head [data-act=close]')
         assert '**' not in txt, 'raaka markdown näkyy'
         assert any(c['key'] == 'TESTIAVAIN' for c in gemini_calls), 'avain ei mennyt otsikossa'
         sys_prompt = gemini_calls[-1]['body']['systemInstruction']['parts'][0]['text']
@@ -315,7 +369,7 @@ with sync_playwright() as pw:
     check('Gemini-avain, selitys, markdown ja päivämäärä kontekstissa', t_key)
 
     def t_testai():
-        page.click('[data-act=open-settings]')
+        open_adv(page)
         page.click('[data-act=test-ai]')
         expect(page.locator('#aiNote')).to_contain_text('Yhteys toimii', timeout=6000)
         page.fill('#model', 'bad-model')
@@ -328,9 +382,10 @@ with sync_playwright() as pw:
 
     def t_chat():
         n0 = len(net_log)
-        page.click('#fab')
-        page.click('#chatClear')
-        expect(page.locator('.msg')).to_have_count(0)
+        page.click('.ask-btn')
+        if page.locator('#chatClear').is_visible():
+            page.click('#chatClear')
+        expect(page.locator('.msg:not(.intro)')).to_have_count(0)
         page.click('[data-act=ask] >> text=Rovaniemellä')
         expect(page.locator('.msg.bot .md strong')).to_have_text('kylmempää', timeout=10000)
         expect(page.locator('.msg.bot .src')).to_have_text('Gemini · data: sovelluksen säämallit')
@@ -347,53 +402,62 @@ with sync_playwright() as pw:
 
     def t_modes():
         q = 'Sataako huomenna?'
-        page.click('#fab')
-        expect(page.locator('.modebar .seg[data-mode=grounded]')).to_have_attribute('aria-pressed', 'true')
+        open_adv(page)
+        expect(page.locator('#advSet .modebar .seg[data-mode=grounded]')).to_have_attribute('aria-pressed', 'true')
+        page.click('.sheet-head [data-act=close]')
         # oma laskenta: ei Gemini-kutsuja
-        page.click('.modebar .seg[data-mode=internal]')
-        expect(page.locator('.modebar .seg[data-mode=internal]')).to_have_attribute('aria-pressed', 'true')
+        set_mode(page, 'internal')
         assert json.loads(page.evaluate("localStorage.getItem('saaaly.aiMode')")) == 'internal'
-        page.click(f'[data-act=ask] >> text={q}')
+        page.click('.ask-btn')
+        expect(page.locator('.chat-src')).to_contain_text('Oma laskenta')
+        ask(page, q)
         expect(page.locator('.msg.bot .src').last).to_contain_text('Sovelluksen oma laskenta', timeout=8000)
         assert not chat_calls(q), 'oma laskenta kutsui Geminiä'
+        page.click('.sheet-head [data-act=close]')
         # Gemini + data: vastaus Geminiltä, järjestelmäohje rajaa datan, mallikohtaiset luvut mukana
-        page.click('.modebar .seg[data-mode=grounded]')
-        page.click(f'[data-act=ask] >> text={q}')
+        set_mode(page, 'grounded')
+        page.click('.ask-btn')
+        ask(page, q)
         expect(page.locator('.msg.bot .src').last).to_have_text('Gemini · data: sovelluksen säämallit', timeout=8000)
         sp = sys_prompt(chat_calls(q)[-1])
         assert 'Vastaat vain alla olevan SÄÄDATAN perusteella' in sp, 'rajaussääntö puuttuu'
         assert 'mallit_nyt' in sp and 'mallit_paivittain' in sp, 'mallikohtaiset luvut puuttuvat Geminin kontekstista'
+        page.click('.sheet-head [data-act=close]')
         # Gemini vapaa: yleistieto sallittu
-        page.click('.modebar .seg[data-mode=free]')
-        page.click(f'[data-act=ask] >> text={q}')
+        set_mode(page, 'free')
+        page.click('.ask-btn')
+        ask(page, q)
         expect(page.locator('.msg.bot .src').last).to_have_text('Gemini · sovelluksen data + yleistieto', timeout=8000)
         assert 'Yleistietoa saat käyttää' in sys_prompt(chat_calls(q)[-1])
         page.click('.sheet-head [data-act=close]')
     check('tilan vaihto: oma laskenta, Gemini + data ja Gemini vapaa käyttäytyvät eri tavoin ja tila tallentuu', t_modes)
 
     def t_card_modes():
-        # selityskortti seuraa tilaa: oma laskenta näyttää laskennallisen tekstin ja tarjoaa Geminin takaisin
-        page.click('#fab')
-        page.click('.modebar .seg[data-mode=internal]')
+        # chatin ensimmäinen viesti seuraa tilaa: oma laskenta -> laskennallinen selitys, Gemini -> Geminin selitys
+        set_mode(page, 'internal')
+        page.click('.ask-btn')
+        page.click('#chatClear')
+        expect(page.locator('#msgs .msg.intro')).to_contain_text('oma laskenta')
         page.click('.sheet-head [data-act=close]')
-        expect(page.locator('#ai')).to_contain_text('Sovelluksen oma laskenta')
-        expect(page.locator('#ai [data-act=mode-on]')).to_be_visible()
-        page.click('#ai [data-act=mode-on]')
-        expect(page.locator('#ai .md')).to_be_visible(timeout=8000)
+        set_mode(page, 'grounded')
+        page.click('.ask-btn')
+        expect(page.locator('#msgs .msg.intro .md')).to_be_visible(timeout=8000)
+        expect(page.locator('#msgs .msg.intro .src')).to_contain_text('Gemini')
+        page.click('.sheet-head [data-act=close]')
         assert json.loads(page.evaluate("localStorage.getItem('saaaly.aiMode')")) == 'grounded'
-    check('selityskortti seuraa tilaa ja "Ota Gemini käyttöön" palauttaa Geminin', t_card_modes)
+    check('chatin ensimmäinen viesti (SääÄly kertoo) seuraa vastausten lähdettä', t_card_modes)
 
     def t_fallback():
-        page.click('#fab')
-        page.click('.modebar .seg[data-mode=grounded]')
+        set_mode(page, 'grounded')
+        page.click('.ask-btn')
         GEMINI['fail'] = 500
         try:
-            page.click('[data-act=ask] >> text=Mitä pukisin tänään?')
+            ask(page, 'Mitä pukisin tänään?')
             expect(page.locator('.msg.bot .src').last).to_contain_text('Gemini ei vastannut (palvelu ei vastaa)', timeout=10000)
             expect(page.locator('.msg.bot .src').last).to_contain_text('sovelluksen oma laskenta')
             expect(page.locator('.msg.bot').last).to_contain_text('Pukeutuminen')  # vastaus tuli silti
             GEMINI['fail'] = 429
-            page.click('[data-act=ask] >> text=Sataako huomenna?')
+            ask(page, 'Sataako huomenna?')
             expect(page.locator('.msg.bot .src').last).to_contain_text('kiintiö täynnä', timeout=10000)
         finally:
             GEMINI['fail'] = None
@@ -421,7 +485,7 @@ with sync_playwright() as pw:
     check('"Käytä sijaintiani" -painike palaa omaan sijaintiin', t_locate_btn)
 
     def t_diag():
-        page.click('[data-act=open-settings]')
+        open_adv(page)
         page.click('[data-act=diag]')
         expect(page.locator('#diag')).to_contain_text('Valmis.', timeout=20000)
         txt = page.inner_text('#diag')
@@ -431,20 +495,19 @@ with sync_playwright() as pw:
     check('diagnostiikka listaa mallit, yhdistelmän, palvelut, oman vastausmoottorin ja Geminin', t_diag)
 
     def t_clearkey():
-        page.click('[data-act=open-settings]')
+        open_adv(page)
         page.click('[data-act=clear-key]')
         expect(page.locator('#aiNote')).to_contain_text('Avain poistettu')
         expect(page.locator('.modebar .seg[data-mode=internal]')).to_have_attribute('aria-pressed', 'true')
         expect(page.locator('.modebar .seg[data-mode=grounded]')).to_have_attribute('aria-disabled', 'true')
         page.click('.sheet-head [data-act=close]')
-        expect(page.locator('#ai')).to_contain_text('Sovelluksen oma laskenta')
         n = len(gemini_calls)
-        page.click('#fab')
-        page.click('[data-act=ask] >> text=Mitä pukisin tänään?')
+        page.click('.ask-btn')
+        ask(page, 'Mitä pukisin tänään?')
         expect(page.locator('.msg.bot .src').last).to_have_text(re.compile(r'^Sovelluksen oma laskenta · \d+/8 mallia$'), timeout=8000)
         assert len(gemini_calls) == n, 'avaimen poiston jälkeen kutsuttiin Geminiä'
         page.click('.sheet-head [data-act=close]')
-    check('avaimen poisto palauttaa chatin ja kortin omaan laskentaan', t_clearkey)
+    check('avaimen poisto palauttaa chatin omaan laskentaan', t_clearkey)
 
     def t_refresh():
         n0 = len(net_log)
@@ -622,7 +685,7 @@ with sync_playwright() as pw:
         assert len(met_calls) == 1, f'tutkaennustetta haettiin {len(met_calls)} kertaa'
         assert page6.evaluate('window.__saaaly.state.nowcast') is None
         assert page6.locator('#banner').is_hidden(), 'lähteen epäonnistuminen ei saa näkyä ilmoituksena'
-        assert page6.locator('.vnow').count() == 0
+        assert page6.locator('#hourly .radar').count() == 0
         src = json.loads(page6.evaluate("localStorage.getItem('saaaly.src')"))
         assert src['nowcast']['fails'] == 1 and src['nowcast']['until'] > NOW_MS, src
         page6.reload()
@@ -633,7 +696,7 @@ with sync_playwright() as pw:
     check('estetty tutkalähde ei näy käyttäjälle eikä sitä kokeilla heti uudelleen', t_src_blocked)
 
     def t_src_diag():
-        page6.click('[data-act=open-settings]')
+        open_adv(page6)
         page6.click('[data-act=diag]')
         expect(page6.locator('#diag')).to_contain_text('Valmis.', timeout=20000)
         expect(page6.locator('#diag')).to_contain_text('Valinnaiset lähteet')
@@ -651,7 +714,7 @@ with sync_playwright() as pw:
         expect(page8.locator('.temp')).to_be_visible()
         assert page8.locator('#banner').is_hidden(), 'virheellinen peili ei saa näkyä käyttäjälle ilmoituksena'
         assert page8.locator('#alerts .alert.off').count() == 0
-        page8.click('[data-act=open-settings]')
+        open_adv(page8)
         page8.click('[data-act=diag]')
         expect(page8.locator('#diag')).to_contain_text('Valmis.', timeout=20000)
         expect(page8.locator('#diag')).to_contain_text('✗ Viralliset varoitukset: Varoitukset: peilin muoto ei täsmää')

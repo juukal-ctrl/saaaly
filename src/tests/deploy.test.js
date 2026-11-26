@@ -10,12 +10,13 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const site = join(root, 'julkaise');
 const HINT = ' (aja: node tools/build.mjs)';
 const EXPECTED = ['index.html', 'crash.js', 'saaaly.js', 'app.css', 'sw.js', 'version.json', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
-const WX = 'd-cloud d-part d-part_cloud d-part_sun d-rain d-snow d-storm d-sun n-cloud n-moon n-moonpart n-rain n-snow n-storm'.split(' ').map((n) => `wx-${n}.webp`).concat(['trk-d.webp', 'trk-n.webp']);
-EXPECTED.push(...WX);
+const WX = 'd-cloud d-part d-part_cloud d-part_sun d-rain d-snow d-storm d-sun n-cloud n-moon n-moonpart n-rain n-snow n-storm'.split(' ').map((n) => `wx-${n}.webp`).concat(['trk-d.webp', 'trk-n.webp', 'braid.webp', 'cap.webp', 'pearls.webp']);
+const FONTS = ['inter-display-regular.woff', 'inter-display-medium.woff', 'inter-display-semibold.woff', 'inter-display-bold.woff'];
+EXPECTED.push(...WX, ...FONTS, 'inter-OFL.txt');
 
 const read = (name) => readFileSync(join(site, name), 'utf8');
 const names = () => readdirSync(site).sort();
-const flatten = (s) => s.replace(/(["'])(?:css|icons)\//g, '$1');
+const flatten = (s) => s.replace(/(["'])(?:css|icons|fonts)\//g, '$1');
 const isLocal = (u) => !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(u);
 
 function refs() {
@@ -36,8 +37,10 @@ test('julkaise/ vastaa lähdekansiota (ei vanhentuneita kopioita)', () => {
   same(join(site, 'saaaly.js'), join(root, 'saaaly.js'), 'saaaly.js');
   same(join(site, 'crash.js'), join(root, 'crash.js'), 'crash.js');
   // julkaistussa tyylitiedostossa kuvapolut on litistetty (url(../icons/x) -> url(x))
-  assert.equal(read('app.css'), readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/icons\//g, 'url('), `app.css on vanhentunut${HINT}`);
+  assert.equal(read('app.css'), readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/(?:icons|fonts)\//g, 'url('), `app.css on vanhentunut${HINT}`);
   for (const f of ['icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', ...WX]) same(join(site, f), join(root, 'icons', f), f);
+  for (const f of FONTS) same(join(site, f), join(root, 'fonts', f), f);
+  same(join(site, 'inter-OFL.txt'), join(root, 'fonts', 'OFL.txt'), 'inter-OFL.txt');
   for (const f of ['index.html', 'manifest.webmanifest', 'sw.js']) {
     const built = read(f)
       .replace(/const BUILD = '[0-9a-f]{10}';/, "const BUILD = '__BUILD__';")
