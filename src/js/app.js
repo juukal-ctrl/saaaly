@@ -19,9 +19,11 @@ import { fetchObs } from './observations.js';
 import { makeDemoFetch } from './demo.js';
 import { agoText, selLabel, placeHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 import { homeHeadline } from './headline.js';
-import { createCube } from './cube.js';
+import { createCube, createCubeChrome } from './cube.js';
+import { createMapView } from './mapview.js';
+import { FOREIGN_CITIES } from './gazetteer.js';
 
-const VERSION = '0.7.1';
+const VERSION = '0.8.0';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
@@ -967,8 +969,55 @@ const TITLES = { search: 'Paikkakunta', settings: 'Asetukset', chat: 'Kysy Sää
 function sheetContent(kind) {
   if (kind === 'search') return searchSheetHtml({ recent: state.recent });
   if (kind === 'chat') return chatSheetHtml({ mode: aiMode(), hasKey: keyOn(), hasMessages: state.chat.length > 0 });
-  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
+  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs', 'radarmap', 'cloudmap'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
   return settingsSheetHtml({ hasKey: keyOn(), mode: aiMode(), model: aiSettings.model(), refreshMin: state.refreshMin, models: state.models, demo: DEMO, sens: state.sens, anim: store.bool('anim', true) });
+}
+
+// ---------- Kartta (Tutka ja Pilvet) ----------
+
+let mapView = null;
+let mapEntry = false;
+
+function openMap(tab = 'radar') {
+  if (state.sheet) closeSheet();
+  if (!mapView) {
+    mapView = createMapView($('#mapView'), {
+      getPlace: () => state.place,
+      getTz: () => state.fc?.tz || 'Europe/Helsinki',
+      nowMs,
+      fetchFn,
+      fetchStatic: defaultFetch,
+      demo: DEMO,
+      scenario,
+      cities: [...FI_CITIES, ...FOREIGN_CITIES],
+      onSource: (id, ok, info) => (ok ? sources.ok(id, nowMs(), info) : sources.fail(id, info, nowMs())),
+      onClose: () => {
+        el.app.inert = false;
+        el.fab.inert = false;
+        sky?.start();
+        if (mapEntry) {
+          mapEntry = false;
+          ignorePop = true;
+          try {
+            history.back();
+          } catch {
+            ignorePop = false;
+          }
+        }
+      },
+    });
+  }
+  if (mapView.isOpen) return;
+  el.app.inert = true;
+  el.fab.inert = true;
+  sky?.stop();
+  try {
+    history.pushState({ saaalyMap: true }, '');
+    mapEntry = true;
+  } catch {
+    mapEntry = false;
+  }
+  mapView.open(tab);
 }
 
 function openSheet(kind) {
@@ -1009,11 +1058,13 @@ function closeSheet() {
   document.body.classList.remove('sheet-open');
   sky?.start();
   if (hasEntry) {
+    // Oma merkintä pois historiasta; sen popstate ohitetaan, jotta alisivulla (Tunnit, Viikko, Varmuus) pysytään.
     hasEntry = false;
+    ignorePop = true;
     try {
       history.back();
     } catch {
-      /* ei väliä */
+      ignorePop = false;
     }
   }
   setTimeout(() => {
@@ -1445,6 +1496,7 @@ const ACTIONS = {
   'open-search': () => openSheet('search'),
   'open-settings': () => openSheet('settings'),
   'open-chat': () => openSheet('chat'),
+  'open-map': (t) => openMap(t.dataset.tab || 'radar'),
   'open-about': () => openSheet('about'),
   'update-app': () => updateApp(),
   'mg-range': (t) => {
@@ -1658,6 +1710,11 @@ function bindEvents() {
   });
 
   window.addEventListener('popstate', () => {
+    if (mapView?.isOpen) {
+      mapEntry = false;
+      mapView.close();
+      return;
+    }
     if (state.sheet) {
       hasEntry = false;
       closeSheet();
@@ -1673,9 +1730,23 @@ function bindEvents() {
     }
   });
   if (el.pages) {
+    // Sivun alue alkaa yläpalkin ja ilmoitusten alta: paikka luetaan virrassa olevasta varauksesta.
+    const slot = $('#pagesSlot');
+    const measureTop = () => el.pages.style.setProperty('--top-h', `${slot ? slot.offsetTop : 0}px`);
+    measureTop();
+    if (typeof ResizeObserver === 'function' && slot) new ResizeObserver(measureTop).observe(slot);
+    const chrome = createCubeChrome({
+      app: el.app,
+      faces: [...el.pages.querySelectorAll('.face')],
+      sky: $('#sky'),
+      chrome: () => [$('.top', el.app), el.banner, el.welcome, el.fab],
+    });
     cube = createCube(el.pages, {
       onSettle: onPageChange,
       onTurn: markDot,
+      onEnter: chrome.enter,
+      onFrame: chrome.frame,
+      onRest: chrome.rest,
       reduceMotion,
       // Näiden vaakaveto kuuluu niille itselleen: päivän tuntinauha ja sääkaavion tarkastelu.
       ignore: '.dstrip, #mgWrap, input, textarea, select',
@@ -1753,5 +1824,5 @@ async function boot() {
   setTimeout(checkForUpdate, 4000, { force: true });
 }
 
-globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, get cube() { return cube; } };
+globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, openMap, get cube() { return cube; }, get map() { return mapView; } };
 boot();

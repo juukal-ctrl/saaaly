@@ -1,5 +1,24 @@
 # Muutosloki
 
+## 0.8.0 – Koko näytön kuutio, tutka ja pilviennuste kartalla
+
+Kuutio
+
+- **Koko näyttö kääntyy.** Kuution kyljet ovat nyt koko näytön kokoisia: taivas, yläpalkki, ilmoitukset, varoitukset ja alapalkki kääntyvät sivun mukana, ja kuution ympärillä näkyy syvä tausta. Levossa näkymä on ennallaan.
+
+Kartta
+
+- **Tutka ja Pilvet.** Alapalkin uusi karttapainike (Kysy SääÄlyltä -pillerin vieressä) avaa koko näytön kartan. Tunnit-sivun tutkakortissa on lisäksi Kartta-painike.
+- **Tutka** näyttää havaitun sateen viimeisen kahden tunnin ajalta 20 minuutin välein (RainViewer). Kehykset toistuvat automaattisesti, ja liukusäätimellä voi valita ajan ("klo 13.30 · uusin", "klo 11.30 · 2 t sitten").
+- **Pilvet** näyttää säämallien pilvisyyden ja sateen seuraavalle vuorokaudelle tunneittain (Open-Meteo, noin 40–60 km:n ruudukko, lähelle zoomatessa tiheämpi). Lumi näkyy omalla värillään.
+- Kartta liikkuu sormella ja zoomautuu nipistämällä, kaksoisnapautuksella tai painikkeilla. Keskitä-painike palauttaa oman paikan keskelle.
+- Pohjakartta (rannikot, järvet ja rajat) tulee sovelluksen mukana (Natural Earth): Pohjoismaat tarkkana, muu Eurooppa karkeampana. Karttapohjaa ei siis haeta karttapalvelusta.
+- Kartta sulkeutuu ×:stä, Esc-näppäimellä ja Androidin takaisin-eleellä.
+
+Korjaukset
+
+- Asetusten, chatin tai kartan sulkeminen Tunnit-, Viikko- tai Varmuus-sivulla ei enää palauta Kotiin.
+
 ## 0.7.1 – Sivukuutio
 
 - **Sivut ovat nyt kuution kyljet.** Koti, Tunnit, Viikko ja Varmuus ovat näytön kokoisen kuution neljä kylkeä. Kuutio kääntyy sormen mukana; irrotus kääntää sen lähimmälle kyljelle ja nopea pyyhkäisy seuraavalle. Kuutio jatkaa ympäri: Varmuudesta eteenpäin tulee Koti ja Kodista taaksepäin Varmuus.

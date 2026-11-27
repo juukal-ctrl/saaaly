@@ -12,7 +12,8 @@ const HINT = ' (aja: node tools/build.mjs)';
 const EXPECTED = ['index.html', 'crash.js', 'saaaly.js', 'app.css', 'sw.js', 'version.json', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 const WX = 'd-cloud d-part d-part_cloud d-part_sun d-rain d-snow d-storm d-sun n-cloud n-moon n-moonpart n-rain n-snow n-storm'.split(' ').map((n) => `wx-${n}.webp`).concat(['trk-d.webp', 'trk-n.webp', 'braid.webp', 'cap.webp', 'pearls.webp']);
 const FONTS = ['inter-display-regular.woff', 'inter-display-medium.woff', 'inter-display-semibold.woff', 'inter-display-bold.woff'];
-EXPECTED.push(...WX, ...FONTS, 'inter-OFL.txt');
+const MAPS = ['map-nordic.json', 'map-europe.json'];
+EXPECTED.push(...WX, ...FONTS, 'inter-OFL.txt', ...MAPS);
 
 const read = (name) => readFileSync(join(site, name), 'utf8');
 const names = () => readdirSync(site).sort();
@@ -34,7 +35,9 @@ test('julkaise/ sisältää täsmälleen julkaistavat tiedostot eikä yhtään a
 
 test('julkaise/ vastaa lähdekansiota (ei vanhentuneita kopioita)', () => {
   const same = (a, b, label) => assert.ok(readFileSync(a).equals(readFileSync(b)), `${label} on vanhentunut${HINT}`);
-  same(join(site, 'saaaly.js'), join(root, 'saaaly.js'), 'saaaly.js');
+  // Julkaisussa pohjakartat ovat samassa kansiossa: vain MAP_DIR eroaa lähteestä.
+  assert.equal(read('saaaly.js'), readFileSync(join(root, 'saaaly.js'), 'utf8').replace("const MAP_DIR = 'maps/';", "const MAP_DIR = '';"), `saaaly.js on vanhentunut${HINT}`);
+  for (const m of MAPS) same(join(site, m), join(root, 'maps', m), m);
   same(join(site, 'crash.js'), join(root, 'crash.js'), 'crash.js');
   // julkaistussa tyylitiedostossa kuvapolut on litistetty (url(../icons/x) -> url(x))
   assert.equal(read('app.css'), readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/(?:icons|fonts)\//g, 'url('), `app.css on vanhentunut${HINT}`);
@@ -96,7 +99,7 @@ test('versiotunnus on sama saaaly.js:ssä, sw.js:ssä ja version.json:ssa, ja ve
 
 // ---- Content-Security-Policy ----
 
-const LINK_ONLY = new Set(['www.ilmatieteenlaitos.fi', 'open-meteo.com', 'aistudio.google.com', 'www.w3.org']); // linkkejä tai nimiavaruuksia, ei verkkopyyntöjä
+const LINK_ONLY = new Set(['www.ilmatieteenlaitos.fi', 'open-meteo.com', 'aistudio.google.com', 'www.w3.org', 'www.rainviewer.com']); // linkkejä tai nimiavaruuksia, ei verkkopyyntöjä
 
 function csp() {
   const m = read('index.html').match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/);
@@ -119,7 +122,8 @@ test('CSP on ensimmäisenä head-elementissä, kieltää oletuksena kaiken eikä
 });
 
 test('CSP:n sallimat osoitteet ovat täsmälleen ne, joita koodi käyttää (ei vanhentuneita, ei puuttuvia)', () => {
-  const allowed = csp()['connect-src'].filter((x) => x.startsWith('https://')).map((x) => x.slice(8));
+  // Haettavat osoitteet (connect-src) ja kuvina näytettävät (img-src, tutkatiilet).
+  const allowed = [...csp()['connect-src'], ...csp()['img-src']].filter((x) => x.startsWith('https://')).map((x) => x.slice(8));
   const used = new Set();
   for (const f of readdirSync(join(root, 'js')).filter((n) => n.endsWith('.js'))) {
     for (const m of readFileSync(join(root, 'js', f), 'utf8').matchAll(/https:\/\/([a-z0-9.-]+)/gi)) used.add(m[1]);

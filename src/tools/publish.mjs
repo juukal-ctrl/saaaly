@@ -32,6 +32,8 @@ const EXPECTED = [
   'inter-display-semibold.woff',
   'inter-display-bold.woff',
   'inter-OFL.txt',
+  'map-nordic.json',
+  'map-europe.json',
   ...['d-sun', 'd-part_sun', 'd-part', 'd-part_cloud', 'd-cloud', 'd-rain', 'd-snow', 'd-storm', 'n-moon', 'n-moonpart', 'n-cloud', 'n-rain', 'n-snow', 'n-storm'].map((n) => `wx-${n}.webp`),
 ];
 

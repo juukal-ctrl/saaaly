@@ -50,7 +50,7 @@ export function velocity(samples) {
  * onSettle(i) kutsutaan, kun kuutio on levossa uudella tai samalla kyljellä; onStart, kun kääntö alkaa.
  * ignore: valitsin alueille, joiden vaakaveto kuuluu niille itselleen (tuntinauha, sääkaavio).
  */
-export function createCube(root, { onSettle = () => {}, onStart = () => {}, onTurn = () => {}, reduceMotion = false, ignore = '' } = {}) {
+export function createCube(root, { onSettle = () => {}, onStart = () => {}, onTurn = () => {}, onEnter = () => {}, onFrame = () => {}, onRest = () => {}, reduceMotion = false, ignore = '' } = {}) {
   const cube = root.querySelector('.cube');
   const faces = [...cube.children];
   const n = faces.length;
@@ -80,23 +80,28 @@ export function createCube(root, { onSettle = () => {}, onStart = () => {}, onTu
 
   function render() {
     cube.style.transform = `translateZ(${-half}px) rotateY(${(-p * 90).toFixed(3)}deg)`;
+    const shown = [];
     faces.forEach((f, i) => {
       const r = Math.abs(relPos(i, p, n));
       setVis(i, r < 0.999);
+      if (r < 0.999) shown.push(i);
       f.style.setProperty('--turn', Math.min(1, r).toFixed(3));
     });
+    onFrame(shown);
     const k = mod(Math.round(p), n);
     if (k !== near) onTurn((near = k));
   }
 
   function enter3d() {
     if (!root.classList.contains('cube-rest')) return;
+    onEnter();
     root.classList.remove('cube-rest');
     faces.forEach((f, i) => (f.style.transform = `rotateY(${i * 90}deg) translateZ(${half}px)`));
     render();
   }
 
   function rest() {
+    if (!root.classList.contains('cube-rest')) onRest();
     root.classList.add('cube-rest');
     cube.style.transform = '';
     faces.forEach((f, i) => {
@@ -257,4 +262,74 @@ export function createCube(root, { onSettle = () => {}, onStart = () => {}, onTu
       render();
     },
   };
+}
+
+/**
+ * Koko näytön kuutio: käännön ajaksi jokaiselle näkyvälle kyljelle piirretään oma taivas (kopio taivaskankaasta) ja
+ * kopiot yläpalkista, ilmoituksista ja alapalkista samoille paikoille. Oikeat elementit piilotetaan käännön ajaksi,
+ * joten koko näyttö kääntyy yhtenä esineenä. Levossa kopiot poistetaan ja oikeat palaavat (ainoat vuorovaikutteiset).
+ * app: alue, jonka kokoisia kyljet ovat; sky: taivaskangas; chrome(): kopioitavat elementit; dots: valitsin pisteille.
+ */
+export function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]' }) {
+  const layers = faces.map((f) => {
+    const cv = document.createElement('canvas');
+    cv.className = 'face-sky';
+    cv.setAttribute('aria-hidden', 'true');
+    const ch = document.createElement('div');
+    ch.className = 'face-chrome';
+    ch.setAttribute('aria-hidden', 'true');
+    ch.inert = true;
+    f.prepend(cv);
+    f.append(ch);
+    return { cv, ch, ctx: cv.getContext('2d') };
+  });
+  let src = null; // taivaskankaan alue, joka vastaa kylkeä (kangaspikseleinä)
+
+  function enter() {
+    document.body.classList.add('cube-3d');
+    const base = app.getBoundingClientRect();
+    const items = chrome().filter((e) => e && !e.hidden && e.getClientRects().length);
+    const rects = items.map((e) => e.getBoundingClientRect());
+    const k = sky && sky.clientWidth ? sky.width / sky.clientWidth : 1;
+    src = sky ? { x: base.left * k, y: base.top * k, w: base.width * k, h: base.height * k } : null;
+    layers.forEach((L, i) => {
+      L.ch.textContent = '';
+      items.forEach((e, j) => {
+        const c = e.cloneNode(true);
+        c.removeAttribute('id');
+        c.querySelectorAll('[id]').forEach((x) => x.removeAttribute('id'));
+        const r = rects[j];
+        Object.assign(c.style, { position: 'absolute', left: `${r.left - base.left}px`, top: `${r.top - base.top}px`, width: `${r.width}px`, height: `${r.height}px`, right: 'auto', bottom: 'auto', margin: '0', maxWidth: 'none' });
+        c.querySelectorAll(dots).forEach((b) => (+b.dataset.page === i ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current')));
+        L.ch.append(c);
+      });
+      if (src) {
+        const w = Math.max(1, Math.round(src.w));
+        const h = Math.max(1, Math.round(src.h));
+        if (L.cv.width !== w || L.cv.height !== h) {
+          L.cv.width = w;
+          L.cv.height = h;
+        }
+      }
+    });
+  }
+
+  function frame(shown) {
+    if (!src) return;
+    for (const i of shown) {
+      const L = layers[i];
+      try {
+        L.ctx.drawImage(sky, src.x, src.y, src.w, src.h, 0, 0, L.cv.width, L.cv.height);
+      } catch {
+        /* kangas ei vielä valmis */
+      }
+    }
+  }
+
+  function rest() {
+    document.body.classList.remove('cube-3d');
+    layers.forEach((L) => (L.ch.textContent = ''));
+  }
+
+  return { enter, frame, rest };
 }

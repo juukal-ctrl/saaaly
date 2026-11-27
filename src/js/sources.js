@@ -27,6 +27,20 @@ export const SOURCE_INFO = {
     license: 'CC BY 4.0',
     note: 'Lähimmän sääaseman mitattu lämpötila: vertailukohta ennusteelle (Varmuus-sivu).',
   },
+  radarmap: {
+    name: 'Tutkakartta',
+    provider: 'RainViewer',
+    url: 'https://www.rainviewer.com',
+    license: 'Henkilökohtainen käyttö, lähdemaininta',
+    note: 'Havaittu sade kartalla viimeisen kahden tunnin ajalta (kehys 20 minuutin välein). Haetaan vain, kun avaat kartan.',
+  },
+  cloudmap: {
+    name: 'Pilvi- ja sade-ennuste kartalla',
+    provider: 'Open-Meteo',
+    url: 'https://open-meteo.com',
+    license: 'CC BY 4.0',
+    note: 'Säämallien pilvisyys ja sade noin 45 km:n ruudukossa seuraavalle vuorokaudelle. Haetaan vain, kun avaat kartan.',
+  },
   air: {
     name: 'Ilmanlaatu ja siitepöly',
     provider: 'Open-Meteo / CAMS',

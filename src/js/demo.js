@@ -31,6 +31,58 @@ const HORIZON_H = { metno_nordic: 60, dmi_harmonie_arome_europe: 60 };
 const ENS_POP = new Set(['ecmwf_ifs', 'icon_seamless', 'ukmo_seamless', 'gfs_seamless', 'gem_seamless']);
 const UV_MODELS = new Set(['gfs_seamless', 'ukmo_seamless']);
 
+/**
+ * Esimerkkitilan sää kartalla: itään liikkuva sadevyöhyke ja kuuroja (mm/h), pilvisyys (%) ja lumen osuus.
+ * Sama kenttä antaa tutkan (menneet kehykset) ja ennusteen (tulevat tunnit), joten kartta liikkuu johdonmukaisesti.
+ */
+export function syntheticMapWx(lon, lat, tMs, scenario = 'mixed', anchorMs = 0) {
+  const S = { clear: [0, 0.12], rain: [1.5, 0.96], snow: [1.1, 0.96], thunder: [2.6, 0.8], fog: [0.1, 0.98], mixed: [1, 0.7] }[scenario] || [1, 0.7];
+  // Vyöhyke kulkee esimerkkipaikan (Turku) yli hetkellä anchorMs (+ viive): sateisissa esimerkeissä nyt, sekasäässä illalla.
+  const x = (lon - 22.27) * 55.7;
+  const y = (lat - 60.45) * 111.2;
+  const h = (tMs - anchorMs) / 3.6e6 - (scenario === 'mixed' ? 10 : 0);
+  const X = x - 34 * h;
+  const Y = y - 9 * h;
+  const u = X * 0.55 + Y * 0.83;
+  const across = ((((u + 550) % 1100) + 1100) % 1100) - 550;
+  const front = Math.exp(-(across * across) / (2 * 80 * 80));
+  const cells = Math.max(0, Math.sin(X / 23 + 0.4) * Math.sin(Y / 31 + 1.1) * Math.sin((X - Y) / 47 + 0.3));
+  let precip = S[0] * (front * (0.5 + 1.1 * cells) + (scenario === 'thunder' ? 1.4 * cells * cells : 0));
+  if (precip < 0.06) precip = 0;
+  const swirl = 0.5 + 0.5 * Math.sin(X / 160 + 0.8) * Math.cos(Y / 210 - 0.4);
+  const cloud = 100 * clamp(S[1] * (0.3 + 0.7 * Math.max(front * 1.3, swirl)), 0, 1);
+  return { precip, cloud, snow: scenario === 'snow' ? 1 : 0 };
+}
+
+/** Monen pisteen ennuste (Open-Meteon muoto, timeformat=unixtime) esimerkkitilan karttaan. */
+export function syntheticGrid({ lats, lons, nowMs = Date.now(), hours = 25, scenario = 'mixed' }) {
+  const t0 = Math.floor(nowMs / 3600000) * 3600000;
+  const time = Array.from({ length: hours }, (_, i) => (t0 + i * 3600000) / 1000);
+  return lats.map((la, k) => {
+    const lo = lons[k];
+    const cloud_cover = [];
+    const precipitation = [];
+    const snowfall = [];
+    for (const t of time) {
+      const w = syntheticMapWx(lo, la, t * 1000, scenario, nowMs);
+      cloud_cover.push(Math.round(w.cloud));
+      precipitation.push(Math.round(w.precip * 10) / 10);
+      snowfall.push(w.snow ? Math.round(w.precip * 7) / 10 : 0);
+    }
+    return { latitude: la, longitude: lo, hourly: { time, cloud_cover, precipitation, snowfall } };
+  });
+}
+
+/** RainViewerin weather-maps.json esimerkkinä: 13 kehystä 10 minuutin välein. */
+export function syntheticRadarMaps(nowMs = Date.now()) {
+  const last = Math.floor(nowMs / 600000) * 600 - 600;
+  const past = Array.from({ length: 13 }, (_, i) => {
+    const time = last - (12 - i) * 600;
+    return { time, path: `/v2/radar/demo${time}` };
+  });
+  return { version: '2.0', generated: last + 60, host: 'https://tilecache.rainviewer.com', radar: { past } };
+}
+
 /** Rakentaa Open-Meteon muotoisen vastauksen yhdelle mallille. */
 export function syntheticResponse({ lat, lon, modelId, nowMs = Date.now(), days = 7, tz = 'Europe/Helsinki', scenario = 'mixed' }) {
   const startDate = localNow(nowMs, tz).date;
@@ -174,6 +226,12 @@ export function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
   return async (input) => {
     const url = new URL(typeof input === 'string' ? input : input.url);
     log?.(url.href);
+    if (url.hostname === 'api.open-meteo.com' && (url.searchParams.get('latitude') || '').includes(',')) {
+      const lats = url.searchParams.get('latitude').split(',').map(Number);
+      const lons = url.searchParams.get('longitude').split(',').map(Number);
+      return json(syntheticGrid({ lats, lons, nowMs: nowMs ?? Date.now(), hours: +url.searchParams.get('forecast_hours') || 25, scenario }));
+    }
+    if (url.hostname === 'api.rainviewer.com') return json(syntheticRadarMaps(nowMs ?? Date.now()));
     if (url.hostname === 'api.open-meteo.com') {
       const id = url.searchParams.get('models');
       if (id === 'fmi_seamless' || id === 'dead_model') return json({ error: true, reason: `Cannot initialize MultiDomains from invalid String value ${id} for key models` }, 400);

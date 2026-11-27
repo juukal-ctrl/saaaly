@@ -88,10 +88,29 @@ def gemini_route(route):
 def other_route(route):
     route.fulfill(status=403, headers=CORS, body='{"error":{"message":"estetty testissä"}}')
 
-DATA_RX = re.compile(r'https://(api\.open-meteo\.com|geocoding-api\.open-meteo\.com|api\.bigdatacloud\.net|api\.met\.no|raw\.githubusercontent\.com|opendata\.fmi\.fi)/')
+DATA_RX = re.compile(r'https://(api\.open-meteo\.com|geocoding-api\.open-meteo\.com|api\.bigdatacloud\.net|api\.met\.no|raw\.githubusercontent\.com|opendata\.fmi\.fi|api\.rainviewer\.com)/')
+TILE_RX = re.compile(r'https://tilecache\.rainviewer\.com/')
+tile_log = []
+
+def tile_png():
+    """Tutkatiili testiin: läpinäkyvä 256 px kuva, jossa sininen sadealue."""
+    from PIL import Image, ImageDraw
+    import io
+    im = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+    ImageDraw.Draw(im).ellipse([60, 70, 200, 180], fill=(60, 140, 255, 200))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
+
+TILE_BYTES = tile_png()
+
+def tile_route(route):
+    tile_log.append(route.request.url)
+    route.fulfill(status=200, headers={'content-type': 'image/png', 'access-control-allow-origin': '*'}, body=TILE_BYTES)
 
 def install(ctx):
     ctx.route(DATA_RX, data_route)
+    ctx.route(TILE_RX, tile_route)
     ctx.route(re.compile(r'https://generativelanguage\.googleapis\.com/'), gemini_route)
     ctx.route(re.compile(r'https://(nominatim\.openstreetmap\.org|aistudio\.google\.com)/'), other_route)
 
@@ -269,6 +288,57 @@ with sync_playwright() as pw:
         page.go_back()
         page.wait_for_function(f"() => {CUBE_REST} && window.__saaaly.state.page === 0", timeout=3000)
     check('sivukuutio: vaakaveto kääntää ja jatkaa ympäri, lyhyt veto palaa, veto ei ole napautus, takaisin palaa kotiin', t_cube)
+
+    def t_map():
+        goto_page(page, 0)
+        tile_log.clear()
+        page.click('.map-btn')
+        page.wait_for_function("() => { const d = window.__saaaly.map && window.__saaaly.map.debug(); return d && d.frames === 7 && d.tilesOk > 0 && d.base; }", timeout=10000)
+        expect(page.locator('#mapView')).to_be_visible()
+        assert tile_log and all(re.search(r'/v2/radar/demo\d+/256/\d/\d+/\d+/2/1_0\.png$', u) for u in tile_log), tile_log[:3]
+        assert len(set(tile_log)) <= 7 * 12, f'liikaa tiilihakuja: {len(set(tile_log))}'
+        assert page.evaluate("window.__saaaly.map.debug().map") == 'nordic'
+        set_range = "(v) => { const r = document.querySelector('.mv-range'); r.value = String(v); r.dispatchEvent(new Event('input', { bubbles: true })); }"
+        page.evaluate(set_range, 6)
+        expect(page.locator('.mv-time')).to_have_text(re.compile(r'^klo \d{1,2}\.\d\d · uusin'))
+        assert not page.evaluate("window.__saaaly.map.debug().playing"), 'liukusäädin ei pysäyttänyt toistoa'
+        page.evaluate(set_range, 0)
+        expect(page.locator('.mv-time')).to_have_text(re.compile(r'^klo \d{1,2}\.\d\d · 2 t( \d+ min)? sitten$'))
+        page.click('[data-mv="tab"][data-tab="cloud"]')
+        page.wait_for_function("() => { const d = window.__saaaly.map.debug(); return d.tab === 'cloud' && d.grid > 100 && d.hours === 25; }", timeout=10000)
+        multi = [u for u in net_log if u.startswith('https://api.open-meteo.com/') and ',' in u.split('latitude=')[1].split('&')[0]]
+        assert multi, 'pilviennusteen monen pisteen hakua ei tehty'
+        expect(page.locator('.mv-time')).to_have_text('nyt')
+        page.evaluate(set_range, 5)
+        expect(page.locator('.mv-time')).to_have_text(re.compile(r'^(tänään|huomenna) klo \d{1,2}$'))
+        km0 = page.evaluate("window.__saaaly.map.debug().km")
+        page.click('[data-mv="zoom-in"]')
+        assert page.evaluate("window.__saaaly.map.debug().km") < km0 * 0.8, 'lähennys ei pienentänyt aluetta'
+        page.click('[data-mv="close"]')
+        expect(page.locator('#mapView')).to_be_hidden()
+        # Alisivulta avattu kartta (ja paneeli) sulkeutuu samalle sivulle; takaisin-ele sulkee ensin kartan, sitten palaa kotiin.
+        goto_page(page, 2)
+        page.click('.map-btn')
+        page.wait_for_function("() => window.__saaaly.map.isOpen")
+        page.click('[data-mv="close"]')
+        page.wait_for_timeout(400)
+        assert page.evaluate("window.__saaaly.state.page") == 2, 'kartan sulkeminen vaihtoi sivua'
+        page.click('[data-act="open-settings"]')
+        page.keyboard.press('Escape')
+        page.wait_for_timeout(400)
+        assert page.evaluate("window.__saaaly.state.page") == 2, 'asetusten sulkeminen vaihtoi sivua'
+        page.click('.map-btn')
+        page.wait_for_function("() => window.__saaaly.map.isOpen")
+        page.go_back()
+        page.wait_for_function("() => !window.__saaaly.map.isOpen")
+        expect(page.locator('#mapView')).to_be_hidden()
+        page.wait_for_timeout(300)
+        assert page.evaluate("window.__saaaly.state.page") == 2, 'takaisin-ele vaihtoi sivua kartan sulkemisen sijaan'
+        page.go_back()
+        page.wait_for_function(f"() => {CUBE_REST} && window.__saaaly.state.page === 0", timeout=3000)
+        bad = [e for e in page.errors if 'Content Security Policy' in e or 'Refused' in e]
+        assert not bad, bad
+    check('kartta: tutka ja pilvet avautuvat alapalkista, aikajana ja lähennys toimivat, sulkeutuu ×:stä ja takaisin-eleellä', t_map)
 
     def t_day():
         goto_page(page, 2)

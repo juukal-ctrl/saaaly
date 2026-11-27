@@ -1,4 +1,4 @@
-# SääÄly – AI Weather (versio 0.7.1)
+# SääÄly – AI Weather (versio 0.8.0)
 
 Sääsovellus, joka hakee ennusteen usealta säämallilta (ECMWF, MET Norway, DWD ICON, Météo-France, UK Met Office, NOAA GFS, Kanadan GEM ja kokeiluna Ilmatieteen laitos), yhdistää ne **koodilla** yhdeksi tunti- ja päiväennusteeksi ja kertoo suoraan, mitä se tarkoittaa: mitä pukea, tarvitaanko sateenvarjoa ja milloin sade alkaa tai loppuu. Mukana on chat, jolta voi kysyä säästä suomeksi, myös toisen paikkakunnan säästä.
 
@@ -12,7 +12,7 @@ Mitä kussakin versiossa muuttui: `CHANGELOG.md`.
 
 ## Näin sovellus toimii
 
-Sovelluksen neljä sivua ovat näytön kokoisen kuution kyljet. Kuutiota käännetään pyyhkäisemällä sivuttain tai alapalkin pisteistä, ja se jatkaa ympäri: Varmuudesta eteenpäin tulee Koti. Androidin takaisin-ele palaa kotisivulle.
+Sovelluksen neljä sivua ovat näytön kokoisen kuution kyljet. Kuutiota käännetään pyyhkäisemällä sivuttain tai alapalkin pisteistä, ja se jatkaa ympäri: Varmuudesta eteenpäin tulee Koti. Kääntyessä koko näyttö (taivas, yläpalkki ja alapalkki) kääntyy kylkien mukana. Androidin takaisin-ele palaa kotisivulle.
 
 | Sivu | Mitä siinä on |
 |---|---|
@@ -21,7 +21,7 @@ Sovelluksen neljä sivua ovat näytön kokoisen kuution kyljet. Kuutiota käänn
 | **Viikko** | Seitsemän päivää, viikon suunta ja sadepäivät otsikossa, viikonlopun yhteenveto. Päivän napautus avaa sen tunnit. |
 | **Varmuus** | Kuinka luotettava ennuste on tänään ja huomenna. Jokainen helmi on yksi säämalli: vasemmalla kylmempi, oikealla lämpimämpi kuin SääÄlyn ennuste. Lisäksi mallivertailu ja lähimmän sääaseman havainto. |
 
-Yläpalkin **Tänään / Huomenna** vaihtaa kotisivun ja Tunnit-sivun huomiseen. **Kysy SääÄlyltä** avaa chatin. Valikosta (☰) löytyvät päivitys, sijainti, pukeutumisen kylmänsietokyky, päivitysväli, taustan animaatio, tiedot ja lisäasetukset.
+Yläpalkin **Tänään / Huomenna** vaihtaa kotisivun ja Tunnit-sivun huomiseen. **Kysy SääÄlyltä** avaa chatin, ja sen vieressä oleva **karttapainike** avaa koko näytön kartan: **Tutka** (havaittu sade viimeiset 2 tuntia) ja **Pilvet** (pilvisyys ja sade seuraavan vuorokauden ajan). Kartta liikkuu sormella ja zoomautuu nipistämällä. Valikosta (☰) löytyvät päivitys, sijainti, pukeutumisen kylmänsietokyky, päivitysväli, taustan animaatio, tiedot ja lisäasetukset.
 
 ## Chatin vastausten lähde (Gemini-avain on valinnainen)
 
@@ -49,6 +49,7 @@ Gemini-avaimen lisääminen: hae ilmainen avain osoitteesta aistudio.google.com/
 | Käännä Tunnit-sivulle ja napauta riviä | Rivi avautuu paikallaan. "Näytä 48 tuntia" jatkaa listaa |
 | Valitse Tunnit-sivulla **Kaavio** ja vedä sormella kaavion päällä | Kaavio näyttää valitun hetken lämpötilan, sateen ja tuulen |
 | Avaa Varmuus-sivu | Kahdeksan helmeä tänään ja huomenna; teksti kertoo, ovatko mallit samaa mieltä |
+| Napauta alapalkin karttapainiketta | Tutka näyttää sateen viimeiset 2 tuntia ja toistuu itsestään; Pilvet näyttää ennusteen tunneittain. Kartta liikkuu sormella, ja takaisin-ele sulkee sen |
 | Odota varoituspäivää | Ilmatieteen laitoksen varoitus näkyy värirenkaalla, oma huomio katkoviivalla. Napautus avaa tekstin |
 | Kysy chatissa: *Milloin sataa seuraavan kerran?*, *Mitä pukisin huomenna?*, *Entä Rovaniemellä?* | Vastaus tulee heti omalla laskennalla, ja ajat täsmäävät sivujen kanssa |
 | Paina Androidin takaisin-elettä toisella sivulla | Sovellus palaa kotisivulle eikä sulkeudu |
@@ -57,7 +58,7 @@ Jos jokin ei toimi: **Valikko → Lisäasetukset → Aja diagnostiikka → Kopio
 
 ## Mitä tässä versiossa ei vielä ole
 
-- **Tutkakartta.** Tunnit-sivulla on tutkan sadekäyrä seuraaville 2 tunnille; kartta tulee myöhemmin.
+- **Tutkan ennuste kartalla.** Tutkakartta näyttää vain havainnot (viimeiset 2 tuntia); tulevat tunnit näkyvät säämallien ennusteena Pilvet-välilehdellä ja tutkan sadekäyränä Tunnit-sivulla.
 - **Oikea Android-sovellus ja widget** (Play-kauppa). Nykyinen verkkosovellus toimii aloitusnäytöltä kuin sovellus, mutta se ei voi tarjota widgetiä.
 - **Chatin oma vastausmoottori ei ole tekoäly.** Se tunnistaa kysymyksen aiheen, ajankohdan ja paikan säännöillä. Epätavallisesti muotoiltu kysymys voi jäädä ymmärtämättä, jolloin se kertoo, mitä osaa vastata. Gemini-tilat ymmärtävät vapaamuotoisemmin.
 - Ilmatieteen laitoksen oma malli ei ole Open-Meteon mallien joukossa, joten sovellus ei käytä sitä. Virallinen ennuste ja varoitukset löytyvät ilmatieteenlaitos.fi:stä.
@@ -74,11 +75,13 @@ Sovellus ei käytä omaa palvelinta, mainoksia, analytiikkaa eikä seurantaa. Se
 | `api.met.no` | Tutkaennuste (valinnainen) | Sijainti pyöristettynä kahteen desimaaliin |
 | `opendata.fmi.fi` | Lähimmän sääaseman havainto (valinnainen) | Sijainti pyöristettynä kahteen desimaaliin |
 | `raw.githubusercontent.com` | Viralliset varoitukset (valinnainen): repon haarassa `warnings-data` oleva peili Ilmatieteen laitoksen syötteestä | Ei sijaintia: koko maan varoitukset ladataan ja oma alue valitaan laitteella |
+| `api.rainviewer.com`, `tilecache.rainviewer.com` | Tutkakartta (vain kun avaat kartan) | Kartan alue tiilinä (noin 150 km:n ruutuina), ei tarkkaa sijaintia |
+| `api.open-meteo.com` (monta pistettä) | Pilvi- ja sade-ennuste kartalla (vain kun avaat kartan) | Kartan alueen ruudukon pisteet |
 | `generativelanguage.googleapis.com` | Gemini (valinnainen, vain jos lisäät avaimen) | Kysymys ja sovelluksen säädata |
 
-Paikka, asetukset ja välimuisti tallentuvat vain tämän laitteen selaimeen. Fontti (Inter Display, SIL Open Font License, `inter-OFL.txt`) tulee sovelluksen mukana, joten sitä ei haeta muualta.
+Paikka, asetukset ja välimuisti tallentuvat vain tämän laitteen selaimeen. Fontti (Inter Display, SIL Open Font License, `inter-OFL.txt`) ja kartan pohja (Natural Earth, julkista aineistoa) tulevat sovelluksen mukana, joten niitä ei haeta muualta.
 
-Sääennusteet: Open-Meteo.com (CC BY 4.0). Havainnot ja varoitukset: Ilmatieteen laitos (CC BY 4.0). Tutkaennuste: MET Norway. Paikkahaku: Open-Meteo / GeoNames. Paikannimet: BigDataCloud ja © OpenStreetMap-tekijät.
+Sääennusteet: Open-Meteo.com (CC BY 4.0). Havainnot ja varoitukset: Ilmatieteen laitos (CC BY 4.0). Tutkaennuste: MET Norway. Tutkakartta: RainViewer (henkilökohtainen käyttö, lähdemaininta kartalla). Pohjakartta: Natural Earth. Paikkahaku: Open-Meteo / GeoNames. Paikannimet: BigDataCloud ja © OpenStreetMap-tekijät.
 
 ## Varoituspeili (GitHub Actions)
 
@@ -105,16 +108,18 @@ Repon juuressa ovat julkaistut tiedostot (GitHub Pages tarjoilee ne). Lähdekood
 
 ```
 cd src
-node --test tests/*.test.js            # yksikkötestit (223 kpl)
+node --test tests/*.test.js            # yksikkötestit (233 kpl)
 node tools/build.mjs                   # kokoaa js/-moduulit tiedostoksi saaaly.js, esikatselun ja julkaise/-kansion
 node tools/publish.mjs                 # kopioi julkaise/-kansion tiedostot repon juureen
-python3 tools/e2e.py                   # selaintestit (44 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages
+python3 tools/e2e.py                   # selaintestit (45 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages
 python3 tools/shot.py kuva.png "?demo=rain&at=2026-10-14T14:04:00%2B03:00"   # kuvakaappaus esimerkkitilasta
 cd .. && git add -A && git commit && git push
 ```
 
 Esikatselu esimerkkidatalla: `node tools/build.mjs` tekee tiedoston `src/esikatselu.html`, joka toimii ilman verkkoa. Osoitteen perään voi lisätä `?demo=rain`, `snow`, `thunder`, `fog` tai `clear` ja ajan, esimerkiksi `&at=2026-10-14T23:30:00%2B03:00`.
 
-Rakenne: `js/headline.js` (etusivun, Tunnit-, Viikko- ja Varmuus-sivujen otsikot), `js/views.js` (sivujen HTML), `js/app.js` (tila, sivut ja päivitys), `js/cube.js` (sivukuutio ja sen kääntö), `js/blend.js` (mallien yhdistäminen ja sadejaksot), `js/advice.js` (takki, sateenvarjo, liukkaus), `js/meteogram.js` (sääkaavio), `js/sky.js` (animoitu taivas). Chatin oma vastausmoottori: `js/nlu.js`, `js/answer.js` ja `js/gazetteer.js`. Valinnaiset lähteet: `js/sources.js` (varmistus ja odotusajat), `js/nowcast.js` (tutkaennuste), `js/warnings.js` (varoitukset) ja `js/observations.js` (havainnot).
+Rakenne: `js/headline.js` (etusivun, Tunnit-, Viikko- ja Varmuus-sivujen otsikot), `js/views.js` (sivujen HTML), `js/app.js` (tila, sivut ja päivitys), `js/cube.js` (sivukuutio ja sen kääntö), `js/mapview.js` ja `js/geomap.js` (kartta: Tutka ja Pilvet), `js/blend.js` (mallien yhdistäminen ja sadejaksot), `js/advice.js` (takki, sateenvarjo, liukkaus), `js/meteogram.js` (sääkaavio), `js/sky.js` (animoitu taivas). Chatin oma vastausmoottori: `js/nlu.js`, `js/answer.js` ja `js/gazetteer.js`. Valinnaiset lähteet: `js/sources.js` (varmistus ja odotusajat), `js/nowcast.js` (tutkaennuste), `js/warnings.js` (varoitukset) ja `js/observations.js` (havainnot).
+
+Kartan pohja on kansiossa `maps/`; se tehdään Natural Earthin aineistosta skriptillä `tools/basemap.py` (ohje skriptin alussa).
 
 Jokainen versio on oma commitinsa. Jos uusi versio ei toimi, edelliseen palaa `git revert`illä (tai pyydä Claudea tekemään paluu).

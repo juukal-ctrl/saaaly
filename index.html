@@ -2,7 +2,7 @@
 <html lang="fi">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://generativelanguage.googleapis.com https://api.met.no https://raw.githubusercontent.com https://opendata.fmi.fi; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tilecache.rainviewer.com; font-src 'self'; connect-src 'self' https://api.open-meteo.com https://geocoding-api.open-meteo.com https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://generativelanguage.googleapis.com https://api.met.no https://raw.githubusercontent.com https://opendata.fmi.fi https://api.rainviewer.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>SääÄly</title>
 <meta name="description" content="SääÄly kertoo yhdellä silmäyksellä, tarvitsetko takin tai sateenvarjon. Se yhdistää usean säämallin ennusteen ja selittää sään suomeksi.">
@@ -32,6 +32,7 @@
   <div id="update" class="banner" role="status" aria-live="polite" hidden></div>
 
   <section id="welcome" class="welcome" aria-label="Aloitus" hidden></section>
+  <div id="pagesSlot" class="pages-slot" aria-hidden="true"></div>
   <div id="pages" class="pages cube-rest">
     <div class="cube">
     <div class="face" data-face="0">
@@ -65,7 +66,7 @@
   </div>
 </main>
 
-<div id="fab" class="askbar"><p id="swipeHint" class="swipe-hint" hidden>Pyyhkäise sivulle: tunnit, viikko ja varmuus</p><nav id="dots" class="dots" aria-label="Näkymät"><button type="button" data-act="page" data-page="0" aria-label="Koti" aria-current="true"><i></i></button><button type="button" data-act="page" data-page="1" aria-label="Tunnit"><i></i></button><button type="button" data-act="page" data-page="2" aria-label="Viikko"><i></i></button><button type="button" data-act="page" data-page="3" aria-label="Varmuus"><i></i></button></nav><button class="ask-btn" type="button" data-act="open-chat" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg><span>Kysy SääÄlyltä</span></button></div>
+<div id="fab" class="askbar"><p id="swipeHint" class="swipe-hint" hidden>Pyyhkäise sivulle: tunnit, viikko ja varmuus</p><nav id="dots" class="dots" aria-label="Näkymät"><button type="button" data-act="page" data-page="0" aria-label="Koti" aria-current="true"><i></i></button><button type="button" data-act="page" data-page="1" aria-label="Tunnit"><i></i></button><button type="button" data-act="page" data-page="2" aria-label="Viikko"><i></i></button><button type="button" data-act="page" data-page="3" aria-label="Varmuus"><i></i></button></nav><div class="ask-row"><button class="ask-btn" type="button" data-act="open-chat" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg><span>Kysy SääÄlyltä</span></button><button class="map-btn" type="button" data-act="open-map" aria-haspopup="dialog" aria-label="Tutka ja pilvet kartalla"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.6" class="r1"/><circle cx="12" cy="12" r="4.6" class="r2"/><path d="M12 12L18.2 6.4" class="sw"/><circle cx="15.6" cy="15.2" r="1.7" class="bl"/><circle cx="12" cy="12" r="1.6" class="c"/></svg></button></div></div>
 
 <div id="ptr" class="ptr" aria-hidden="true" hidden><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.4 5.7"/><path d="M20 4v7h-7"/></svg></div>
 
@@ -73,6 +74,33 @@
   <div class="sheet-backdrop" data-act="close"></div>
   <div id="sheetPanel" class="sheet-panel" role="dialog" aria-modal="true" tabindex="-1"></div>
 </div>
+
+<section id="mapView" class="mapview" role="dialog" aria-modal="true" aria-label="Tutka ja pilvet kartalla" hidden>
+  <div class="mv-stage">
+    <canvas class="mv-base" aria-hidden="true"></canvas>
+    <canvas class="mv-wx" aria-hidden="true"></canvas>
+    <div class="mv-marks" aria-hidden="true"></div>
+  </div>
+  <div class="mv-top">
+    <button class="mv-btn mv-close" type="button" data-mv="close" aria-label="Sulje kartta"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <div class="modebar hd-seg mv-tabs" role="group" aria-label="Kartta"><button class="seg" type="button" data-mv="tab" data-tab="radar" aria-pressed="true">Tutka</button><button class="seg" type="button" data-mv="tab" data-tab="cloud" aria-pressed="false">Pilvet</button></div>
+  </div>
+  <div class="mv-zoom">
+    <button class="mv-btn" type="button" data-mv="zoom-in" aria-label="Lähennä"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+    <button class="mv-btn" type="button" data-mv="zoom-out" aria-label="Loitonna"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+    <button class="mv-btn" type="button" data-mv="recenter" aria-label="Keskitä sijaintiin"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg></button>
+  </div>
+  <div class="mv-panel">
+    <p class="mv-status" role="status" aria-live="polite" hidden></p>
+    <div class="mv-timeline">
+      <button class="mv-play" type="button" data-mv="play" aria-label="Toista" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="pl" d="M8 5.5v13l10.5-6.5z"/><path class="pa" d="M8 5.5h3v13H8zM13.5 5.5h3v13h-3z"/></svg></button>
+      <input class="mv-range" type="range" min="0" max="0" step="1" value="0" aria-label="Ajankohta">
+      <span class="mv-time" aria-hidden="true"></span>
+    </div>
+    <div class="mv-legend" aria-hidden="true"></div>
+    <p class="mv-attr"></p>
+  </div>
+</section>
 
 <noscript><p class="nojs">SääÄly tarvitsee JavaScriptin toimiakseen.</p></noscript>
 

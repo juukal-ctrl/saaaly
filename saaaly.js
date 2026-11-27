@@ -5498,6 +5498,20 @@ const SOURCE_INFO = {
     license: 'CC BY 4.0',
     note: 'Lähimmän sääaseman mitattu lämpötila: vertailukohta ennusteelle (Varmuus-sivu).',
   },
+  radarmap: {
+    name: 'Tutkakartta',
+    provider: 'RainViewer',
+    url: 'https://www.rainviewer.com',
+    license: 'Henkilökohtainen käyttö, lähdemaininta',
+    note: 'Havaittu sade kartalla viimeisen kahden tunnin ajalta (kehys 20 minuutin välein). Haetaan vain, kun avaat kartan.',
+  },
+  cloudmap: {
+    name: 'Pilvi- ja sade-ennuste kartalla',
+    provider: 'Open-Meteo',
+    url: 'https://open-meteo.com',
+    license: 'CC BY 4.0',
+    note: 'Säämallien pilvisyys ja sade noin 45 km:n ruudukossa seuraavalle vuorokaudelle. Haetaan vain, kun avaat kartan.',
+  },
   air: {
     name: 'Ilmanlaatu ja siitepöly',
     provider: 'Open-Meteo / CAMS',
@@ -6218,6 +6232,58 @@ const HORIZON_H = { metno_nordic: 60, dmi_harmonie_arome_europe: 60 };
 const ENS_POP = new Set(['ecmwf_ifs', 'icon_seamless', 'ukmo_seamless', 'gfs_seamless', 'gem_seamless']);
 const UV_MODELS = new Set(['gfs_seamless', 'ukmo_seamless']);
 
+/**
+ * Esimerkkitilan sää kartalla: itään liikkuva sadevyöhyke ja kuuroja (mm/h), pilvisyys (%) ja lumen osuus.
+ * Sama kenttä antaa tutkan (menneet kehykset) ja ennusteen (tulevat tunnit), joten kartta liikkuu johdonmukaisesti.
+ */
+function syntheticMapWx(lon, lat, tMs, scenario = 'mixed', anchorMs = 0) {
+  const S = { clear: [0, 0.12], rain: [1.5, 0.96], snow: [1.1, 0.96], thunder: [2.6, 0.8], fog: [0.1, 0.98], mixed: [1, 0.7] }[scenario] || [1, 0.7];
+  // Vyöhyke kulkee esimerkkipaikan (Turku) yli hetkellä anchorMs (+ viive): sateisissa esimerkeissä nyt, sekasäässä illalla.
+  const x = (lon - 22.27) * 55.7;
+  const y = (lat - 60.45) * 111.2;
+  const h = (tMs - anchorMs) / 3.6e6 - (scenario === 'mixed' ? 10 : 0);
+  const X = x - 34 * h;
+  const Y = y - 9 * h;
+  const u = X * 0.55 + Y * 0.83;
+  const across = ((((u + 550) % 1100) + 1100) % 1100) - 550;
+  const front = Math.exp(-(across * across) / (2 * 80 * 80));
+  const cells = Math.max(0, Math.sin(X / 23 + 0.4) * Math.sin(Y / 31 + 1.1) * Math.sin((X - Y) / 47 + 0.3));
+  let precip = S[0] * (front * (0.5 + 1.1 * cells) + (scenario === 'thunder' ? 1.4 * cells * cells : 0));
+  if (precip < 0.06) precip = 0;
+  const swirl = 0.5 + 0.5 * Math.sin(X / 160 + 0.8) * Math.cos(Y / 210 - 0.4);
+  const cloud = 100 * clamp(S[1] * (0.3 + 0.7 * Math.max(front * 1.3, swirl)), 0, 1);
+  return { precip, cloud, snow: scenario === 'snow' ? 1 : 0 };
+}
+
+/** Monen pisteen ennuste (Open-Meteon muoto, timeformat=unixtime) esimerkkitilan karttaan. */
+function syntheticGrid({ lats, lons, nowMs = Date.now(), hours = 25, scenario = 'mixed' }) {
+  const t0 = Math.floor(nowMs / 3600000) * 3600000;
+  const time = Array.from({ length: hours }, (_, i) => (t0 + i * 3600000) / 1000);
+  return lats.map((la, k) => {
+    const lo = lons[k];
+    const cloud_cover = [];
+    const precipitation = [];
+    const snowfall = [];
+    for (const t of time) {
+      const w = syntheticMapWx(lo, la, t * 1000, scenario, nowMs);
+      cloud_cover.push(Math.round(w.cloud));
+      precipitation.push(Math.round(w.precip * 10) / 10);
+      snowfall.push(w.snow ? Math.round(w.precip * 7) / 10 : 0);
+    }
+    return { latitude: la, longitude: lo, hourly: { time, cloud_cover, precipitation, snowfall } };
+  });
+}
+
+/** RainViewerin weather-maps.json esimerkkinä: 13 kehystä 10 minuutin välein. */
+function syntheticRadarMaps(nowMs = Date.now()) {
+  const last = Math.floor(nowMs / 600000) * 600 - 600;
+  const past = Array.from({ length: 13 }, (_, i) => {
+    const time = last - (12 - i) * 600;
+    return { time, path: `/v2/radar/demo${time}` };
+  });
+  return { version: '2.0', generated: last + 60, host: 'https://tilecache.rainviewer.com', radar: { past } };
+}
+
 /** Rakentaa Open-Meteon muotoisen vastauksen yhdelle mallille. */
 function syntheticResponse({ lat, lon, modelId, nowMs = Date.now(), days = 7, tz = 'Europe/Helsinki', scenario = 'mixed' }) {
   const startDate = localNow(nowMs, tz).date;
@@ -6361,6 +6427,12 @@ function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
   return async (input) => {
     const url = new URL(typeof input === 'string' ? input : input.url);
     log?.(url.href);
+    if (url.hostname === 'api.open-meteo.com' && (url.searchParams.get('latitude') || '').includes(',')) {
+      const lats = url.searchParams.get('latitude').split(',').map(Number);
+      const lons = url.searchParams.get('longitude').split(',').map(Number);
+      return json(syntheticGrid({ lats, lons, nowMs: nowMs ?? Date.now(), hours: +url.searchParams.get('forecast_hours') || 25, scenario }));
+    }
+    if (url.hostname === 'api.rainviewer.com') return json(syntheticRadarMaps(nowMs ?? Date.now()));
     if (url.hostname === 'api.open-meteo.com') {
       const id = url.searchParams.get('models');
       if (id === 'fmi_seamless' || id === 'dead_model') return json({ error: true, reason: `Cannot initialize MultiDomains from invalid String value ${id} for key models` }, 400);
@@ -6406,7 +6478,7 @@ function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
     return json({ error: { message: 'Demo-tilassa ei ole yhteyttä tähän palveluun' } }, 403);
   };
 }
-return { syntheticResponse, syntheticNowcast, syntheticWarningsFeed, syntheticObs, makeDemoFetch };
+return { syntheticMapWx, syntheticGrid, syntheticRadarMaps, syntheticResponse, syntheticNowcast, syntheticWarningsFeed, syntheticObs, makeDemoFetch };
 })();
 
 // ---- headline.js ----
@@ -7303,7 +7375,7 @@ function radarHtml({ raw, nc, nowMs, tz }) {
   const clock = (ms) => new Date(ms).toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit', timeZone: tz }).replace(':', '.');
   // Otsikko kertoo jo ajoituksen: kuvateksti kertoo voimakkuuden. Ruudunlukija saa koko lauseen.
   const cap2 = nc.word ? `Tutka: ${nc.word} sadetta ${nc.state === 'wet' ? 'nyt' : 'tulossa'}` : 'Tutka: sadetta lähellä';
-  return `<div class="radar" role="img" aria-label="${esc(`Tutka: ${nc.line || ''}`)}"><p class="radar-t">${GLYPH.radar}<span>${esc(cap2)}</span></p>
+  return `<div class="radar" role="img" aria-label="${esc(`Tutka: ${nc.line || ''}`)}"><p class="radar-t">${GLYPH.radar}<span>${esc(cap2)}</span><button class="radar-map" type="button" data-act="open-map" data-tab="radar">Kartta</button></p>
     <div class="radar-bars">${bars}</div><div class="radar-ax"><span>nyt</span><span>${esc(clock(nowMs + 60 * 60000))}</span><span>${esc(clock(nowMs + 120 * 60000))}</span></div></div>`;
 }
 
@@ -7756,7 +7828,7 @@ function velocity(samples) {
  * onSettle(i) kutsutaan, kun kuutio on levossa uudella tai samalla kyljellä; onStart, kun kääntö alkaa.
  * ignore: valitsin alueille, joiden vaakaveto kuuluu niille itselleen (tuntinauha, sääkaavio).
  */
-function createCube(root, { onSettle = () => {}, onStart = () => {}, onTurn = () => {}, reduceMotion = false, ignore = '' } = {}) {
+function createCube(root, { onSettle = () => {}, onStart = () => {}, onTurn = () => {}, onEnter = () => {}, onFrame = () => {}, onRest = () => {}, reduceMotion = false, ignore = '' } = {}) {
   const cube = root.querySelector('.cube');
   const faces = [...cube.children];
   const n = faces.length;
@@ -7786,23 +7858,28 @@ function createCube(root, { onSettle = () => {}, onStart = () => {}, onTurn = ()
 
   function render() {
     cube.style.transform = `translateZ(${-half}px) rotateY(${(-p * 90).toFixed(3)}deg)`;
+    const shown = [];
     faces.forEach((f, i) => {
       const r = Math.abs(relPos(i, p, n));
       setVis(i, r < 0.999);
+      if (r < 0.999) shown.push(i);
       f.style.setProperty('--turn', Math.min(1, r).toFixed(3));
     });
+    onFrame(shown);
     const k = mod(Math.round(p), n);
     if (k !== near) onTurn((near = k));
   }
 
   function enter3d() {
     if (!root.classList.contains('cube-rest')) return;
+    onEnter();
     root.classList.remove('cube-rest');
     faces.forEach((f, i) => (f.style.transform = `rotateY(${i * 90}deg) translateZ(${half}px)`));
     render();
   }
 
   function rest() {
+    if (!root.classList.contains('cube-rest')) onRest();
     root.classList.add('cube-rest');
     cube.style.transform = '';
     faces.forEach((f, i) => {
@@ -7964,7 +8041,1126 @@ function createCube(root, { onSettle = () => {}, onStart = () => {}, onTurn = ()
     },
   };
 }
-return { FACES, mod, relPos, shortestStep, settleTarget, velocity, createCube };
+
+/**
+ * Koko näytön kuutio: käännön ajaksi jokaiselle näkyvälle kyljelle piirretään oma taivas (kopio taivaskankaasta) ja
+ * kopiot yläpalkista, ilmoituksista ja alapalkista samoille paikoille. Oikeat elementit piilotetaan käännön ajaksi,
+ * joten koko näyttö kääntyy yhtenä esineenä. Levossa kopiot poistetaan ja oikeat palaavat (ainoat vuorovaikutteiset).
+ * app: alue, jonka kokoisia kyljet ovat; sky: taivaskangas; chrome(): kopioitavat elementit; dots: valitsin pisteille.
+ */
+function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]' }) {
+  const layers = faces.map((f) => {
+    const cv = document.createElement('canvas');
+    cv.className = 'face-sky';
+    cv.setAttribute('aria-hidden', 'true');
+    const ch = document.createElement('div');
+    ch.className = 'face-chrome';
+    ch.setAttribute('aria-hidden', 'true');
+    ch.inert = true;
+    f.prepend(cv);
+    f.append(ch);
+    return { cv, ch, ctx: cv.getContext('2d') };
+  });
+  let src = null; // taivaskankaan alue, joka vastaa kylkeä (kangaspikseleinä)
+
+  function enter() {
+    document.body.classList.add('cube-3d');
+    const base = app.getBoundingClientRect();
+    const items = chrome().filter((e) => e && !e.hidden && e.getClientRects().length);
+    const rects = items.map((e) => e.getBoundingClientRect());
+    const k = sky && sky.clientWidth ? sky.width / sky.clientWidth : 1;
+    src = sky ? { x: base.left * k, y: base.top * k, w: base.width * k, h: base.height * k } : null;
+    layers.forEach((L, i) => {
+      L.ch.textContent = '';
+      items.forEach((e, j) => {
+        const c = e.cloneNode(true);
+        c.removeAttribute('id');
+        c.querySelectorAll('[id]').forEach((x) => x.removeAttribute('id'));
+        const r = rects[j];
+        Object.assign(c.style, { position: 'absolute', left: `${r.left - base.left}px`, top: `${r.top - base.top}px`, width: `${r.width}px`, height: `${r.height}px`, right: 'auto', bottom: 'auto', margin: '0', maxWidth: 'none' });
+        c.querySelectorAll(dots).forEach((b) => (+b.dataset.page === i ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current')));
+        L.ch.append(c);
+      });
+      if (src) {
+        const w = Math.max(1, Math.round(src.w));
+        const h = Math.max(1, Math.round(src.h));
+        if (L.cv.width !== w || L.cv.height !== h) {
+          L.cv.width = w;
+          L.cv.height = h;
+        }
+      }
+    });
+  }
+
+  function frame(shown) {
+    if (!src) return;
+    for (const i of shown) {
+      const L = layers[i];
+      try {
+        L.ctx.drawImage(sky, src.x, src.y, src.w, src.h, 0, 0, L.cv.width, L.cv.height);
+      } catch {
+        /* kangas ei vielä valmis */
+      }
+    }
+  }
+
+  function rest() {
+    document.body.classList.remove('cube-3d');
+    layers.forEach((L) => (L.ch.textContent = ''));
+  }
+
+  return { enter, frame, rest };
+}
+return { FACES, mod, relPos, shortestStep, settleTarget, velocity, createCube, createCubeChrome };
+})();
+
+// ---- geomap.js ----
+__m['geomap'] = (() => {
+// geomap.js: kartan laskenta ilman DOMia. Web Mercator -projektio (sama kuin karttatiilissä), näkymä ja tiilet,
+// pohjakartan purku ja piirto kankaalle, ennusteruudukko (Open-Meteo: monta pistettä yhdellä haulla) ja värit.
+
+const TILE = 256;
+const D2R = Math.PI / 180;
+const EARTH_KM = 40075.017;
+const KM_MIN = 60;
+const KM_MAX = 1600;
+
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+
+/** lon/lat -> maailmakoordinaatit 0..1 (Web Mercator). */
+function merc(lon, lat) {
+  const s = Math.sin(clamp(lat, -85.05, 85.05) * D2R);
+  return [lon / 360 + 0.5, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
+}
+
+/** Maailmakoordinaatit -> lon/lat. */
+function unmerc(x, y) {
+  return [(x - 0.5) * 360, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) / D2R];
+}
+
+/** Näkymä keskipisteestä (maailmakoordinaatit) ja mittakaavasta (pikseliä maailmayksikköä kohti). */
+function viewFrom(cx, cy, scale, w, h) {
+  const [lon, lat] = unmerc(cx, cy);
+  return { lon, lat, km: (w / scale) * EARTH_KM * Math.cos(lat * D2R), w, h, cx, cy, scale };
+}
+
+/** Näkymä paikan ympärille: leveys km:nä. */
+function makeView({ lon, lat, km, w, h }) {
+  const [cx, cy] = merc(lon, lat);
+  return viewFrom(cx, cy, (w / clamp(km, KM_MIN, KM_MAX)) * EARTH_KM * Math.cos(lat * D2R), w, h);
+}
+
+function project(view, lon, lat) {
+  const [x, y] = merc(lon, lat);
+  return [(x - view.cx) * view.scale + view.w / 2, (y - view.cy) * view.scale + view.h / 2];
+}
+
+function unproject(view, px, py) {
+  return unmerc(view.cx + (px - view.w / 2) / view.scale, view.cy + (py - view.h / 2) / view.scale);
+}
+
+function viewBounds(view) {
+  const [w, n] = unproject(view, 0, 0);
+  const [e, s] = unproject(view, view.w, view.h);
+  return { w, s, e, n };
+}
+
+/** Siirto pikseleinä (sormen liike): kartta seuraa sormea. */
+function panView(view, dx, dy) {
+  return viewFrom(view.cx - dx / view.scale, clamp(view.cy - dy / view.scale, 0.02, 0.98), view.scale, view.w, view.h);
+}
+
+/** Zoomaus kertoimella f niin, että piste (px, py) pysyy paikallaan. Leveys rajataan KM_MIN..KM_MAX. */
+function zoomView(view, f, px = view.w / 2, py = view.h / 2) {
+  const kmNew = clamp(view.km / f, KM_MIN, KM_MAX);
+  const scale = view.scale * (view.km / kmNew);
+  const wx = view.cx + (px - view.w / 2) / view.scale;
+  const wy = view.cy + (py - view.h / 2) / view.scale;
+  return viewFrom(wx - (px - view.w / 2) / scale, wy - (py - view.h / 2) / scale, scale, view.w, view.h);
+}
+
+/** Sama kohta uuteen kokoon (näytön koon muutos). */
+function resizeView(view, w, h) {
+  return viewFrom(view.cx, view.cy, view.scale * (w / view.w), w, h);
+}
+
+// ---------- Tiilet (tutka) ----------
+
+/** Tiilitaso: mieluummin vähemmän ja hieman suurennettuja tiiliä (tutkan pyyntöraja), korkeintaan max. */
+function tileZoom(view, max = 7, min = 2) {
+  return clamp(Math.floor(Math.log2(view.scale / TILE) + 0.25), min, max);
+}
+
+/** Näkymän peittävät tiilet tasolla z: { z, x, y, px, py, size } (px, py = vasen yläkulma näytöllä). */
+function tilesFor(view, z) {
+  const n = 2 ** z;
+  const size = view.scale / n;
+  const left = view.cx - view.w / 2 / view.scale;
+  const top = view.cy - view.h / 2 / view.scale;
+  const x0 = Math.floor(left * n);
+  const x1 = Math.floor((left + view.w / view.scale) * n - 1e-9);
+  const y0 = Math.max(0, Math.floor(top * n));
+  const y1 = Math.min(n - 1, Math.floor((top + view.h / view.scale) * n - 1e-9));
+  const out = [];
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      out.push({ z, x: ((x % n) + n) % n, y, px: (x / n - view.cx) * view.scale + view.w / 2, py: (y / n - view.cy) * view.scale + view.h / 2, size });
+    }
+  }
+  return out;
+}
+
+/** RainViewerin tiili: 256 px, värimaailma Universal Blue (2) ja pehmennys; lumi samoilla väreillä kuin sade (1_0), jotta se näkyy vaalealla kartalla. */
+function radarTileUrl(host, path, t) {
+  return `${host}${path}/256/${t.z}/${t.x}/${t.y}/2/1_0.png`;
+}
+
+/** Tutkan kehykset: joka toinen 10 minuutin kehys (20 min välein) uusimmasta taaksepäin, vanhin ensin. */
+function pickFrames(past, step = 2, max = 7) {
+  const list = (Array.isArray(past) ? past : []).filter((f) => f && Number.isFinite(f.time) && typeof f.path === 'string').sort((a, b) => a.time - b.time);
+  const out = [];
+  for (let i = list.length - 1; i >= 0 && out.length < max; i -= step) out.unshift(list[i]);
+  return out;
+}
+
+// ---------- Pohjakartta (Natural Earth, maps/map-*.json) ----------
+
+/** Purkaa pakatun pohjakartan: renkaat maailmakoordinaateiksi ja jokaiselle rajaava laatikko. */
+function decodeBasemap(data) {
+  const q = data.q || 1000;
+  const dec = (a) => {
+    const pts = new Float64Array(a.length);
+    let x = 0;
+    let y = 0;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < a.length; i += 2) {
+      x += a[i];
+      y += a[i + 1];
+      const [mx, my] = merc(x / q, y / q);
+      pts[i] = mx;
+      pts[i + 1] = my;
+      if (mx < minX) minX = mx;
+      if (mx > maxX) maxX = mx;
+      if (my < minY) minY = my;
+      if (my > maxY) maxY = my;
+    }
+    return { pts, box: [minX, minY, maxX, maxY] };
+  };
+  return { box: data.box, land: (data.land || []).map(dec), isle: (data.isle || []).map(dec), lake: (data.lake || []).map(dec), border: (data.border || []).map(dec) };
+}
+
+/** Kumpi pohjakartta näkymälle: tarkka pohjoismainen, jos näkymä on sen alueella, muuten Euroopan karkeampi; muuten ei mitään. */
+function pickBasemap(view, boxes) {
+  const b = viewBounds(view);
+  for (const [name, box] of boxes) if (b.w >= box[0] && b.e <= box[2] && b.s >= box[1] && b.n <= box[3]) return name;
+  for (const [name, box] of boxes) if (view.lon >= box[0] && view.lon <= box[2] && view.lat >= box[1] && view.lat <= box[3]) return name;
+  return null;
+}
+
+function visible(view, box) {
+  const l = view.cx - view.w / 2 / view.scale;
+  const t = view.cy - view.h / 2 / view.scale;
+  return !(box[2] < l || box[0] > l + view.w / view.scale || box[3] < t || box[1] > t + view.h / view.scale);
+}
+
+function trace(ctx, view, ring, close) {
+  const p = ring.pts;
+  const s = view.scale;
+  const ox = view.w / 2 - view.cx * s;
+  const oy = view.h / 2 - view.cy * s;
+  ctx.moveTo(p[0] * s + ox, p[1] * s + oy);
+  for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i] * s + ox, p[i + 1] * s + oy);
+  if (close) ctx.closePath();
+}
+
+/** Piirtää pohjakartan: meri, maa ja saaret, järvet, rantaviiva ja valtakunnanrajat. */
+function drawBasemap(ctx, view, map, colors) {
+  ctx.fillStyle = colors.water;
+  ctx.fillRect(0, 0, view.w, view.h);
+  if (!map) return;
+  const fill = (rings, color) => {
+    ctx.beginPath();
+    for (const r of rings) if (visible(view, r.box)) trace(ctx, view, r, true);
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+  fill(map.land, colors.land);
+  fill(map.isle, colors.land);
+  fill(map.lake, colors.water);
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (const r of map.land) if (visible(view, r.box)) trace(ctx, view, r, true);
+  for (const r of map.lake) if (visible(view, r.box)) trace(ctx, view, r, true);
+  ctx.strokeStyle = colors.coast;
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+  ctx.beginPath();
+  for (const r of map.border) if (visible(view, r.box)) trace(ctx, view, r, false);
+  ctx.strokeStyle = colors.border;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+/** Kaupunkien nimet: tärkeimmät ensin, päällekkäiset jätetään pois. cities: [[nimi, lat, lon], ...]. */
+function placeLabels(view, cities, { max = 14, skip = null, skipW = 0, avoid = [], charW = 6.6, h = 16, pad = 6 } = {}) {
+  const taken = avoid.map((r) => ({ ...r }));
+  const out = [];
+  if (skip) taken.push({ x0: skip[0] - 14, y0: skip[1] - 14, x1: skip[0] + 14 + skipW, y1: skip[1] + 14 });
+  for (const [name, lat, lon] of cities) {
+    if (out.length >= max) break;
+    const [x, y] = project(view, lon, lat);
+    if (x < 8 || y < 8 || x > view.w - 8 || y > view.h - 8) continue;
+    const w = name.length * charW + 10;
+    const r = { x0: x - 4, y0: y - h / 2 - pad / 2, x1: x + w + 4, y1: y + h / 2 + pad / 2 };
+    if (taken.some((t) => !(r.x1 < t.x0 || r.x0 > t.x1 || r.y1 < t.y0 || r.y0 > t.y1))) continue;
+    taken.push(r);
+    out.push({ name, x, y });
+  }
+  return out;
+}
+
+// ---------- Ennusteruudukko (Open-Meteo) ----------
+
+/** Säännöllinen lat/lon-ruudukko näkymän ympärille: väli noin stepKm, enintään maxPts pistettä. */
+function makeGrid(view, { stepKm = Math.max(12, Math.min(60, view.km / 12)), maxPts = 250, margin = 0.08 } = {}) {
+  const b = viewBounds(view);
+  const mx = (b.e - b.w) * margin;
+  const my = (b.n - b.s) * margin;
+  const w = b.w - mx;
+  const e = b.e + mx;
+  const s = b.s - my;
+  const n = b.n + my;
+  const latMid = (s + n) / 2;
+  let dLat = stepKm / 111.2;
+  let dLon = stepKm / (111.32 * Math.cos(latMid * D2R));
+  let rows = Math.ceil((n - s) / dLat) + 1;
+  let cols = Math.ceil((e - w) / dLon) + 1;
+  for (let i = 0; rows * cols > maxPts && i < 40; i++) {
+    const k = Math.max(1.03, Math.sqrt((rows * cols) / maxPts) * 0.98);
+    dLat *= k;
+    dLon *= k;
+    rows = Math.ceil((n - s) / dLat) + 1;
+    cols = Math.ceil((e - w) / dLon) + 1;
+  }
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const lats = Array.from({ length: rows }, (_, i) => r2(n - i * dLat));
+  const lons = Array.from({ length: cols }, (_, j) => r2(w + j * dLon));
+  return { rows, cols, lats, lons, n: lats[0], w: lons[0], dLat: (lats[0] - lats[rows - 1]) / Math.max(1, rows - 1), dLon: (lons[cols - 1] - lons[0]) / Math.max(1, cols - 1) };
+}
+
+/** Kattaako ruudukko näkymän, ja onko se tarpeeksi tiheä (zoomatessa lähelle haetaan tiheämpi)? */
+function gridCovers(grid, view) {
+  if (!grid) return false;
+  const b = viewBounds(view);
+  const s = grid.lats[grid.rows - 1];
+  const e = grid.lons[grid.cols - 1];
+  const fine = grid.dLat * 111.2 <= Math.max(14, view.km / 5);
+  return fine && b.w >= grid.w && b.e <= e && b.s >= s && b.n <= grid.n;
+}
+
+/** Open-Meteon monen pisteen haku: pilvisyys, sade ja lumi tunneittain. */
+function gridUrl(grid, hours = 25) {
+  const lat = [];
+  const lon = [];
+  for (const la of grid.lats) for (const lo of grid.lons) {
+    lat.push(la);
+    lon.push(lo);
+  }
+  return `https://api.open-meteo.com/v1/forecast?latitude=${lat.join(',')}&longitude=${lon.join(',')}&hourly=cloud_cover,precipitation,snowfall&forecast_hours=${hours}&timeformat=unixtime&timezone=GMT`;
+}
+
+/** Jäsentää monen pisteen vastauksen: aikojen lista ja jokaiselle ajalle kentät rivi kerrallaan. */
+function parseGrid(json, grid) {
+  const list = Array.isArray(json) ? json : [json];
+  const N = grid.rows * grid.cols;
+  if (list.length !== N) throw new Error(`ruudukko: ${list.length}/${N} pistettä`);
+  const times = (list[0]?.hourly?.time || []).map(Number);
+  if (!times.length) throw new Error('ruudukko: ei aikoja');
+  const make = () => times.map(() => new Float32Array(N).fill(NaN));
+  const cloud = make();
+  const precip = make();
+  const snow = make();
+  list.forEach((o, k) => {
+    const h = o?.hourly || {};
+    for (let t = 0; t < times.length; t++) {
+      const c = h.cloud_cover?.[t];
+      const p = h.precipitation?.[t];
+      const sn = h.snowfall?.[t];
+      if (Number.isFinite(c)) cloud[t][k] = c;
+      if (Number.isFinite(p)) precip[t][k] = p;
+      if (Number.isFinite(sn)) snow[t][k] = sn;
+    }
+  });
+  return { times: times.map((t) => t * 1000), cloud, precip, snow };
+}
+
+/** Bilineaarinen arvo kohdassa (lon, lat); NaN ruudukon ulkopuolella. */
+function sampleGrid(grid, field, lon, lat) {
+  const fx = (lon - grid.w) / grid.dLon;
+  const fy = (grid.n - lat) / grid.dLat;
+  if (!(fx >= 0 && fy >= 0 && fx <= grid.cols - 1 && fy <= grid.rows - 1)) return NaN;
+  const x0 = Math.min(grid.cols - 2, Math.floor(fx));
+  const y0 = Math.min(grid.rows - 2, Math.floor(fy));
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const at = (y, x) => field[y * grid.cols + x];
+  const a = at(y0, x0);
+  const b = at(y0, x0 + 1);
+  const c = at(y0 + 1, x0);
+  const d = at(y0 + 1, x0 + 1);
+  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+}
+
+// ---------- Värit ----------
+
+const smooth = (a, b, x) => {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+/** Pilvisyys 0–100 % -> [r, g, b, a] (a 0..1): selkeä läpinäkyvä, pilvinen harsona. */
+function cloudColor(v, dark) {
+  if (!(v > 8)) return null;
+  const t = smooth(8, 100, v);
+  return dark ? [226, 228, 246, 0.1 + 0.55 * t] : [104, 110, 146, 0.1 + 0.5 * t];
+}
+
+/** Sade mm/h -> väri; snowShare 0..1 sävyttää lumen turkoosiksi (vaalea kartta) tai valkeaksi (tumma kartta). */
+function precipColor(mm, snowShare = 0, dark = false) {
+  if (!(mm >= 0.03)) return null;
+  const fadeIn = smooth(0.03, 0.3, mm); // pehmeä reuna: ei portaita heikon sateen rajalla
+  const t = smooth(0.08, 6, Math.log1p(mm * 2) * 1.35);
+  const stops = [
+    [0, [128, 182, 255, 0.42]],
+    [0.4, [72, 122, 246, 0.62]],
+    [0.75, [66, 62, 214, 0.76]],
+    [1, [152, 52, 206, 0.86]],
+  ];
+  let c = stops[stops.length - 1][1];
+  for (let i = 1; i < stops.length; i++) {
+    if (t <= stops[i][0]) {
+      const [t0, c0] = stops[i - 1];
+      const [t1, c1] = stops[i];
+      const k = (t - t0) / (t1 - t0 || 1);
+      c = c0.map((v, j) => v + (c1[j] - v) * k);
+      break;
+    }
+  }
+  if (snowShare > 0) {
+    const s = clamp(snowShare, 0, 1);
+    const to = dark ? [214, 238, 255] : [38, 172, 206];
+    c = [c[0] + (to[0] - c[0]) * s, c[1] + (to[1] - c[1]) * s, c[2] + (to[2] - c[2]) * s, c[3]];
+  }
+  return [c[0], c[1], c[2], c[3] * fadeIn];
+}
+
+/**
+ * Täyttää kuvadatan (pieni kangas, step px per kuvapiste) kentän väreillä. sample(lon, lat) -> [r,g,b,a] tai null.
+ * Mercatorissa pituusaste riippuu vain x:stä ja leveysaste vain y:stä, joten ne lasketaan kerran sarakkeelle ja riville.
+ */
+function paintField(img, view, step, sample) {
+  const { width: W, height: H, data } = img;
+  const lons = new Float64Array(W);
+  const lats = new Float64Array(H);
+  for (let x = 0; x < W; x++) lons[x] = unproject(view, (x + 0.5) * step, 0)[0];
+  for (let y = 0; y < H; y++) lats[y] = unproject(view, 0, (y + 0.5) * step)[1];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const c = sample(lons[x], lats[y]);
+      const i = (y * W + x) * 4;
+      if (!c) {
+        data[i + 3] = 0;
+        continue;
+      }
+      data[i] = c[0];
+      data[i + 1] = c[1];
+      data[i + 2] = c[2];
+      data[i + 3] = Math.round(clamp(c[3], 0, 1) * 255);
+    }
+  }
+  return img;
+}
+
+/** Ruudukon reunoilla kenttä häivytetään (ei kovaa reunaa). Palauttaa kertoimen 0..1. */
+function edgeFade(grid, lon, lat) {
+  const fx = (lon - grid.w) / grid.dLon;
+  const fy = (grid.n - lat) / grid.dLat;
+  const d = Math.min(fx, fy, grid.cols - 1 - fx, grid.rows - 1 - fy);
+  return clamp(d / 0.7, 0, 1);
+}
+return { TILE, KM_MIN, KM_MAX, merc, unmerc, viewFrom, makeView, project, unproject, viewBounds, panView, zoomView, resizeView, tileZoom, tilesFor, radarTileUrl, pickFrames, decodeBasemap, pickBasemap, drawBasemap, placeLabels, makeGrid, gridCovers, gridUrl, parseGrid, sampleGrid, cloudColor, precipColor, paintField, edgeFade };
+})();
+
+// ---- mapview.js ----
+__m['mapview'] = (() => {
+// mapview.js: koko näytön kartta, välilehdet Tutka (havaittu sade 2 h, RainViewer) ja Pilvet (pilvisyys ja sade
+// seuraavalle vuorokaudelle, Open-Meteon monen pisteen ennuste). Pohjakartta on sovelluksen oma (Natural Earth),
+// joten karttapohjaa ei haeta muualta eikä sijainti lähde karttapalveluille.
+// Kartta liikkuu sormella, zoomautuu nipistämällä, kaksoisnapautuksella ja painikkeilla. Esimerkkitilassa sää on keksittyä.
+
+const { makeView, panView, zoomView, resizeView, project, unproject, tileZoom, tilesFor, radarTileUrl, pickFrames, decodeBasemap, pickBasemap, drawBasemap, placeLabels, makeGrid, gridCovers, gridUrl, parseGrid, sampleGrid, cloudColor, precipColor, paintField, edgeFade, viewFrom } = __m['geomap'];
+const { syntheticMapWx } = __m['demo'];
+const { partsIn, localNow, escapeHtml: esc } = __m['util'];
+
+const RV_JSON = 'https://api.rainviewer.com/public/weather-maps.json';
+const MAP_DIR = ''; // julkaisussa sama kansio kuin sivu (tools/build.mjs korvaa)
+const BASEMAPS = [
+  ['nordic', [4, 53, 45, 72.5]],
+  ['europe', [-32, 26, 50, 72.5]],
+];
+const KM = { radar: 320, cloud: 480 };
+const RV_TTL = 5 * 60000;
+const GRID_TTL = 30 * 60000;
+const MAX_LOADS = 6; // samanaikaiset tiilihaut (RainViewerin raja on 100 pyyntöä minuutissa)
+
+const PALETTE = {
+  light: { water: '#cfdff2', land: '#f6f1fa', coast: 'rgba(110, 128, 182, 0.42)', border: 'rgba(124, 98, 176, 0.5)' },
+  dark: { water: '#121733', land: '#262a52', coast: 'rgba(160, 172, 236, 0.3)', border: 'rgba(196, 176, 255, 0.4)' },
+};
+
+function withTimeout(fetchFn, url, ms) {
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = setTimeout(() => ctl?.abort(), ms);
+  return fetchFn(url, ctl ? { signal: ctl.signal } : undefined).finally(() => clearTimeout(timer));
+}
+
+/** Tutkan aikateksti: "klo 10.40 · 20 min sitten" tai "klo 11.00 · uusin". */
+function radarTimeText(tMs, nowMs, tz, newest) {
+  const p = partsIn(tMs, tz);
+  const clock = `klo ${p.h}.${String(p.mi).padStart(2, '0')}`;
+  const ago = Math.max(0, Math.round((nowMs - tMs) / 60000));
+  const agoText = ago >= 60 ? `${Math.floor(ago / 60)} t${ago % 60 ? ` ${ago % 60} min` : ''} sitten` : `${ago} min sitten`;
+  if (newest) return `${clock} · uusin${ago >= 15 ? `, ${agoText}` : ''}`;
+  return `${clock} · ${agoText}`;
+}
+
+/** Ennusteen aikateksti: "nyt", "tänään klo 14", "huomenna klo 6" tai viikonpäivä. */
+function forecastTimeText(tMs, nowMs, tz) {
+  if (Math.abs(tMs - nowMs) < 30 * 60000) return 'nyt';
+  const a = localNow(nowMs, tz);
+  const b = localNow(tMs, tz);
+  const day = b.date === a.date ? 'tänään' : Date.parse(`${b.date}T00:00Z`) - Date.parse(`${a.date}T00:00Z`) === 86400000 ? 'huomenna' : ['su', 'ma', 'ti', 'ke', 'to', 'pe', 'la'][new Date(`${b.date}T12:00Z`).getUTCDay()];
+  if (b.hour === 0) return day === 'huomenna' ? 'keskiyöllä' : `${day} klo 00`;
+  return `${day} klo ${b.hour}`;
+}
+
+function createMapView(root, { getPlace, getTz = () => 'Europe/Helsinki', nowMs = () => Date.now(), fetchFn = (...a) => fetch(...a), fetchStatic = (...a) => fetch(...a), demo = false, scenario = 'mixed', cities = [], onClose = () => {}, onSource = () => {} } = {}) {
+  const $ = (s) => root.querySelector(s);
+  const stage = $('.mv-stage');
+  const baseCv = $('.mv-base');
+  const wxCv = $('.mv-wx');
+  const marks = $('.mv-marks');
+  const statusEl = $('.mv-status');
+  const timeEl = $('.mv-time');
+  const range = $('.mv-range');
+  const playBtn = $('.mv-play');
+  const legend = $('.mv-legend');
+  const attr = $('.mv-attr');
+  const S = {
+    open: false,
+    tab: 'radar',
+    view: null,
+    dpr: 1,
+    maps: {},
+    mapName: null,
+    frames: [],
+    frame: 0,
+    host: '',
+    rvJson: null,
+    rvAt: 0,
+    grid: null,
+    gridData: null,
+    gridAt: 0,
+    hour: 0,
+    playing: false,
+    timer: 0,
+    seq: 0,
+    lastFocus: null,
+  };
+  const tiles = new Map(); // url -> { img, ok }
+  const queue = [];
+  let loading = 0;
+  let wxRaf = 0;
+  const off = typeof document !== 'undefined' ? document.createElement('canvas') : null; // pienoiskangas kentille
+
+  const dark = () => !document.body.classList.contains('light');
+  const place = () => getPlace() || { lat: 60.17, lon: 24.94 };
+
+  // ---------- Piirto ----------
+
+  function sizeCanvases() {
+    const w = Math.max(1, stage.clientWidth);
+    const h = Math.max(1, stage.clientHeight);
+    S.dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
+    for (const cv of [baseCv, wxCv]) {
+      cv.width = Math.round(w * S.dpr);
+      cv.height = Math.round(h * S.dpr);
+    }
+    return [w, h];
+  }
+
+  function drawBase() {
+    const ctx = baseCv.getContext('2d');
+    ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
+    drawBasemap(ctx, S.view, S.maps[S.mapName] || null, PALETTE[dark() ? 'dark' : 'light']);
+  }
+
+  function drawMarks() {
+    const p = place();
+    const me = project(S.view, p.lon, p.lat);
+    // Nimet eivät jää painikkeiden ja paneelin alle.
+    const sr = stage.getBoundingClientRect();
+    const avoid = ['.mv-top', '.mv-zoom', '.mv-panel']
+      .map((q) => $(q)?.getBoundingClientRect())
+      .filter((r) => r && r.width)
+      .map((r) => ({ x0: r.left - sr.left - 4, y0: r.top - sr.top - 4, x1: r.right - sr.left + 4, y1: r.bottom - sr.top + 4 }));
+    const labels = placeLabels(S.view, cities, { skip: me, skipW: p.name ? p.name.length * 7.4 + 26 : 0, avoid });
+    const own = p.name ? `<span class="mv-label mv-here" style="left:${(me[0] + 12).toFixed(1)}px;top:${me[1].toFixed(1)}px">${esc(p.name)}</span>` : '';
+    marks.innerHTML =
+      labels.map((l) => `<span class="mv-label" style="left:${l.x.toFixed(1)}px;top:${l.y.toFixed(1)}px">${esc(l.name)}</span>`).join('') +
+      own +
+      `<i class="mv-me" style="left:${me[0].toFixed(1)}px;top:${me[1].toFixed(1)}px"></i>`;
+  }
+
+  function fieldLayer(sample) {
+    const step = 4;
+    const W = Math.ceil(S.view.w / step);
+    const H = Math.ceil(S.view.h / step);
+    off.width = W;
+    off.height = H;
+    const octx = off.getContext('2d');
+    const img = octx.createImageData(W, H);
+    paintField(img, S.view, step, sample);
+    octx.putImageData(img, 0, 0);
+    return off;
+  }
+
+  function drawWx() {
+    wxRaf = 0;
+    const ctx = wxCv.getContext('2d');
+    ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
+    ctx.clearRect(0, 0, S.view.w, S.view.h);
+    ctx.imageSmoothingEnabled = true;
+    if (S.tab === 'radar') {
+      const f = S.frames[S.frame];
+      if (!f) return;
+      if (demo) {
+        const layer = fieldLayer((lon, lat) => {
+          const w = syntheticMapWx(lon, lat, f.t, scenario, S.anchor);
+          return precipColor(w.precip, 0);
+        });
+        ctx.drawImage(layer, 0, 0, S.view.w, S.view.h);
+        return;
+      }
+      ctx.globalAlpha = 0.9;
+      for (const t of tilesFor(S.view, tileZoom(S.view))) {
+        const e = tiles.get(radarTileUrl(S.host, f.path, t));
+        if (e?.ok) ctx.drawImage(e.img, t.px, t.py, t.size, t.size);
+      }
+      ctx.globalAlpha = 1;
+      return;
+    }
+    const d = S.gridData;
+    if (!d || !S.grid) return;
+    const k = S.hour;
+    const g = S.grid;
+    const darkMode = dark();
+    const layer = fieldLayer((lon, lat) => {
+      const fade = edgeFade(g, lon, lat);
+      if (!(fade > 0)) return null;
+      const cl = cloudColor(sampleGrid(g, d.cloud[k], lon, lat), darkMode);
+      const mm = sampleGrid(g, d.precip[k], lon, lat);
+      const sn = sampleGrid(g, d.snow[k], lon, lat);
+      const pr = precipColor(mm, mm > 0 ? Math.min(1, (sn * 0.7) / Math.max(mm, 0.01)) : 0, darkMode);
+      let c = cl;
+      if (pr) c = c ? mix(c, pr) : pr;
+      return c ? [c[0], c[1], c[2], c[3] * fade] : null;
+    });
+    ctx.drawImage(layer, 0, 0, S.view.w, S.view.h);
+  }
+
+  const mix = (under, over) => {
+    const a = over[3] + under[3] * (1 - over[3]);
+    const f = (i) => (over[i] * over[3] + under[i] * under[3] * (1 - over[3])) / (a || 1);
+    return [f(0), f(1), f(2), a];
+  };
+
+  const queueWx = () => {
+    if (!wxRaf) wxRaf = requestAnimationFrame(drawWx);
+  };
+
+  function drawAll() {
+    if (!S.view) return;
+    const name = pickBasemap(S.view, BASEMAPS);
+    if (name && !S.maps[name]) loadBasemap(name);
+    S.mapName = name;
+    drawBase();
+    drawMarks();
+    drawWx();
+  }
+
+  // ---------- Pohjakartta ----------
+
+  const mapLoads = {};
+  function loadBasemap(name) {
+    if (mapLoads[name]) return mapLoads[name];
+    const inline = globalThis.SAAALY_MAPS?.[name];
+    mapLoads[name] = (inline ? Promise.resolve(inline) : fetchStatic(`${MAP_DIR}map-${name}.json`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`pohjakartta ${r.status}`)))))
+      .then((data) => {
+        S.maps[name] = decodeBasemap(data);
+        if (S.open && S.mapName === name) {
+          drawBase();
+        }
+      })
+      .catch(() => {
+        delete mapLoads[name];
+      });
+    return mapLoads[name];
+  }
+
+  // ---------- Tutka ----------
+
+  function pump() {
+    while (loading < MAX_LOADS && queue.length) {
+      const url = queue.shift();
+      const e = tiles.get(url);
+      if (!e || e.started) continue;
+      e.started = true;
+      loading++;
+      e.img.onload = () => {
+        loading--;
+        e.ok = true;
+        if (S.open && S.tab === 'radar') queueWx();
+        pump();
+      };
+      e.img.onerror = () => {
+        loading--;
+        e.failed = true;
+        pump();
+      };
+      e.img.src = url;
+    }
+  }
+
+  function wantTiles() {
+    if (demo || !S.frames.length) return;
+    const ts = tilesFor(S.view, tileZoom(S.view));
+    const order = [S.frames.length - 1, ...S.frames.map((_, i) => i).filter((i) => i !== S.frames.length - 1)];
+    queue.length = 0;
+    for (const i of order) {
+      for (const t of ts) {
+        const url = radarTileUrl(S.host, S.frames[i].path, t);
+        if (!tiles.has(url)) {
+          const img = new Image();
+          img.decoding = 'async';
+          tiles.set(url, { img, ok: false });
+        }
+        const e = tiles.get(url);
+        if (!e.started) queue.push(url);
+      }
+    }
+    pump();
+  }
+
+  async function loadRadar() {
+    const seq = ++S.seq;
+    const now = nowMs();
+    if (demo) {
+      const last = Math.floor(now / 600000) * 600000;
+      S.frames = Array.from({ length: 7 }, (_, i) => ({ t: last - (6 - i) * 1200000, path: '' }));
+      S.frame = S.frames.length - 1;
+      status('');
+      afterFrames();
+      return;
+    }
+    if (!S.rvJson || now - S.rvAt > RV_TTL) {
+      status('Haetaan tutkaa…');
+      try {
+        const res = await withTimeout(fetchFn, RV_JSON, 9000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        S.rvJson = json;
+        S.rvAt = now;
+        onSource('radarmap', true, `${(json?.radar?.past || []).length} kehystä`);
+      } catch (err) {
+        onSource('radarmap', false, err);
+        if (seq === S.seq) status('Tutka ei vastannut juuri nyt.', true);
+        return;
+      }
+    }
+    if (seq !== S.seq) return;
+    S.host = String(S.rvJson.host || 'https://tilecache.rainviewer.com');
+    S.frames = pickFrames(S.rvJson?.radar?.past).map((f) => ({ t: f.time * 1000, path: f.path }));
+    if (!S.frames.length) {
+      status('Tutkakuvia ei ole juuri nyt saatavilla.', true);
+      return;
+    }
+    S.frame = S.frames.length - 1;
+    status('');
+    afterFrames();
+    wantTiles();
+  }
+
+  // ---------- Pilvet ----------
+
+  async function loadGrid(force = false) {
+    const seq = ++S.seq;
+    const now = nowMs();
+    if (!force && S.gridData && now - S.gridAt < GRID_TTL && gridCovers(S.grid, S.view)) {
+      afterFrames();
+      return;
+    }
+    const grid = makeGrid(S.view);
+    status('Haetaan ennustetta…');
+    try {
+      const res = await withTimeout(fetchFn, gridUrl(grid), 15000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = parseGrid(await res.json(), grid);
+      if (seq !== S.seq) return;
+      S.grid = grid;
+      S.gridData = data;
+      S.gridAt = now;
+      onSource('cloudmap', true, `${grid.rows * grid.cols} pistettä`);
+    } catch (err) {
+      onSource('cloudmap', false, err);
+      if (seq === S.seq) status('Ennuste ei vastannut juuri nyt.', true);
+      return;
+    }
+    status('');
+    const t0 = now - 30 * 60000;
+    const i = S.gridData.times.findIndex((t) => t >= t0);
+    S.hour = Math.max(0, i);
+    afterFrames();
+  }
+
+  // ---------- Aikajana ----------
+
+  function steps() {
+    return S.tab === 'radar' ? S.frames.length : S.gridData ? S.gridData.times.length : 0;
+  }
+
+  function current() {
+    return S.tab === 'radar' ? S.frame : S.hour;
+  }
+
+  function label() {
+    const tz = getTz();
+    if (S.tab === 'radar') {
+      const f = S.frames[S.frame];
+      return f ? radarTimeText(f.t, nowMs(), tz, S.frame === S.frames.length - 1) : '';
+    }
+    const t = S.gridData?.times[S.hour];
+    return t ? forecastTimeText(t, nowMs(), tz) : '';
+  }
+
+  function afterFrames() {
+    const n = steps();
+    range.max = String(Math.max(0, n - 1));
+    range.value = String(current());
+    range.disabled = n < 2;
+    playBtn.disabled = n < 2;
+    updateTime();
+    drawWx();
+    if (S.tab === 'radar' && n > 1 && !S.playing && !S.userPaused && !reduce()) play(true);
+  }
+
+  function updateTime() {
+    const t = label();
+    timeEl.textContent = t;
+    range.setAttribute('aria-valuetext', t);
+  }
+
+  function setStep(i) {
+    const n = steps();
+    if (!n) return;
+    const k = ((i % n) + n) % n;
+    if (S.tab === 'radar') S.frame = k;
+    else S.hour = k;
+    range.value = String(k);
+    updateTime();
+    queueWx();
+  }
+
+  const reduce = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  function play(on) {
+    clearTimeout(S.timer);
+    S.playing = on;
+    playBtn.classList.toggle('on', on);
+    playBtn.setAttribute('aria-label', on ? 'Pysäytä' : 'Toista');
+    playBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (!on) return;
+    const tick = () => {
+      if (!S.playing || !S.open) return;
+      const n = steps();
+      const next = current() + 1 >= n ? 0 : current() + 1;
+      setStep(next);
+      const last = next === n - 1;
+      S.timer = setTimeout(tick, last ? 1500 : S.tab === 'radar' ? 650 : 520);
+    };
+    S.timer = setTimeout(tick, current() === steps() - 1 ? 900 : 650);
+  }
+
+  // ---------- Tila ja välilehdet ----------
+
+  function status(text, retry = false) {
+    statusEl.hidden = !text;
+    statusEl.innerHTML = text ? `<span>${esc(text)}</span>${retry ? '<button type="button" data-mv="retry">Yritä uudelleen</button>' : ''}` : '';
+  }
+
+  function chrome() {
+    root.querySelectorAll('[data-mv="tab"]').forEach((b) => {
+      const on = b.dataset.tab === S.tab;
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    legend.innerHTML =
+      S.tab === 'radar'
+        ? '<span class="lg-bar lg-rain"></span><span class="lg-l">heikko</span><span class="lg-r">rankka sade tai lumi</span>'
+        : '<span class="lg-bar lg-cloud"></span><span class="lg-l">selkeä</span><span class="lg-r">pilvinen</span><span class="lg-snow"><i class="rain"></i>sade</span><span class="lg-snow"><i></i>lumi</span>';
+    attr.innerHTML = demo
+      ? 'Esimerkkitila: kartan sää on keksittyä. Pohjakartta: Natural Earth.'
+      : S.tab === 'radar'
+        ? 'Tutka: <a href="https://www.rainviewer.com" target="_blank" rel="noopener">RainViewer</a> · havainnot 20 min välein · pohjakartta: Natural Earth'
+        : 'Ennuste: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> (säämallit, noin 45 km:n ruudukko) · pohjakartta: Natural Earth';
+  }
+
+  function setTab(tab) {
+    play(false);
+    S.userPaused = false;
+    S.tab = tab === 'cloud' ? 'cloud' : 'radar';
+    chrome();
+    timeEl.textContent = '';
+    status('');
+    const want = KM[S.tab];
+    if (S.view && Math.abs(S.view.km - want) / want > 0.02 && !S.moved) {
+      const p = place();
+      S.view = makeView({ lon: p.lon, lat: p.lat, km: want, w: S.view.w, h: S.view.h });
+      drawAll();
+    } else drawWx();
+    if (S.tab === 'radar') loadRadar();
+    else loadGrid();
+  }
+
+  function recenter() {
+    const p = place();
+    S.moved = false;
+    S.view = makeView({ lon: p.lon, lat: p.lat, km: KM[S.tab], w: S.view.w, h: S.view.h });
+    viewChanged();
+  }
+
+  function viewChanged() {
+    drawAll();
+    if (S.tab === 'radar') wantTiles();
+    else if (!gridCovers(S.grid, S.view)) loadGridSoon();
+  }
+
+  let gridTimer = 0;
+  function loadGridSoon() {
+    clearTimeout(gridTimer);
+    gridTimer = setTimeout(() => loadGrid(true), 500);
+  }
+
+  // ---------- Eleet ----------
+
+  const pts = new Map();
+  let g0 = null; // eleen alku: { view, m0, d0 }
+  let lastTap = 0;
+  const layers = [baseCv, wxCv, marks];
+
+  function mid() {
+    const a = [...pts.values()];
+    const m = a.reduce((s, p) => [s[0] + p.x, s[1] + p.y], [0, 0]).map((v) => v / a.length);
+    const d = a.length > 1 ? Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) : 0;
+    return { m, d };
+  }
+
+  function local(e) {
+    const r = stage.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  function begin() {
+    const { m, d } = mid();
+    g0 = { view: S.view, m0: m, d0: d, f: 1, m1: m, moved: false };
+  }
+
+  function preview() {
+    const { m0, m1, f } = g0;
+    for (const el of layers) {
+      el.style.transformOrigin = `${m0[0]}px ${m0[1]}px`;
+      el.style.transform = `translate(${m1[0] - m0[0]}px, ${m1[1] - m0[1]}px) scale(${f})`;
+    }
+  }
+
+  function commit() {
+    for (const el of layers) el.style.transform = '';
+    if (!g0?.moved) return;
+    const { view, m0, m1, f } = g0;
+    const z = zoomView(view, f, m0[0], m0[1]);
+    S.view = panView(z, m1[0] - m0[0], m1[1] - m0[1]);
+    S.moved = true;
+    viewChanged();
+  }
+
+  stage.addEventListener('pointerdown', (e) => {
+    stage.setPointerCapture?.(e.pointerId);
+    pts.set(e.pointerId, local(e));
+    if (pts.size <= 2) begin();
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId) || !g0) return;
+    pts.set(e.pointerId, local(e));
+    const { m, d } = mid();
+    g0.m1 = m;
+    g0.f = pts.size > 1 && g0.d0 > 0 ? Math.max(0.2, Math.min(5, d / g0.d0)) : 1;
+    if (Math.hypot(m[0] - g0.m0[0], m[1] - g0.m0[1]) > 4 || Math.abs(g0.f - 1) > 0.02) g0.moved = true;
+    if (g0.moved) preview();
+  });
+  const up = (e) => {
+    if (!pts.has(e.pointerId)) return;
+    const wasMoved = g0?.moved;
+    const p = pts.get(e.pointerId);
+    commit();
+    pts.delete(e.pointerId);
+    if (pts.size) begin();
+    else {
+      g0 = null;
+      if (!wasMoved && e.type === 'pointerup') {
+        const now = Date.now();
+        if (now - lastTap < 320) {
+          S.view = zoomView(S.view, 2, p.x, p.y);
+          S.moved = true;
+          viewChanged();
+          lastTap = 0;
+        } else lastTap = now;
+      }
+    }
+  };
+  stage.addEventListener('pointerup', up);
+  stage.addEventListener('pointercancel', up);
+  stage.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const p = local(e);
+      S.view = zoomView(S.view, Math.pow(1.0018, -e.deltaY), p.x, p.y);
+      S.moved = true;
+      viewChanged();
+    },
+    { passive: false },
+  );
+
+  // ---------- Ohjaimet ----------
+
+  root.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mv]');
+    if (!b) return;
+    const act = b.dataset.mv;
+    if (act === 'close') close();
+    else if (act === 'tab') setTab(b.dataset.tab);
+    else if (act === 'zoom-in' || act === 'zoom-out') {
+      S.view = zoomView(S.view, act === 'zoom-in' ? 1.6 : 1 / 1.6);
+      S.moved = true;
+      viewChanged();
+    } else if (act === 'recenter') recenter();
+    else if (act === 'play') {
+      S.userPaused = S.playing;
+      play(!S.playing);
+    } else if (act === 'retry') {
+      S.rvJson = null;
+      if (S.tab === 'radar') loadRadar();
+      else loadGrid(true);
+    }
+  });
+  range.addEventListener('input', () => {
+    S.userPaused = true;
+    play(false);
+    setStep(Number(range.value));
+  });
+  root.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    } else if (e.key === 'Tab') {
+      const items = [...root.querySelectorAll('button:not([disabled]), input:not([disabled]), a[href]')].filter((n) => n.offsetParent !== null);
+      if (!items.length) return;
+      const i = items.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) {
+        e.preventDefault();
+        items[items.length - 1].focus();
+      } else if (!e.shiftKey && i === items.length - 1) {
+        e.preventDefault();
+        items[0].focus();
+      }
+    }
+  });
+
+  function onResize() {
+    if (!S.open || !S.view) return;
+    const [w, h] = sizeCanvases();
+    S.view = resizeView(S.view, w, h);
+    viewChanged();
+  }
+  globalThis.addEventListener?.('resize', onResize);
+
+  // ---------- Avaus ja sulkeminen ----------
+
+  function open(tab = 'radar') {
+    S.lastFocus = document.activeElement;
+    S.open = true;
+    root.hidden = false;
+    root.classList.toggle('demo', demo);
+    document.body.classList.add('map-open');
+    const [w, h] = sizeCanvases();
+    const p = place();
+    S.tab = tab === 'cloud' ? 'cloud' : 'radar';
+    S.moved = false;
+    S.userPaused = false;
+    S.view = makeView({ lon: p.lon, lat: p.lat, km: KM[S.tab], w, h });
+    S.anchor = S.anchor || nowMs();
+    chrome();
+    drawAll();
+    if (S.tab === 'radar') loadRadar();
+    else loadGrid();
+    requestAnimationFrame(() => root.classList.add('open'));
+    setTimeout(() => $('[data-mv="close"]')?.focus({ preventScroll: true }), 60);
+  }
+
+  function close() {
+    if (!S.open) return;
+    S.open = false;
+    S.seq++;
+    play(false);
+    root.classList.remove('open');
+    document.body.classList.remove('map-open');
+    queue.length = 0;
+    setTimeout(() => {
+      if (!S.open) root.hidden = true;
+    }, 200);
+    onClose();
+    if (S.lastFocus?.isConnected) S.lastFocus.focus({ preventScroll: true });
+  }
+
+  return {
+    open,
+    close,
+    get isOpen() {
+      return S.open;
+    },
+    /** Testeille: tila ja näkymä. */
+    debug: () => ({ tab: S.tab, frames: S.frames.length, frame: S.frame, hour: S.hour, hours: S.gridData?.times.length || 0, km: S.view?.km, lat: S.view?.lat, lon: S.view?.lon, map: S.mapName, base: Boolean(S.maps[S.mapName]), tilesOk: [...tiles.values()].filter((e) => e.ok).length, grid: S.grid ? S.grid.rows * S.grid.cols : 0, playing: S.playing }),
+    setStep,
+    unproject: (x, y) => unproject(S.view, x, y),
+    viewFrom,
+  };
+}
+return { RV_JSON, radarTimeText, forecastTimeText, createMapView };
 })();
 
 // ---- app.js ----
@@ -7990,10 +9186,12 @@ const { fetchObs } = __m['observations'];
 const { makeDemoFetch } = __m['demo'];
 const { agoText, selLabel, placeHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
 const { homeHeadline } = __m['headline'];
-const { createCube } = __m['cube'];
+const { createCube, createCubeChrome } = __m['cube'];
+const { createMapView } = __m['mapview'];
+const { FOREIGN_CITIES } = __m['gazetteer'];
 
-const VERSION = '0.7.1';
-const BUILD = 'ec21e63229'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
+const VERSION = '0.8.0';
+const BUILD = 'd1e98e054d'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
 // ---------- Ympäristö ----------
@@ -8938,8 +10136,55 @@ const TITLES = { search: 'Paikkakunta', settings: 'Asetukset', chat: 'Kysy Sää
 function sheetContent(kind) {
   if (kind === 'search') return searchSheetHtml({ recent: state.recent });
   if (kind === 'chat') return chatSheetHtml({ mode: aiMode(), hasKey: keyOn(), hasMessages: state.chat.length > 0 });
-  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
+  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs', 'radarmap', 'cloudmap'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
   return settingsSheetHtml({ hasKey: keyOn(), mode: aiMode(), model: aiSettings.model(), refreshMin: state.refreshMin, models: state.models, demo: DEMO, sens: state.sens, anim: store.bool('anim', true) });
+}
+
+// ---------- Kartta (Tutka ja Pilvet) ----------
+
+let mapView = null;
+let mapEntry = false;
+
+function openMap(tab = 'radar') {
+  if (state.sheet) closeSheet();
+  if (!mapView) {
+    mapView = createMapView($('#mapView'), {
+      getPlace: () => state.place,
+      getTz: () => state.fc?.tz || 'Europe/Helsinki',
+      nowMs,
+      fetchFn,
+      fetchStatic: defaultFetch,
+      demo: DEMO,
+      scenario,
+      cities: [...FI_CITIES, ...FOREIGN_CITIES],
+      onSource: (id, ok, info) => (ok ? sources.ok(id, nowMs(), info) : sources.fail(id, info, nowMs())),
+      onClose: () => {
+        el.app.inert = false;
+        el.fab.inert = false;
+        sky?.start();
+        if (mapEntry) {
+          mapEntry = false;
+          ignorePop = true;
+          try {
+            history.back();
+          } catch {
+            ignorePop = false;
+          }
+        }
+      },
+    });
+  }
+  if (mapView.isOpen) return;
+  el.app.inert = true;
+  el.fab.inert = true;
+  sky?.stop();
+  try {
+    history.pushState({ saaalyMap: true }, '');
+    mapEntry = true;
+  } catch {
+    mapEntry = false;
+  }
+  mapView.open(tab);
 }
 
 function openSheet(kind) {
@@ -8980,11 +10225,13 @@ function closeSheet() {
   document.body.classList.remove('sheet-open');
   sky?.start();
   if (hasEntry) {
+    // Oma merkintä pois historiasta; sen popstate ohitetaan, jotta alisivulla (Tunnit, Viikko, Varmuus) pysytään.
     hasEntry = false;
+    ignorePop = true;
     try {
       history.back();
     } catch {
-      /* ei väliä */
+      ignorePop = false;
     }
   }
   setTimeout(() => {
@@ -9416,6 +10663,7 @@ const ACTIONS = {
   'open-search': () => openSheet('search'),
   'open-settings': () => openSheet('settings'),
   'open-chat': () => openSheet('chat'),
+  'open-map': (t) => openMap(t.dataset.tab || 'radar'),
   'open-about': () => openSheet('about'),
   'update-app': () => updateApp(),
   'mg-range': (t) => {
@@ -9629,6 +10877,11 @@ function bindEvents() {
   });
 
   window.addEventListener('popstate', () => {
+    if (mapView?.isOpen) {
+      mapEntry = false;
+      mapView.close();
+      return;
+    }
     if (state.sheet) {
       hasEntry = false;
       closeSheet();
@@ -9644,9 +10897,23 @@ function bindEvents() {
     }
   });
   if (el.pages) {
+    // Sivun alue alkaa yläpalkin ja ilmoitusten alta: paikka luetaan virrassa olevasta varauksesta.
+    const slot = $('#pagesSlot');
+    const measureTop = () => el.pages.style.setProperty('--top-h', `${slot ? slot.offsetTop : 0}px`);
+    measureTop();
+    if (typeof ResizeObserver === 'function' && slot) new ResizeObserver(measureTop).observe(slot);
+    const chrome = createCubeChrome({
+      app: el.app,
+      faces: [...el.pages.querySelectorAll('.face')],
+      sky: $('#sky'),
+      chrome: () => [$('.top', el.app), el.banner, el.welcome, el.fab],
+    });
     cube = createCube(el.pages, {
       onSettle: onPageChange,
       onTurn: markDot,
+      onEnter: chrome.enter,
+      onFrame: chrome.frame,
+      onRest: chrome.rest,
       reduceMotion,
       // Näiden vaakaveto kuuluu niille itselleen: päivän tuntinauha ja sääkaavion tarkastelu.
       ignore: '.dstrip, #mgWrap, input, textarea, select',
@@ -9724,7 +10991,7 @@ async function boot() {
   setTimeout(checkForUpdate, 4000, { force: true });
 }
 
-globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, get cube() { return cube; } };
+globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, openMap, get cube() { return cube; }, get map() { return mapView; } };
 boot();
 })();
 })();

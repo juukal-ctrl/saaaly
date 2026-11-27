@@ -80,12 +80,14 @@ const CSP_CONNECT = [
   'https://api.met.no',
   'https://raw.githubusercontent.com', // varoitusten peili (haara warnings-data), ks. js/warnings.js
   'https://opendata.fmi.fi', // lähimmän sääaseman havainto, ks. js/observations.js
+  'https://api.rainviewer.com', // tutkakartan kehysluettelo, ks. js/mapview.js
 ];
+const CSP_IMG = ['https://tilecache.rainviewer.com']; // tutkakartan tiilet (kuvina, ei luettavina)
 const CSP = [
   "default-src 'none'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
+  `img-src 'self' data: ${CSP_IMG.join(' ')}`,
   "font-src 'self'",
   `connect-src 'self' ${CSP_CONNECT.join(' ')}`,
   "manifest-src 'self'",
@@ -101,7 +103,7 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 if (!bundle.includes("'__BUILD__'")) throw new Error("app.js:stä puuttuu BUILD-paikanvaraaja '__BUILD__'");
 const hash = createHash('sha1').update(bundle).update(CSP);
 for (const f of ['css/app.css', 'index.html', 'crash.js', 'manifest.webmanifest', 'sw.js']) hash.update(readFileSync(join(root, f)));
-for (const f of readdirSync(join(root, 'icons')).concat(readdirSync(join(root, 'fonts')).map((x) => '../fonts/' + x))) hash.update(readFileSync(join(root, 'icons', f)));
+for (const f of readdirSync(join(root, 'icons')).concat(readdirSync(join(root, 'fonts')).map((x) => '../fonts/' + x), readdirSync(join(root, 'maps')).map((x) => '../maps/' + x))) hash.update(readFileSync(join(root, 'icons', f)));
 const BUILD = hash.digest('hex').slice(0, 10);
 bundle = bundle.replace("'__BUILD__'", `'${BUILD}'`);
 
@@ -121,7 +123,11 @@ html = html
   .replace('<link rel="apple-touch-icon" href="icons/icon-192.png">\n', '')
   .replace('<link rel="icon" href="icons/icon.svg" type="image/svg+xml">', () => (svg ? `<link rel="icon" href="data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}">` : ''))
   .replace('<script src="crash.js"></script>', () => `<script>\n${readFileSync(join(root, 'crash.js'), 'utf8')}</script>`)
-  .replace('<script src="saaaly.js" defer></script>', () => `<script>window.SAAALY_DEMO = true;</script>\n<script>\n${bundle}</script>`);
+  .replace('<script src="saaaly.js" defer></script>', () => {
+    // Esikatselu toimii ilman palvelinta: pohjakartat upotetaan sivuun (mapview.js lukee ne ensin täältä).
+    const maps = Object.fromEntries(readdirSync(join(root, 'maps')).filter((f) => /^map-[\w]+\.json$/.test(f)).map((f) => [f.slice(4, -5), JSON.parse(readFileSync(join(root, 'maps', f), 'utf8'))]));
+    return `<script>window.SAAALY_DEMO = true;\nwindow.SAAALY_MAPS = ${JSON.stringify(maps)};</script>\n<script>\n${bundle}</script>`;
+  });
 for (const bad of ['saaaly.js"', 'css/app.css', 'src="crash.js"']) if (html.includes(bad)) throw new Error('Esikatselun muunnos epäonnistui: ' + bad);
 mkdirSync(join(root, 'dist'), { recursive: true });
 writeFileSync(join(root, 'dist/preview.html'), html);
@@ -154,12 +160,16 @@ console.log(`dist/preview.html: ${(html.length / 1024).toFixed(1)} kt`);
     if (/\b(?:css|icons|fonts)\//.test(text)) throw new Error(`julkaise/${f}: alikansiopolku jäi korjaamatta`);
     writeFileSync(join(out, f), text);
   }
-  copyFileSync(join(root, 'saaaly.js'), join(out, 'saaaly.js'));
+  // Julkaisussa pohjakartat ovat samassa kansiossa kuin sivu.
+  const MAP_DIR_SRC = "const MAP_DIR = 'maps/';";
+  if (!bundle.includes(MAP_DIR_SRC)) throw new Error('saaaly.js: MAP_DIR-määritys puuttuu (js/mapview.js)');
+  writeFileSync(join(out, 'saaaly.js'), bundle.replace(MAP_DIR_SRC, "const MAP_DIR = '';"));
   copyFileSync(join(root, 'crash.js'), join(out, 'crash.js'));
   writeFileSync(join(out, 'version.json'), JSON.stringify({ version: pkg.version, build: BUILD }) + '\n');
   writeFileSync(join(out, 'app.css'), readFileSync(join(root, 'css/app.css'), 'utf8').replace(/url\(\.\.\/(?:icons|fonts)\//g, 'url('));
   for (const f of readdirSync(join(root, 'icons'))) copyFileSync(join(root, 'icons', f), join(out, f));
   for (const f of readdirSync(join(root, 'fonts'))) copyFileSync(join(root, 'fonts', f), join(out, f === 'OFL.txt' ? 'inter-OFL.txt' : f));
+  for (const f of readdirSync(join(root, 'maps'))) copyFileSync(join(root, 'maps', f), join(out, f));
   const files = readdirSync(out).sort();
   console.log(`julkaise/: ${files.length} tiedostoa (${files.join(', ')})`);
 }
