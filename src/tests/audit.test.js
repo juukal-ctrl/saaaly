@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { alertsHtml } from '../js/views.js';
 import { blendForecast, nowPosition, modelRows, windowPopPm } from '../js/blend.js';
 import { parseModelResponse } from '../js/weather.js';
+import { summarizeNowcast } from '../js/nowcast.js';
 
 test('varoitusrivin tarkistusaika näytetään paikan aikavyöhykkeessä, ei laitteen', () => {
   const now = Date.UTC(2026, 10, 26, 9, 45);
@@ -60,4 +61,18 @@ test('päivän sateen todennäköisyys painottaa malleja ennusteen iän mukaan k
   const d = fc.days.find((x) => x.date === '2026-10-15');
   assert.ok(Math.abs(d.pwin - 2 / 2.1) < 1e-9, `pwin ${d.pwin}`);
   assert.ok(Math.abs(d.pwin - windowPopPm(fc.pm, d.from, d.to, 0.3, fc.lead0)) < 1e-12);
+});
+
+// ---------- Tutkaennuste ----------
+
+test('tutkaennuste: alkavan sateen voimakkuus ja määrä tunnin ajalta myös 15 minuutin askeleilla', () => {
+  const T0 = Date.parse('2026-11-17T12:00:00Z');
+  const rates = [0, 0, 2, 2, 2, 2, 8, 8]; // 15 min välein, sade alkaa 30 min päästä, rankka sade vasta tunnin kuluttua
+  const nc = { ok: true, updated: T0, steps: rates.map((rate, i) => ({ t: T0 + i * 15 * 60000, rate })) };
+  const s = summarizeNowcast(nc, T0 + 60000);
+  assert.equal(s.state, 'dry');
+  assert.equal(s.startMin, 30);
+  assert.equal(s.peak, 2);
+  assert.equal(s.mm, 2);
+  assert.equal(s.word, 'kohtalaista');
 });
