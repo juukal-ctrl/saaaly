@@ -3003,7 +3003,7 @@ body.light .ask-btn {
 
 :root {
   --font: 'Inter Display', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --ink2: #cdc4f2;
+  --ink2: #d3cbf5; /* WCAG AA: vähintään 4.5:1 myös hämärän taivaan ja valintapalkin päällä */
   --card: linear-gradient(160deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.07));
   --card-sh: 0 22px 44px -18px rgba(5, 0, 30, 0.55);
   --row-on: rgba(255, 255, 255, 0.14);
@@ -3012,7 +3012,7 @@ body.light .ask-btn {
 }
 
 body.light {
-  --ink2: #554d86;
+  --ink2: #4c447c; /* WCAG AA: vähintään 4.5:1 vaalealla iltataivaalla */
   --card: linear-gradient(160deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.46));
   --card-sh: 0 22px 44px -18px rgba(150, 120, 220, 0.34);
   --row-on: rgba(255, 255, 255, 0.8);
@@ -3203,7 +3203,15 @@ body:not(.light) .hd-seg .seg[aria-pressed='true'] {
   opacity: 1;
 }
 
+/* --turn ei periydy kyljen sisältöön: käännön joka kuva laskee tyylit vain kyljelle ja sen varjolle, ei koko sivulle. */
+@property --turn {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+
 .pages:not(.cube-rest) .face::after {
+  --turn: inherit;
   opacity: calc(var(--turn, 0) * 0.42);
 }
 
@@ -4295,7 +4303,8 @@ body:not(.light) .btn.ghost {
 }
 
 body:not(.light) .modebar .seg[aria-pressed='true'] {
-  background: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.16); /* valkoinen teksti vähintään 4.5:1 */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
   color: #fff;
 }
 
@@ -5000,4 +5009,276 @@ body:not(.light) .lg-snow i:not(.rain) {
   color: inherit;
   font: inherit;
   font-size: 13px;
+}
+
+/* ---------- 1.0: suosikkipaikat paikkapaneelissa ---------- */
+
+.fav-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+body.light .fav-row {
+  border-bottom-color: var(--line);
+}
+
+.fav-row > .row-btn {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+
+.fav-row .row-btn b,
+.fav-row .row-btn small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fav-pick {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fav-txt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fav-txt b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fav-tag {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.fav-tag.now {
+  border-style: dashed;
+}
+
+.fav-wx {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fav-wx.pending {
+  min-width: 34px;
+  justify-content: flex-end;
+  color: var(--ink-3);
+}
+
+.fav-t {
+  min-width: 3ch;
+  font-size: 19px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.fav-ic {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--ink-3);
+}
+
+.fav-ic svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.fav-ic:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.fav-ic.home {
+  width: 40px;
+  opacity: 0.75;
+}
+
+.fav-ic.home svg {
+  width: 19px;
+  height: 19px;
+}
+
+.fav-ic.star.on {
+  color: var(--dusk);
+}
+
+.fav-ic.star.on svg {
+  fill: currentColor;
+}
+
+.fav-ic.home.on {
+  color: var(--ice);
+  opacity: 1;
+}
+
+.fav-ic.home.on svg {
+  fill: color-mix(in srgb, currentColor 28%, transparent);
+}
+
+.fav-cur {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 6px 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+body.light .fav-cur {
+  background: var(--glass);
+}
+
+.fav-cur .fav-txt {
+  flex: 1;
+}
+
+.fav-cur .fav-txt b {
+  display: block;
+  overflow: hidden;
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fav-cur small {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.fav-cur .fav-txt small:first-child {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.fav-hint {
+  flex: none;
+  max-width: 40%;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  text-align: right;
+}
+
+.sheet h3.label {
+  font-size: 13.5px;
+}
+
+.fav-count {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.fav-note:empty {
+  display: none;
+}
+
+.fav-empty {
+  margin: 6px 0 4px;
+}
+
+/* ---------- Ilma: siitepöly, ilmanlaatu ja UV (Koti, Tunnit) ---------- */
+
+.vair,
+.air-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.verdict .vair {
+  margin-top: 2.6cqw;
+  max-width: 64cqw;
+}
+
+.ap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 11px 3px 7px;
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 10px 22px -14px rgba(80, 50, 160, 0.55);
+  font-size: 12.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.verdict .ap {
+  font-size: max(3.1cqw, 12px);
+}
+
+.ap svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+
+.ap b {
+  font-weight: 600;
+}
+
+/* Tason väripiste pillerin lopussa: teksti kertoo tason, väri vain vahvistaa sitä */
+.ap::after {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: #8fd9a8;
+}
+
+.ap.lv1::after { background: #f2c230; }
+.ap.lv2::after { background: #f08a24; }
+.ap.lv3::after { background: #e5484d; }
+
+.hv-more .air-row {
+  margin: -2px 0 8px;
+}
+
+.air-tip {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink2);
 }

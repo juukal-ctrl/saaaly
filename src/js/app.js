@@ -25,7 +25,7 @@ import { createMapView } from './mapview.js';
 import { FOREIGN_CITIES, fold } from './gazetteer.js';
 import { FAV_MAX, parseFavs, findFav, isFav, toggleFav, removeFav, toggleHome, fetchCurrent, parseWxCache, staleFavs, wxKey, samePlace } from './favorites.js';
 
-const VERSION = '0.8.0';
+const VERSION = '1.0.0';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 

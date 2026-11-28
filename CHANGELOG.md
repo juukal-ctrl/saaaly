@@ -1,5 +1,31 @@
 # Muutosloki
 
+## 1.0.0 – Suosikkipaikat, ilmanlaatu ja siitepöly, saavutettavuus
+
+Uutta
+
+- **Suosikkipaikat.** Paikkapaneelissa voi tallentaa tähdellä enintään kahdeksan paikkaa; talo merkitsee kodin, joka on aina ensimmäisenä. Jokaisesta suosikista näkyy nykyinen lämpötila ja sää (kaikki yhdellä kevyellä haulla, vasta kun paneeli avataan). Äsken katsottu paikka avautuu heti muistista ja päivittyy taustalla. Chat tunnistaa suosikit nimeltä, myös taivutettuna ("Särkisalossa").
+- **Ilmanlaatu, siitepöly ja UV** (Open-Meteo / CAMS). Kotisivulla pienet pillerit otsikon alla vain, kun niillä on merkitystä (siitepöly kohtalainen tai enemmän, ilmanlaatu huono, UV 3 tai yli). Huono ilmanlaatu ja erittäin runsas siitepöly näkyvät SääÄlyn huomiona varoitusrivillä. Tunnit-sivun avattu tunti näyttää ilmanlaadun, UV:n ja siitepölyn lajeittain (leppä, koivu, heinät, pujo, tuoksukki) neuvoineen, ja Viikko-sivun päivä kertoo runsaan siitepölyn ja UV:n.
+- Chat vastaa siitepöly-, ilmanlaatu- ja UV-kysymyksiin omalla laskennalla ("Kukkiiko koivu huomenna?", "Tarvitsenko aurinkovoidetta?"). Gemini saa samat tiedot.
+- **Pikakuvakkeet.** Aloitusnäytön kuvaketta painamalla pitkään pääsee suoraan chattiin, karttaan, Tunteihin tai Viikkoon.
+- **Ilman verkkoa** sovellus kertoo selvästi: "Ei verkkoyhteyttä. Näytetään ennuste klo 9.05 (2 h sitten)."
+
+Laatu ja korjaukset
+
+- Mallivertailu näytti aukon jälkeen edellisen tunnin luvut; "nyt" saattoi hypätä ennusteen loppuun, jos nykyinen tunti puuttui datasta.
+- Viikon sateen todennäköisyys painottaa malleja samoin kuin sateenvarjoneuvo, joten sivut eivät enää ole eri mieltä.
+- Tutkan "seuraava tunti" on tunti myös silloin, kun tutka antaa 15 minuutin välein.
+- Chat ei enää väitä datasta puuttuvaa tuntia ennusteen ulkopuoliseksi.
+- Paikkahaku kestää virheelliset vastaukset; nimettömiä tai koordinaatittomia tuloksia ei näytetä.
+- Nopea paikan vaihto: edellisen paikan nimi, tutka tai havainto ei enää jää uuden paikan päälle eikä viivästytä sitä. Rikkinäinen välimuisti ei pysäytä automaattista päivitystä.
+- Varoitustiedon kellonaika näytetään paikan ajassa, ei puhelimen aikavyöhykkeessä.
+
+Saavutettavuus ja suorituskyky
+
+- Kaikki näkymät läpäisevät axe-tarkistuksen (WCAG 2.2 AA) ilman huomautuksia: painikkeiden nimet alkavat näkyvällä tekstillä, etusivun otsikko on otsikko ruudunlukijalle, kartan välilehdet on merkitty oikein. Pieni toissijainen teksti on hieman tummempi (vaalea teema) ja vaaleampi (tumma teema), jotta kontrasti riittää kaikilla taivailla.
+- Taivasanimaatio piirtyy tasaisella tahdilla eikä herää taustalla, kun chat tai kartta on auki (chatissa kirjoittaminen kuormittaa suoritinta murto-osan entisestä). Kuution kääntö tekee noin kolmanneksen entisestä työstä, ja kartta ei toista kehyksiä piilossa.
+- Service worker tallentaa jokaisen tiedoston vain kerran (osoitteen parametrit eivät kasvata välimuistia), ei tallenna osittaisia vastauksia ja käyttää navigoinnin esilatausta.
+
 ## 0.8.0 – Koko näytön kuutio, tutka ja pilviennuste kartalla
 
 Kuutio

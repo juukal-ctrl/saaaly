@@ -1071,7 +1071,7 @@ function blendForecast(results, { nowMs } = {}) {
     const base = dayHours.length >= 4 ? dayHours : hs;
     const from = idxs[0];
     const to = idxs[idxs.length - 1];
-    const pwin = windowPopPm(pm, from, to, 0.3);
+    const pwin = windowPopPm(pm, from, to, 0.3, lead0); // mallien painot ennusteen iän mukaan kuten wetSpans-funktiossa
     const uvs = hs.map((h) => h.uv).filter((x) => x != null);
     return {
       date,
@@ -1126,7 +1126,9 @@ function nowPosition(fc, nowMs) {
   let idx = fc.hours.findIndex((h) => h.t === hourIso);
   let frac = ln.minute / 60;
   if (idx < 0) {
-    idx = hourIso < fc.hours[0].t ? 0 : fc.hours.length - 1;
+    // Tunti puuttuu (ennusteen ulkopuolella tai aukko keskellä, kun mikään malli ei antanut lämpötilaa): viimeisin edeltävä tunti
+    idx = 0;
+    for (let i = 0; i < fc.hours.length && fc.hours[i].t <= hourIso; i++) idx = i;
     frac = 0;
   }
   return { idx, frac, local: ln };
@@ -1164,13 +1166,16 @@ function snapshot(fc, idx, frac = 0) {
   };
 }
 
-/** Jokaisen mallin oma lämpötila nyt (interpoloitu) ja ero yhdistelmään. */
+/** Jokaisen mallin oma lämpötila nyt (interpoloitu) ja ero yhdistelmään. idx on fc.hours-indeksi, ei aikajanan indeksi. */
 function modelRows(results, fc, idx, frac, blendTemp) {
+  const ti = timeIndex(fc);
   return results.map((r) => {
     if (!r.ok) return { model: r.model, ok: false, skipped: !!r.skipped, coverage: !!r.coverage, error: r.error };
     const arr = r.data.vars.temperature_2m;
+    // fc.align ottaa aikajanan indeksin: hours-indeksi muunnetaan aikaleiman kautta (hours ohittaa tunnit, joilta lämpötila puuttuu)
+    const jOf = (i) => (fc.hours[i] ? fc.align[r.model.key]?.(ti.get(fc.hours[i].t)) : null);
     const at = (i) => {
-      const j = fc.align[r.model.key]?.(i);
+      const j = jOf(i);
       const v = j == null ? null : arr[j];
       return v == null || !Number.isFinite(v) ? null : v;
     };
@@ -1180,7 +1185,7 @@ function modelRows(results, fc, idx, frac, blendTemp) {
     let p24 = 0;
     const parr = r.data.vars.precipitation;
     for (let i = idx; i < Math.min(fc.hours.length, idx + 24); i++) {
-      const j = fc.align[r.model.key]?.(i);
+      const j = jOf(i);
       const v = parr && j != null ? parr[j] : null;
       if (v != null && Number.isFinite(v)) p24 += v;
     }
@@ -1650,7 +1655,9 @@ async function searchPlaces(query, { fetchFn = defaultFetch, count = 8 } = {}) {
   if (q.length < 2) return [];
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=${count}&language=fi&format=json`;
   const j = await getJson(url, { fetchFn });
-  return (j.results || []).map((r) => ({
+  // Vastaus ei ole luotettu: rivi ilman nimeä tai kelvollisia koordinaatteja ohitetaan (muuten haku tehtäisiin osoitteeseen NaN,NaN)
+  const rows = Array.isArray(j?.results) ? j.results : [];
+  return rows.filter((r) => r && typeof r.name === 'string' && r.name && Number.isFinite(r.latitude) && Number.isFinite(r.longitude)).map((r) => ({
     name: r.name,
     region: localizeRegion(r.admin1 || r.admin2 || ''),
     country: r.country || '',
@@ -1867,12 +1874,15 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
   let h = 0;
   let dpr = 1;
   let raf = 0;
+  let frameTimer = 0; // odotus seuraavaan kuvaan (ks. next())
+  let frames = 0; // piirrettyjen kuvien määrä: kuution kyljet kopioivat taivaan vain, kun se on muuttunut
   let last = 0;
   let time = 0;
   let inited = false;
   let userAnim = animate;
   let still = reduceMotion || !userAnim; // true: ei animaatiota (liikkeen vähennys tai asetuksista pois)
   let saver = false; // akku vähissä
+  let paused = false; // stop(): paneeli tai kartta peittää taivaan, kosketus ei herätä animaatiota ennen start()-kutsua
   let idleTimer = 0;
   let activeAt = globalThis.performance?.now?.() ?? 0; // viimeisin kosketus
   const cur = { ...DEFAULT, rainN: 0, snowN: 0 };
@@ -1894,19 +1904,19 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (!raf) draw(0);
+    draw(0); // koon muutos tyhjentää kankaan
   }
 
   function set(state, { snap = false } = {}) {
     for (const k of KEYS) if (state[k] != null && Number.isFinite(state[k])) tgt[k] = state[k];
-    const asleep = !raf && idleTimer !== 0; // joutilas: ei animaatiota, joten tila vaihdetaan suoraan
+    const asleep = (!running() && idleTimer !== 0) || paused; // joutilas tai pysäytetty: ei animaatiota, joten tila vaihdetaan suoraan
     if (!inited || snap || still || saver || asleep) {
       for (const k of KEYS) cur[k] = tgt[k];
       cur.rainN = rainCount();
       cur.snowN = snowCount();
       inited = true;
     }
-    if (!raf) draw(0);
+    if (!running()) draw(0);
   }
 
   const rainCount = () => (tgt.precip >= 0.05 ? clamp(30 + tgt.precip * 45, 0, 200) * (1 - tgt.snow) : 0);
@@ -1931,6 +1941,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
   }
 
   function draw(dt) {
+    frames++;
     const alt = cur.alt;
     const cover = clamp(cur.cloud, 0, 1);
     const gloom = clamp(cover * 0.35 + (cur.precip > 0.3 ? 0.2 : 0) + cur.thunder * 0.25 + cur.fog * 0.3, 0, 0.7);
@@ -2024,14 +2035,31 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
 
   const gapNow = () => (cur.rainN >= 1 || cur.snowN >= 1 || cur.thunder > 0.3 || flash.a > 0.01 ? GAP_RAIN : GAP_CALM);
 
+  // Kuvatahti: seuraava rAF pyydetään vasta, kun edellisestä kuvasta on kulunut lähes GAP (ajastin), eikä jokaisella
+  // näytön päivityksellä. Muuten selain tekisi pääsäikeessä 60 kuvaa sekunnissa, vaikka taivas piirretään 10–20 kertaa.
+  const running = () => raf !== 0 || frameTimer !== 0;
+
+  function next() {
+    const wait = gapNow() - 14;
+    if (wait <= 4) {
+      raf = requestAnimationFrame(loop);
+      return;
+    }
+    frameTimer = setTimeout(() => {
+      frameTimer = 0;
+      if (!raf && !paused) raf = requestAnimationFrame(loop);
+    }, wait);
+  }
+
   function loop(ts) {
     raf = 0;
     if (document.hidden) {
+      // Taustalla ei piirretä. rAF ei käy piilossa olevalla välilehdellä, joten tämä odottaa paluuta (visibilitychange herättää myös).
       raf = requestAnimationFrame(loop);
       return;
     }
     const idle = still || saver || ts - activeAt > IDLE_MS;
-    if (!last || ts - last >= gapNow()) {
+    if (!last || ts - last >= gapNow() - 10) {
       const dt = last ? Math.min(0.15, (ts - last) / 1000) : 0.016;
       last = ts;
       step(dt);
@@ -2041,22 +2069,26 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
       // Kuva on piirretty. Nukutaan ilman rAF-herätyksiä: seuraava kuva minuutin päästä tai kosketuksesta.
       idleTimer = setTimeout(() => {
         idleTimer = 0;
-        if (!raf) raf = requestAnimationFrame(loop);
+        if (!running() && !paused) raf = requestAnimationFrame(loop);
       }, GAP_IDLE);
       return;
     }
-    raf = requestAnimationFrame(loop);
+    next();
   }
 
   function start() {
-    if (raf || idleTimer) return;
+    paused = false;
+    if (running() || idleTimer) return;
     last = 0;
     raf = requestAnimationFrame(loop);
   }
 
   function stop() {
+    paused = true;
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
+    clearTimeout(frameTimer);
+    frameTimer = 0;
     clearTimeout(idleTimer);
     idleTimer = 0;
   }
@@ -2064,12 +2096,12 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
   /** Käyttäjä koski ruutuun: jatketaan animaatiota heti. */
   function poke() {
     activeAt = globalThis.performance?.now?.() ?? 0;
-    if (still || saver) return;
+    if (still || saver || paused) return;
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = 0;
     }
-    if (!raf) {
+    if (!running()) {
       last = 0;
       raf = requestAnimationFrame(loop);
     }
@@ -2120,7 +2152,7 @@ function createSky(canvas, { reduceMotion = false, animate = true } = {}) {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(resize, 150);
   });
-  return { set, resize, start, stop, poke, setAnimated, draw: () => draw(0), state: () => ({ ...cur }) };
+  return { set, resize, start, stop, poke, setAnimated, draw: () => draw(0), state: () => ({ ...cur }), frames: () => frames };
 }
 return { isLightSky, skyColors, mixLch, blobsFor, createSky };
 })();
@@ -2457,6 +2489,438 @@ function meteogram(hours, o = {}) {
 return { RANGES, monotonePath, meteogram };
 })();
 
+// ---- sources.js ----
+__m['sources'] = (() => {
+// sources.js: valinnaisten ulkoisten tietolähteiden hallinta (tutkaennuste, varoitukset, ilmanlaatu).
+// Periaate: lähde saa epäonnistua hiljaa. Käyttäjälle ei näytetä virheilmoituksia, ja epäonnistunutta lähdettä ei kokeilla heti uudelleen
+// (porrastettu odotus 15 min, 1 h, 6 h, 24 h). Tila näkyy vain "Tietoja ja tietolähteet" -näkymässä ja diagnostiikassa.
+// Selaimesta ei voi erottaa CORS-estoa verkkovirheestä, joten kaikki "ei vastannut" -tapaukset käsitellään samalla tavalla.
+
+const { store } = __m['util'];
+
+const SOURCE_INFO = {
+  nowcast: {
+    name: 'Tutkaennuste',
+    provider: 'MET Norway Nowcast',
+    url: 'https://api.met.no/weatherapi/nowcast/2.0/',
+    license: 'CC BY 4.0 / NLOD',
+    note: 'Tutkapohjainen sade seuraavalle kahdelle tunnille (Pohjoismaat).',
+  },
+  warnings: {
+    name: 'Viralliset varoitukset',
+    provider: 'Ilmatieteen laitos',
+    url: 'https://www.ilmatieteenlaitos.fi/varoitukset',
+    license: 'CC BY 4.0',
+    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle. Haetaan GitHubin kautta, koska Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua. Jos tieto on yli puolitoista tuntia vanha, etusivu kertoo sen.',
+  },
+  obs: {
+    name: 'Havainto',
+    provider: 'Ilmatieteen laitos, avoin data',
+    url: 'https://www.ilmatieteenlaitos.fi/avoin-data',
+    license: 'CC BY 4.0',
+    note: 'Lähimmän sääaseman mitattu lämpötila: vertailukohta ennusteelle (Varmuus-sivu).',
+  },
+  radarmap: {
+    name: 'Tutkakartta',
+    provider: 'RainViewer',
+    url: 'https://www.rainviewer.com',
+    license: 'Henkilökohtainen käyttö, lähdemaininta',
+    note: 'Havaittu sade kartalla viimeisen kahden tunnin ajalta (kehys 20 minuutin välein). Haetaan vain, kun avaat kartan.',
+  },
+  cloudmap: {
+    name: 'Pilvi- ja sade-ennuste kartalla',
+    provider: 'Open-Meteo',
+    url: 'https://open-meteo.com',
+    license: 'CC BY 4.0',
+    note: 'Säämallien pilvisyys ja sade noin 45 km:n ruudukossa seuraavalle vuorokaudelle. Haetaan vain, kun avaat kartan.',
+  },
+  air: {
+    name: 'Ilmanlaatu ja siitepöly',
+    provider: 'Open-Meteo / CAMS',
+    url: 'https://open-meteo.com/en/docs/air-quality-api',
+    license: 'CC BY 4.0',
+    note: 'Ilmanlaatuindeksi, siitepöly (leppä, koivu, heinät, pujo, tuoksukki; vain Euroopassa kasvukaudella) ja UV-indeksin varalähde. Mallilaskelma, ei mittaus. Haetaan tunnin välein.',
+  },
+};
+
+const WAIT_MIN = [15, 60, 360, 1440];
+
+/** Muistinvarainen tallennus (esimerkkitilassa ei kirjoiteta oikeaan localStorageen). */
+function memoryStorage() {
+  const mem = {};
+  return { object: (k) => mem[k] ?? null, set: (k, v) => ((mem[k] = v), true) };
+}
+
+function createGuard({ storage = store, clock = () => Date.now() } = {}) {
+  const read = () => storage.object('src') || {};
+  const entry = (id) => {
+    const e = read()[id];
+    return e && typeof e === 'object' ? e : {};
+  };
+  const put = (id, e) => storage.set('src', { ...read(), [id]: e });
+  return {
+    /** Saako lähdettä yrittää nyt? Epäonnistumisen jälkeen odotetaan. */
+    canTry(id, now = clock()) {
+      const e = entry(id);
+      return !(Number(e.until) > now);
+    },
+    /** limited = lähde vastasi, mutta tietoa ei voinut käyttää (esim. vanhentunut peili tai ei kattavuutta). */
+    ok(id, now = clock(), note = '', limited = false) {
+      put(id, { fails: 0, until: 0, lastOk: now, note: String(note).slice(0, 80), ...(limited ? { limited: true } : {}) });
+    },
+    fail(id, err, now = clock()) {
+      const e = entry(id);
+      const fails = (Number(e.fails) || 0) + 1;
+      put(id, { ...e, fails, until: now + WAIT_MIN[Math.min(fails, WAIT_MIN.length) - 1] * 60000, lastFail: now, error: String(err?.message || err || 'virhe').slice(0, 80) });
+    },
+    status(id) {
+      return entry(id);
+    },
+  };
+}
+
+/**
+ * Ajaa lähteen haun suojattuna. Palauttaa { value } onnistuessa, { skipped } kun odotusaika on käynnissä tai laite on offline,
+ * ja { error } epäonnistuessa. Ei koskaan heitä. force ohittaa odotuksen (esim. käyttäjä päivitti käsin).
+ */
+async function runSource(guard, id, fn, { force = false, now = Date.now() } = {}) {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return { skipped: 'offline' };
+  if (!force && !guard.canTry(id, now)) return { skipped: 'odotus' };
+  try {
+    const value = await fn();
+    if (value && value.ok === false) {
+      // Lähde vastasi, mutta ei kata paikkaa tai tieto puuttuu: ei virhe, mutta ei käyttökelpoista tietoa
+      guard.ok(id, now, value.reason || '', true);
+      return { value: null, reason: value.reason || 'ei kattavuutta', raw: value };
+    }
+    guard.ok(id, now, value?.note || '');
+    return { value };
+  } catch (e) {
+    if (e?.name === 'AbortError' && e?.cancelled) return { skipped: 'peruttu' };
+    guard.fail(id, e, now);
+    return { error: e };
+  }
+}
+
+/** Yksi rivi diagnostiikkaan ja tietoja-näkymään: "✓ Tutkaennuste (MET Norway Nowcast)" tai "– … ei vastannut (odotus 15 min)". */
+function sourceLine(id, st, now = Date.now()) {
+  const info = SOURCE_INFO[id];
+  if (!info) return '';
+  const head = `${info.name} (${info.provider})`;
+  if (st?.lastFail && (!st.lastOk || st.lastFail > st.lastOk)) {
+    const wait = Math.max(0, Math.ceil((Number(st.until) - now) / 60000));
+    return `– ${head}: ei vastannut${st.error ? ` (${st.error})` : ''}${wait ? `, uusi yritys ${wait >= 90 ? `${Math.round(wait / 60)} h` : `${wait} min`} päästä` : ''}`;
+  }
+  if (st?.lastOk) return `${st.limited ? '!' : '✓'} ${head}${st.note ? `: ${st.note}` : ''}`;
+  return `· ${head}: ei vielä kokeiltu`;
+}
+
+/**
+ * Yksi verkkopyyntö aikarajalla ja ulkoisella peruutuksella; read(res) lukee vastauksen rungon saman aikarajan sisällä.
+ * Heittää "<label>: aikakatkaisu", kun aikaraja täyttyy, ja AbortError (cancelled = true), kun signal peruttiin.
+ */
+async function timedRequest(fetchFn, url, init, { timeoutMs = 8000, signal = null, label = 'Haku' } = {}, read = (res) => res) {
+  const ctl = new AbortController();
+  let cancelled = false;
+  const onAbort = () => {
+    cancelled = true;
+    ctl.abort();
+  };
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    return await read(await fetchFn(url, { ...init, signal: ctl.signal }));
+  } catch (e) {
+    if (cancelled) throw Object.assign(new Error('Peruttu'), { name: 'AbortError', cancelled: true });
+    if (ctl.signal.aborted) throw new Error(`${label}: aikakatkaisu`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener?.('abort', onAbort);
+  }
+}
+return { SOURCE_INFO, memoryStorage, createGuard, runSource, sourceLine, timedRequest };
+})();
+
+// ---- airquality.js ----
+__m['airquality'] = (() => {
+// airquality.js: ilmanlaatu, siitepöly ja UV-indeksi (Open-Meteo Air Quality API, Euroopan CAMS-mallit, CC BY 4.0).
+// "Koodi laskee": luokat (hyvä … erittäin huono, vähäinen … erittäin runsas, matala … äärimmäinen) ja neuvot lasketaan täällä
+// puhtailla funktioilla, ja Koti, Tunnit, Viikko, omat huomiot ja chat käyttävät samaa tulosta.
+// Lähde on lisä kuten tutkaennuste (sources.js): jos se ei vastaa tai on estetty, sovellus toimii ilman sitä eikä näytä virhettä.
+// UV-indeksi tulee ensisijaisesti säämalleilta (weather.js, uv_index); tämän lähteen UV on vain varalla.
+
+const { defaultFetch, zonedToUtcMs, fmtNum } = __m['util'];
+const { timedRequest } = __m['sources'];
+const { spanLabel } = __m['blend'];
+
+const AIR_BASE = 'https://air-quality-api.open-meteo.com/v1/air-quality';
+/** Mallit päivittyvät muutaman kerran vuorokaudessa: tunnin välein haku riittää. */
+const AIR_TTL = 60 * 60000;
+/** Tätä vanhempaa hakua ei käytetä (ennuste on silti tunneittain, mutta vanha haku voi olla toiselta mallikierrokselta). */
+const AIR_MAX_AGE = 24 * 3600000;
+
+const POLLEN = [
+  { key: 'alder', api: 'alder_pollen', name: 'leppä', gen: 'lepän', th: [1, 10, 100, 1000] },
+  { key: 'birch', api: 'birch_pollen', name: 'koivu', gen: 'koivun', th: [1, 10, 100, 1000] },
+  { key: 'grass', api: 'grass_pollen', name: 'heinät', gen: 'heinien', th: [1, 10, 30, 150] },
+  { key: 'mugwort', api: 'mugwort_pollen', name: 'pujo', gen: 'pujon', th: [1, 10, 30, 100] },
+  { key: 'ragweed', api: 'ragweed_pollen', name: 'tuoksukki', gen: 'tuoksukin', th: [1, 5, 20, 50] },
+];
+const GAS = [
+  ['aqi', 'european_aqi', 1000],
+  ['pm25', 'pm2_5', 2000],
+  ['pm10', 'pm10', 3000],
+  ['no2', 'nitrogen_dioxide', 2000],
+  ['o3', 'ozone', 2000],
+  ['uv', 'uv_index', 25],
+];
+const AIR_VARS = [...GAS.map((g) => g[1]), ...POLLEN.map((p) => p.api)];
+
+/** Hakuosoite. Sijainti pyöristetään kahteen desimaaliin (noin 1 km) kuten muissa lähteissä; CAMS-ruudukko on silti noin 10 km. */
+function airUrl(lat, lon) {
+  const q = new URLSearchParams({
+    latitude: Number(lat).toFixed(2),
+    longitude: Number(lon).toFixed(2),
+    hourly: AIR_VARS.join(','),
+    timeformat: 'unixtime',
+    forecast_days: '4',
+  });
+  return `${AIR_BASE}?${q.toString()}`;
+}
+
+/**
+ * Jäsentää vastauksen: { ok:true, t:[ms], aqi:[], pm25:[], pm10:[], no2:[], o3:[], uv:[], pollen:{ birch:[] … }, hasPollen, note }.
+ * Puuttuva arvo pysyy nullina ("ei tietoa", ei nolla). Aineisto ei ole luotettua: arvot rajataan. Heittää, jos rakenne on odottamaton.
+ */
+function parseAir(json) {
+  const h = json?.hourly;
+  if (!h || !Array.isArray(h.time) || !h.time.length) throw new Error('Ilmanlaadun rakenne ei vastaa odotettua');
+  const n = Math.min(h.time.length, 24 * 8);
+  const t = h.time.slice(0, n).map((x) => (typeof x === 'number' ? x * 1000 : Date.parse(x)));
+  if (!t.every(Number.isFinite)) throw new Error('Ilmanlaadun aikaleimat ovat virheellisiä');
+  const col = (name, max) => {
+    const a = Array.isArray(h[name]) ? h[name] : [];
+    return Array.from({ length: n }, (_, i) => {
+      const v = a[i];
+      return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max ? v : null;
+    });
+  };
+  const out = { ok: true, t };
+  for (const [k, name, max] of GAS) out[k] = col(name, max);
+  out.pollen = Object.fromEntries(POLLEN.map((p) => [p.key, col(p.api, 100000)]));
+  out.hasPollen = POLLEN.some((p) => out.pollen[p.key].some((v) => v != null));
+  const hasAqi = out.aqi.some((v) => v != null);
+  if (!hasAqi && !out.hasPollen && !out.uv.some((v) => v != null)) return { ok: false, reason: 'ei ilmanlaatutietoa tälle paikalle' };
+  out.note = [hasAqi ? 'ilmanlaatu' : '', out.hasPollen ? 'siitepöly' : '', 'UV'].filter(Boolean).join(', ');
+  return out;
+}
+
+/** Hakee ja jäsentää ilmanlaadun. Heittää verkko- ja rakennevirheistä (kutsuja suojaa ne sources.js:llä). */
+function fetchAir(lat, lon, { fetchFn = defaultFetch, timeoutMs = 8000, signal = null } = {}) {
+  return timedRequest(fetchFn, airUrl(lat, lon), { headers: { Accept: 'application/json' } }, { timeoutMs, signal, label: 'Ilmanlaatu' }, async (res) => {
+    if (res.status === 400) return { ok: false, reason: 'ei kattavuutta' };
+    if (!res.ok) throw Object.assign(new Error(`Ilmanlaatu: HTTP ${res.status}`), { status: res.status });
+    return parseAir(await res.json());
+  });
+}
+
+// ---------- Luokat ----------
+
+const AQI_CLASSES = [
+  { level: 1, below: 20, word: 'hyvä', advice: '' },
+  { level: 2, below: 40, word: 'tyydyttävä', advice: '' },
+  { level: 3, below: 60, word: 'kohtalainen', advice: 'Herkimmät (astmaatikot, sydänsairaat) voivat tuntea oireita vilkkaiden teiden varrella.' },
+  { level: 4, below: 80, word: 'huono', advice: 'Herkkien kannattaa välttää rasittavaa liikuntaa ulkona, varsinkin vilkkaiden teiden varrella.' },
+  { level: 5, below: 100, word: 'erittäin huono', advice: 'Vältä rasittavaa liikuntaa ulkona. Herkkien kannattaa pysyä sisällä ja pitää ikkunat kiinni.' },
+  { level: 6, below: Infinity, word: 'äärimmäisen huono', advice: 'Vältä oleskelua ulkona. Pidä ikkunat kiinni.' },
+];
+
+/** Eurooppalainen ilmanlaatuindeksi (EAQI, 0–100+) luokaksi. null, jos arvoa ei ole. */
+function aqiLevel(v) {
+  if (v == null || !Number.isFinite(v)) return null;
+  return AQI_CLASSES.find((c) => v < c.below);
+}
+
+// Saasteiden luokkarajat (µg/m³) samoilla väleillä kuin indeksi: millä aineella on huonoin luokka.
+const POLLUTANT = [
+  { key: 'pm25', name: 'pienhiukkaset', th: [10, 20, 25, 50, 75] },
+  { key: 'pm10', name: 'hengitettävät hiukkaset', th: [20, 40, 50, 100, 150] },
+  { key: 'no2', name: 'typpidioksidi', th: [40, 90, 120, 230, 340] },
+  { key: 'o3', name: 'otsoni', th: [50, 100, 130, 240, 380] },
+];
+
+/** Huonoimman luokan saaste tunnille i ({ key, name, level }) tai null. Kertoo, mistä huono ilma johtuu. */
+function dominantPollutant(air, i) {
+  let best = null;
+  for (const p of POLLUTANT) {
+    const v = air[p.key]?.[i];
+    if (v == null) continue;
+    const level = 1 + p.th.filter((x) => v >= x).length;
+    if (!best || level > best.level) best = { key: p.key, name: p.name, level, v };
+  }
+  return best;
+}
+
+const POLLEN_WORDS = ['ei siitepölyä', 'vähäinen', 'kohtalainen', 'runsas', 'erittäin runsas'];
+
+/** Siitepölypitoisuus (kpl/m³) tasoksi 0–4 lajin rajoilla. Heinien, pujon ja tuoksukin rajat ovat matalammat kuin puiden. */
+function pollenLevel(key, v) {
+  const p = POLLEN.find((x) => x.key === key);
+  if (!p || v == null || !Number.isFinite(v)) return null;
+  const level = p.th.filter((x) => v >= x).length;
+  return { level, word: POLLEN_WORDS[level] };
+}
+
+const UV_CLASSES = [
+  { level: 0, below: 3, word: 'matala', advice: 'Aurinkosuojaa ei tarvita.' },
+  { level: 1, below: 6, word: 'kohtalainen', advice: 'Keskipäivällä aurinkovoide ja lakki, varjossa tauko.' },
+  { level: 2, below: 8, word: 'korkea', advice: 'Aurinkovoide (SPF 30+), lakki ja aurinkolasit. Hakeudu varjoon klo 12–15.' },
+  { level: 3, below: 11, word: 'erittäin korkea', advice: 'Vältä aurinkoa klo 12–15. Aurinkovoide, lakki, aurinkolasit ja peittävät vaatteet.' },
+  { level: 4, below: Infinity, word: 'äärimmäinen', advice: 'Vältä aurinkoa keskipäivällä. Iho palaa hyvin nopeasti.' },
+];
+
+/** UV-indeksi luokaksi (WHO:n rajat kokonaisluvuille: 3, 6, 8, 11). */
+function uvLevel(v) {
+  if (v == null || !Number.isFinite(v)) return null;
+  const r = Math.round(v);
+  return { ...UV_CLASSES.find((c) => r < c.below), value: r };
+}
+
+// ---------- Ennusteen tunneille ----------
+
+const ROWS = new WeakMap();
+
+/** Ilmanlaadun rivi-indeksit ennusteen tunneille: taulukko fc.hours-indeksistä air-indeksiin (tai -1). Välimuistissa. */
+function airIndex(fc, air) {
+  if (!fc || !air?.t) return [];
+  let byAir = ROWS.get(fc);
+  if (!byAir) ROWS.set(fc, (byAir = new WeakMap()));
+  let idx = byAir.get(air);
+  if (!idx) {
+    const pos = new Map(air.t.map((ms, k) => [Math.round(ms / 3600000), k]));
+    idx = fc.hours.map((h) => pos.get(Math.round(zonedToUtcMs(h.t, fc.tz) / 3600000)) ?? -1);
+    byAir.set(air, idx);
+  }
+  return idx;
+}
+
+/**
+ * Yhden tunnin ilma: { aqi, aqiInfo, dom, uv, uvInfo, uvSrc, pollen:[{ key, name, gen, v, level, word }] } tai null.
+ * UV säämalleista (fc.hours[i].uv), ilmanlaadun UV vain jos malleilla ei ole arvoa.
+ */
+function hourAir(fc, air, i) {
+  const h = fc?.hours?.[i];
+  if (!h) return null;
+  const k = air ? airIndex(fc, air)[i] : -1;
+  const uvW = h.uv;
+  const uvA = k >= 0 ? air.uv[k] : null;
+  const uv = uvW != null ? uvW : uvA;
+  if (k < 0 && uv == null) return null;
+  const aqi = k >= 0 ? air.aqi[k] : null;
+  const pollen = k >= 0 && air.hasPollen ? POLLEN.map((p) => ({ key: p.key, name: p.name, gen: p.gen, v: air.pollen[p.key][k], ...pollenLevel(p.key, air.pollen[p.key][k]) })).filter((p) => p.v != null) : [];
+  return { aqi, aqiInfo: aqiLevel(aqi), dom: k >= 0 ? dominantPollutant(air, k) : null, uv, uvInfo: uvLevel(uv), uvSrc: uvW != null ? 'malli' : uv != null ? 'ilmanlaatu' : null, pollen };
+}
+
+/**
+ * Yhteenveto tuntiväliltä from..to: suurin ilmanlaatuindeksi, siitepöly lajeittain ja UV. Jaksot (start..end) kertovat, milloin taso on korkein.
+ * { aqi: { max, i, info, dom, start, end } | null, pollen: [{ key, name, gen, max, i, level, word, start, end, peakStart, peakEnd }], uv: { max, i, info, start, end } | null,
+ *   covered: tunteja, joille ilmanlaatutieto löytyi, hours: välin tuntien määrä }
+ */
+function airWindow(fc, air, from, to) {
+  const last = (fc?.hours?.length || 0) - 1;
+  from = Math.max(0, from);
+  to = Math.min(last, to);
+  const out = { aqi: null, pollen: [], uv: null, covered: 0, hours: Math.max(0, to - from + 1), hasPollen: Boolean(air?.hasPollen) };
+  if (!fc || to < from) return out;
+  const rows = [];
+  for (let i = from; i <= to; i++) rows.push([i, hourAir(fc, air, i)]);
+  const span = (test) => {
+    const hits = rows.filter(([, r]) => r && test(r)).map(([i]) => i);
+    return hits.length ? { start: hits[0], end: hits.at(-1) } : { start: -1, end: -1 };
+  };
+  for (const [i, r] of rows) {
+    if (!r) continue;
+    if (r.aqi != null || r.pollen.length) out.covered++;
+    if (r.aqi != null && (!out.aqi || r.aqi > out.aqi.max)) out.aqi = { max: r.aqi, i, info: r.aqiInfo, dom: r.dom };
+    if (r.uv != null && (!out.uv || r.uv > out.uv.max)) out.uv = { max: r.uv, i, info: r.uvInfo };
+  }
+  if (out.aqi) Object.assign(out.aqi, span((r) => aqiLevel(r.aqi)?.level >= out.aqi.info.level));
+  if (out.uv) Object.assign(out.uv, out.uv.info.level >= 1 ? span((r) => r.uvInfo?.level >= 1) : { start: out.uv.i, end: out.uv.i });
+  for (const p of POLLEN) {
+    let best = null;
+    for (const [i, r] of rows) {
+      const x = r?.pollen.find((q) => q.key === p.key);
+      if (x && (!best || x.v > best.max)) best = { key: p.key, name: p.name, gen: p.gen, max: x.v, i, level: x.level, word: x.word };
+    }
+    if (!best) continue;
+    Object.assign(best, span((r) => (r.pollen.find((q) => q.key === p.key)?.level ?? 0) >= Math.max(1, best.level)));
+    // Huippujakso: tunnit, joilla pitoisuus on vähintään 3/4 huipusta ("eniten klo 12–17")
+    const peak = span((r) => (r.pollen.find((q) => q.key === p.key)?.v ?? 0) >= best.max * 0.75);
+    best.peakStart = peak.start;
+    best.peakEnd = peak.end;
+    out.pollen.push(best);
+  }
+  out.pollen.sort((a, b) => b.level - a.level || b.max - a.max);
+  return out;
+}
+
+/** Kpl/m³ lyhyesti: alle 10 yhdellä desimaalilla ei tarvita, isot luvut pyöristetään. */
+const grains = (v) => `${fmtNum(v >= 100 ? Math.round(v / 10) * 10 : v)} kpl/m³`;
+
+/**
+ * Kodin pieni ilmarivi: vain olennainen. Siitepöly kohtalaisesta alkaen (enintään kaksi lajia), ilmanlaatu huonosta alkaen
+ * ja UV-indeksi 3:sta alkaen. Tyhjä taulukko = ei mitään näytettävää.
+ * Palauttaa [{ kind:'pollen'|'aqi'|'uv', text, level (0–3 vakavuus näytölle), sr }].
+ */
+function airHighlights(sum) {
+  if (!sum) return [];
+  const out = [];
+  for (const p of sum.pollen.filter((x) => x.level >= 2).slice(0, 2)) {
+    out.push({ kind: 'pollen', text: `${cap1(p.name)} ${p.word}`, level: p.level >= 4 ? 3 : p.level - 1, sr: `${cap1(p.gen)} siitepölyä ${p.word === 'erittäin runsas' ? 'erittäin runsaasti' : p.word === 'runsas' ? 'runsaasti' : 'kohtalaisesti'}` });
+  }
+  if (sum.aqi && sum.aqi.info.level >= 4) out.push({ kind: 'aqi', text: `Ilmanlaatu ${sum.aqi.info.word}`, level: sum.aqi.info.level >= 5 ? 3 : 2, sr: `Ilmanlaatu ${sum.aqi.info.word}` });
+  if (sum.uv && sum.uv.info.level >= 1) out.push({ kind: 'uv', text: `UV ${sum.uv.info.value}`, level: sum.uv.info.level >= 3 ? 3 : sum.uv.info.level, sr: `UV-indeksi ${sum.uv.info.value}, ${sum.uv.info.word}` });
+  return out;
+}
+
+const cap1 = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/**
+ * Omat huomiot ilmasta etusivun varoitusriville (sama muoto kuin advice.js:n ownAlerts). Koti pysyy rauhallisena:
+ * siitepölystä vain erittäin runsas, ilmanlaadusta huono tai huonompi. Ei virallinen varoitus.
+ */
+function airAlerts(fc, air, from, to) {
+  if (!air || !fc) return [];
+  const sum = airWindow(fc, air, from, to);
+  const today = fc.hours[Math.max(0, from)]?.t.slice(0, 10);
+  const lbl = (a, b) => spanLabel(fc, a, b, today);
+  const out = [];
+  if (sum.aqi && sum.aqi.info.level >= 4) {
+    const l = sum.aqi.info.level >= 5 ? 2 : 1;
+    const why = sum.aqi.dom && sum.aqi.dom.level >= 3 ? ` (eniten ${sum.aqi.dom.name})` : '';
+    out.push({ key: 'aqi', level: l, title: l >= 2 ? 'Erittäin huono ilmanlaatu' : 'Huono ilmanlaatu', text: `Ilmanlaatu on ${sum.aqi.info.word} ${lbl(sum.aqi.start, sum.aqi.end)}${why}. ${sum.aqi.info.advice}`, short: `${lbl(sum.aqi.start, sum.aqi.end)}${sum.aqi.dom && sum.aqi.dom.level >= 3 ? `, ${sum.aqi.dom.name}` : ''}`, start: sum.aqi.start, end: sum.aqi.end });
+  }
+  const hi = sum.pollen.filter((p) => p.level >= 4);
+  if (hi.length) {
+    const p = hi[0];
+    const names = hi.map((x) => x.gen).join(' ja ');
+    out.push({ key: 'pollen', level: 1, title: `Erittäin runsaasti ${p.gen} siitepölyä`, text: `${cap1(names)} siitepölyä on ilmassa erittäin runsaasti ${lbl(p.start, p.end)} (jopa ${grains(p.max)}). Allergisen kannattaa ottaa lääke ajoissa, pitää ikkunat kiinni päivällä ja vaihtaa vaatteet ulkoilun jälkeen.`, short: `${p.name} ${lbl(p.start, p.end)}`, start: p.start, end: p.end });
+  }
+  out.forEach((a) => (a.word = a.level >= 2 ? 'vahva huomio' : 'huomio'));
+  return out;
+}
+
+/** Onko haettu ilmanlaatu tälle paikalle käyttökelpoinen hetkellä now. */
+function airUsable(entry, key, now) {
+  return Boolean(entry?.raw && entry.key === key && now - entry.at < AIR_MAX_AGE);
+}
+return { AIR_BASE, AIR_TTL, AIR_MAX_AGE, POLLEN, AIR_VARS, airUrl, parseAir, fetchAir, AQI_CLASSES, aqiLevel, dominantPollutant, POLLEN_WORDS, pollenLevel, UV_CLASSES, uvLevel, airIndex, hourAir, airWindow, grains, airHighlights, airAlerts, airUsable };
+})();
+
 // ---- ai.js ----
 __m['ai'] = (() => {
 // ai.js: Gemini-kutsut suoraan selaimesta omalla avaimella (avain pysyy vain tämän laitteen selaimessa).
@@ -2464,6 +2928,7 @@ __m['ai'] = (() => {
 
 const { store, defaultFetch, weekday, localNow } = __m['util'];
 const { nowPosition, snapshot, modelRows, modelDaily, SYMBOLS } = __m['blend'];
+const { hourAir, airWindow, POLLEN } = __m['airquality'];
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_MODEL = 'gemini-flash-latest';
@@ -2618,7 +3083,7 @@ const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
  * Tiivis, koneluettava kuvaus ennusteesta tekoälylle. Kun results annetaan, mukaan tulevat myös
  * yksittäisten mallien omat luvut (nyt ja seuraavat päivät), jotta tekoäly voi kertoa, mitä mikin malli sanoo.
  */
-function compactForecast(fc, nowMs, { hours = 48, results = null } = {}) {
+function compactForecast(fc, nowMs, { hours = 48, results = null, air = null } = {}) {
   const { idx, frac, local } = nowPosition(fc, nowMs);
   const rows = fc.hours.slice(idx, idx + hours).map((h) => [h.t.slice(5, 16).replace('T', ' '), r1(h.temp), r1(h.feels), r1(h.precip), Math.round(h.pop * 100), Math.round(h.cloud), r1(h.wind), r1(h.gust), SYMBOLS[h.sym]]);
   const days = fc.days.slice(0, 7).map((d) => [d.date, weekday(d.date, true), r1(d.tmin), r1(d.tmax), r1(d.precip), r1(d.wind), SYMBOLS[d.sym]]);
@@ -2635,6 +3100,8 @@ function compactForecast(fc, nowMs, { hours = 48, results = null } = {}) {
     paivat_sarakkeet: ['paiva', 'viikonpaiva', 'alin_C', 'ylin_C', 'sade_mm', 'tuuli_ms', 'saa'],
     paivat: days,
   };
+  const ilma = airContext(fc, idx, hours, air);
+  if (ilma) out.ilma = ilma;
   if (results?.length) {
     const blendNow = snapshot(fc, idx, frac).temp;
     out.mallit_nyt = modelRows(results, fc, idx, frac, blendNow).map((r) =>
@@ -2648,6 +3115,32 @@ function compactForecast(fc, nowMs, { hours = 48, results = null } = {}) {
   return out;
 }
 
+/**
+ * Ilmanlaatu, siitepöly ja UV-indeksi tekoälylle samoina luokkina kuin sovelluksessa (airquality.js). UV tulee säämalleista,
+ * ilmanlaadun lähteestä vain varalla. null, jos mitään ei ole. Siitepölylajit vain, jos niitä ennustetaan.
+ */
+function airContext(fc, idx, hours, air) {
+  const rows = [];
+  const kinds = air?.hasPollen ? POLLEN.filter((p) => air.pollen[p.key].some((v) => v != null)) : [];
+  for (let i = idx; i < Math.min(fc.hours.length, idx + hours); i++) {
+    const a = hourAir(fc, air, i);
+    if (!a) continue;
+    rows.push([fc.hours[i].t.slice(5, 16).replace('T', ' '), a.aqi == null ? null : Math.round(a.aqi), a.aqiInfo?.word ?? null, r1(a.uv), ...kinds.map((p) => r1(a.pollen.find((x) => x.key === p.key)?.v ?? null))]);
+  }
+  if (!rows.length) return null;
+  const days = fc.days.slice(0, 4).map((d) => {
+    const s = airWindow(fc, air, d.from, d.to);
+    return { paiva: d.date, ilmanlaatu_huonoin: s.aqi?.info.word ?? null, uv_max: s.uv ? r1(s.uv.max) : null, uv_luokka: s.uv?.info.word ?? null, siitepoly: s.pollen.filter((p) => p.level >= 1).map((p) => `${p.name} ${p.word} (enintään ${Math.round(p.max)} kpl/m3)`) };
+  });
+  return {
+    lahde: air ? 'Copernicus CAMS -malliennuste (Open-Meteo), ei mittaus. UV-indeksi säämalleista.' : 'UV-indeksi säämalleista. Ilmanlaatu- ja siitepölytietoa ei saatu.',
+    luokat: 'Ilmanlaatu (eurooppalainen indeksi): hyvä <20, tyydyttävä 20–40, kohtalainen 40–60, huono 60–80, erittäin huono 80–100. UV: matala 0–2, kohtalainen 3–5, korkea 6–7, erittäin korkea 8–10. Siitepöly kpl/m3 (puut): vähäinen 1–9, kohtalainen 10–99, runsas 100–999; heinät ja pujo: runsas yli 30.',
+    tunnit_sarakkeet: ['aika', 'ilmanlaatuindeksi', 'ilmanlaatu', 'uv_indeksi', ...kinds.map((p) => `${p.name}_kpl_m3`)],
+    tunnit: rows,
+    paivat: days,
+  };
+}
+
 function placeLabel(place) {
   const lower = (x) => String(x ?? '').toLocaleLowerCase('fi-FI');
   return [place.name, place.region && lower(place.region) !== lower(place.name) ? place.region : ''].filter(Boolean).join(', ');
@@ -2655,7 +3148,7 @@ function placeLabel(place) {
 
 const RULES_GROUNDED = [
   'TÄRKEÄT SÄÄNNÖT:',
-  '1. Vastaat vain alla olevan SÄÄDATAN perusteella. Se on sovelluksen eri säämalleista (ECMWF, ICON, MET Norway, Météo-France, UK Met Office, GFS, GEM, FMI) hakema ja koodilla yhdistämä ennuste, ja se on ainoa tietolähteesi sään nykytilasta ja ennusteesta.',
+  '1. Vastaat vain alla olevan SÄÄDATAN perusteella. Se on sovelluksen eri säämalleista (ECMWF, ICON, MET Norway, Météo-France, UK Met Office, GFS, GEM, FMI) hakema ja koodilla yhdistämä ennuste, ja se on ainoa tietolähteesi sään nykytilasta ja ennusteesta. Ilmanlaatu, siitepöly ja UV-indeksi ovat kentässä ilma; jos kenttää tai lajia ei ole, sovelluksella ei ole sitä tietoa.',
   '2. Älä käytä omaa tietoasi nykyisestä säästä, ennusteista, havainnoista tai uutisista. Älä keksi lukuja, aikoja, paikkoja tai malleja, joita datassa ei ole.',
   '3. Jokaisen mainitsemasi luvun pitää löytyä datasta tai olla siitä suoraan laskettu (summa, ero, pienin tai suurin arvo). Kun kerrot, mitä yksittäinen malli ennustaa, käytä kenttiä mallit_nyt ja mallit_paivittain ja mainitse mallin nimi.',
   '4. Jos kysymykseen ei voi vastata datalla (aihe ei ole sää, ajankohta on ennusteen ulkopuolella tai paikka puuttuu), sano se lyhyesti ja kerro, mihin datalla voi vastata. Älä arvaa.',
@@ -2669,7 +3162,7 @@ const RULES_FREE = [
   '3. Jos data ei riitä vastaukseen, sano se.',
 ];
 
-function systemPrompt({ place, fc, nowMs, results = null, mode = 'grounded' }) {
+function systemPrompt({ place, fc, nowMs, results = null, air = null, mode = 'grounded' }) {
   const ln = localNow(nowMs, fc.tz);
   const rules = mode === 'free' ? RULES_FREE : RULES_GROUNDED;
   return [
@@ -2682,7 +3175,7 @@ function systemPrompt({ place, fc, nowMs, results = null, mode = 'grounded' }) {
     'Jos käyttäjä kysyy muun paikkakunnan kuin nykyisen paikan säästä, hae data get_forecast-työkalulla.',
     '',
     'SÄÄDATA (JSON):',
-    JSON.stringify(compactForecast(fc, nowMs, { results })),
+    JSON.stringify(compactForecast(fc, nowMs, { results, air })),
   ].join('\n');
 }
 
@@ -2705,7 +3198,7 @@ const TOOLS = [
 // ---------- Selitys ja chat ----------
 
 /** Selittää sään valitulle ajankohdalle. selection: { type:'now'|'hour'|'day', label } */
-async function explain({ fc, place, nowMs, selection, results = null, mode = 'grounded', fetchFn = defaultFetch, signal }) {
+async function explain({ fc, place, nowMs, selection, results = null, air = null, mode = 'grounded', fetchFn = defaultFetch, signal }) {
   const key = aiSettings.key();
   const target =
     selection.type === 'now'
@@ -2714,7 +3207,7 @@ async function explain({ fc, place, nowMs, selection, results = null, mode = 'gr
         ? `tunti ${selection.label}`
         : `päivä ${selection.label}`;
   const ask = `Selitä sää ajankohdalle: ${target}. Kerro, mitä on tulossa ja mikä sen todennäköisesti aiheuttaa, jos data antaa siihen aihetta. Lopuksi yksi käytännön vinkki. Enintään 90 sanaa.`;
-  const system = systemPrompt({ place, fc, nowMs, results, mode: mode === 'free' ? 'free' : 'grounded' });
+  const system = systemPrompt({ place, fc, nowMs, results, air, mode: mode === 'free' ? 'free' : 'grounded' });
   return withModelHeal(
     async (model) => textOf(await generate({ key, model, system, contents: [{ role: 'user', parts: [{ text: ask }] }], temperature: 0.4, fetchFn, signal })),
     { key, fetchFn },
@@ -2725,9 +3218,9 @@ async function explain({ fc, place, nowMs, selection, results = null, mode = 'gr
  * Keskustelu. history: [{role:'user'|'assistant', text}], viimeinen on käyttäjän.
  * runTool(name, args) palauttaa tavallisen objektin (esim. paikan ennuste).
  */
-async function chat({ fc, place, nowMs, history, results = null, mode = 'grounded', runTool, fetchFn = defaultFetch, signal, maxSteps = 4 }) {
+async function chat({ fc, place, nowMs, history, results = null, air = null, mode = 'grounded', runTool, fetchFn = defaultFetch, signal, maxSteps = 4 }) {
   const key = aiSettings.key();
-  const system = systemPrompt({ place, fc, nowMs, results, mode: mode === 'free' ? 'free' : 'grounded' });
+  const system = systemPrompt({ place, fc, nowMs, results, air, mode: mode === 'free' ? 'free' : 'grounded' });
   const contents = history.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] }));
   let tools = runTool ? TOOLS : undefined;
 
@@ -2955,6 +3448,35 @@ function editDistance(a, b) {
   return d[m][n];
 }
 
+/**
+ * Taivutetun sanan vertailu nimilistaan ({ key: fold(nimi) }): sanasta poistetaan taivutuspääte, ja vartaloa verrataan nimen alkuun.
+ * Palauttaa parhaiten osuvan alkion tai null. Käytetään sekä tunnetuille paikoille että käyttäjän suosikeille (answer.js).
+ */
+function matchInflected(word, entries) {
+  const raw = String(word).trim();
+  const w = fold(raw);
+  if (w.length < 3) return null;
+  const capital = /^\p{Lu}/u.test(raw);
+  const sufs = capital ? [...CASE_SUFFIXES.map(fold), ...COLLOQ_SUFFIXES] : LOCATIVE_SUFFIXES.map(fold);
+  let best = null;
+  for (const c of entries) {
+    let score = -1;
+    if (w === c.key) score = 1000;
+    else {
+      for (const suf of sufs) {
+        if (w.length - suf.length < 3 || !w.endsWith(suf)) continue;
+        const stem = w.slice(0, -suf.length);
+        const cp = commonPrefix(stem, c.key);
+        if (cp < Math.max(3, c.key.length - (c.key.length <= 5 ? 1 : 2))) continue;
+        if (stem.length > c.key.length + 2 || stem.length < c.key.length - 3) continue;
+        score = Math.max(score, cp * 10 - Math.abs(stem.length - c.key.length) - (COLLOQ_SUFFIXES.includes(suf) ? 1 : 0));
+      }
+    }
+    if (score >= 0 && (!best || score > best.score)) best = { score, c };
+  }
+  return best ? best.c : null;
+}
+
 const ALIAS_ENDINGS = ['', 'ssa', 'sta', 'lla', 'lta', 'lle', 'n', 'a', 'an', 'in', 'iin', 'ista', 'issa', 'illa', 'ille', 's', 'st', 'l', 'lt'];
 
 function asPlace(c) {
@@ -2985,24 +3507,8 @@ function findOffline(word) {
   }
 
   // 2) taivutetut perusnimet
-  let best = null;
-  for (const c of ENTRIES) {
-    let score = -1;
-    if (w === c.key) score = 1000;
-    else {
-      const sufs = capital ? [...CASE_SUFFIXES.map(fold), ...COLLOQ_SUFFIXES] : LOCATIVE_SUFFIXES.map(fold);
-      for (const suf of sufs) {
-        if (w.length - suf.length < 3 || !w.endsWith(suf)) continue;
-        const stem = w.slice(0, -suf.length);
-        const cp = commonPrefix(stem, c.key);
-        if (cp < Math.max(3, c.key.length - (c.key.length <= 5 ? 1 : 2))) continue;
-        if (stem.length > c.key.length + 2 || stem.length < c.key.length - 3) continue;
-        score = Math.max(score, cp * 10 - Math.abs(stem.length - c.key.length) - (COLLOQ_SUFFIXES.includes(suf) ? 1 : 0));
-      }
-    }
-    if (score >= 0 && (!best || score > best.score)) best = { score, c };
-  }
-  if (best) return asPlace(best.c);
+  const best = matchInflected(raw, ENTRIES);
+  if (best) return asPlace(best);
 
   // 3) yhden merkin kirjoitusvirhe (pitkät nimet, vähintään seitsemän merkin sana)
   if (w.length >= 7) {
@@ -3021,7 +3527,7 @@ function findOffline(word) {
   }
   return null;
 }
-return { FOREIGN_CITIES, FI_EXTRA, ALIASES, CASE_SUFFIXES, LOCATIVE_SUFFIXES, COLLOQ_SUFFIXES, lower, fold, editDistance, findOffline };
+return { FOREIGN_CITIES, FI_EXTRA, ALIASES, CASE_SUFFIXES, LOCATIVE_SUFFIXES, COLLOQ_SUFFIXES, lower, fold, editDistance, matchInflected, findOffline };
 })();
 
 // ---- nlu.js ----
@@ -3139,10 +3645,10 @@ const INTENT_RES = [
   ['drive', S(['ajokel', 'ajaa', 'ajamaan', 'ajelu', 'autolla', 'mökkimatk'])],
   ['moon', S(['täysikuu', 'uusikuu', 'täydenkuun', 'kuun (?:vaihe|nousu|lasku)', 'kuu (?:nousee|laskee|näkyy|paistaa)', 'milloin kuu', 'kuutamo'])],
   ['aurora', S(['revontul', 'aurora', 'northern'])],
-  ['uv', S(['aurinkorasv', 'uv(?: |$)', 'auringonpolt', 'ruskett', 'aurinkosuoj', 'palaako', 'iho pala', 'ihon pala'])],
+  ['uv', S(['aurinkorasv', 'aurinkovoit', 'aurinkovoid', 'uv(?: |$)', 'uvi(?: |$)', 'uv indeks', 'ultravio', 'auringonpolt', 'ruskett', 'aurinkosuoj', 'palaako', 'iho pala', 'ihon pala'])],
   ['icecover', S(['kantaa(?:ko)? jää', 'jään (?:paksuu|kanta)', 'jäällä'])],
-  ['pollen', S(['siitepöl', 'allergi'])],
-  ['aqi', S(['ilmanlaat', 'aqi', 'pienhiukk', 'ilmansaast'])],
+  ['pollen', S(['siitepöl', 'allergi', 'pujo', 'tuoksukk', 'ambros', 'heinänuh', 'kukint', 'kukkii', 'kukkiiko', 'pölyää(?:kö)? koivu', 'koivu (?:pölyää|kukkii)', '(?:koivu|leppä|lepp|heinä|heinie)[a-zåäö]* (?:ilmassa|pölyä)'])],
+  ['aqi', S(['ilmanlaat', 'ilman laat', 'aqi', 'pienhiukk', 'hiukkaspitoi', 'ilmansaast', 'saaste', 'otsoni', 'typpidiok', 'pm2', 'pm10', 'katupöly', 'hengitysilm'])],
   [
     'summary',
     S(['sää', 'sään', 'säätä', 'säästä', 'säässä', 'sääl', 'sääenn', 'sääti', 'ennuste', 'ennusta', 'yhteenve', 'tulossa', 'miltä näyttää', 'millai', 'minkälai', 'millane', 'minkälane', 'keli', 'ilma(?:t|a|ssa|sta|ja)?(?= |$)', 'ilmoj']),
@@ -3919,8 +4425,6 @@ function dryText(fc, win, nowIdx, today) {
   return next ? `${base} · seuraava sade ${spanLabel(fc, next.start, next.end, today)}` : base;
 }
 
-const pad2 = (n) => String(n).padStart(2, '0');
-
 /**
  * Vastauskaistan sisältö: enintään neljä kaistaa (takki, sateenvarjo + kaksi tärkeintä lisäkaistaa) ja yksi koodilla tehty lause.
  * Ääri-ilmiöt (alerts) palautetaan erikseen: ne näytetään sivun yläreunan huomiokaistalla, ei neuvojen joukossa.
@@ -3936,7 +4440,6 @@ function verdict(fc, nowMs, opts = {}) {
   const a = fc.hours[from].t;
   const b = fc.hours[to].t;
   win.caption = win.kind === 'soon' ? 'Seuraavat 6 tuntia' : `${win.kind === 'tomorrow' ? 'Huomenna' : 'Tänään'} klo ${hh(a)}–${endHour(b)}`;
-  void pad2;
   const o = outfit(fc, from, to, opts);
   const u = umbrella(fc, from, to, { nowIdx: future ? null : nowIdx });
   const sl = slippery(fc, from, to);
@@ -4028,6 +4531,8 @@ const { sunEvents, dayLengthMs, moonInfo } = __m['sun'];
 const { fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, localNow, zonedToUtcMs } = __m['util'];
 const { placeKey, haversineKm } = __m['geo'];
 const { outfit, slipperyHours } = __m['advice'];
+const { matchInflected, fold } = __m['gazetteer'];
+const { airWindow, grains, POLLEN } = __m['airquality'];
 
 // ---------- Apurit ----------
 
@@ -4190,7 +4695,8 @@ function resolveWindow(q, fc, nowMs, def = 'next24') {
   const last = fc.hours.length - 1;
   const first = fc.hours[0].t;
   const map = idxMap(fc);
-  const loc = (iso) => map.get(iso) ?? (iso < first ? -1 : last + 1);
+  // Puuttuva tunti ennusteen sisällä (aukko tai kesäaikaan siirtymisen hyppy) on seuraava olemassa oleva tunti, ei "ennusteen jälkeen"
+  const loc = (iso) => map.get(iso) ?? (iso < first ? -1 : iso > fc.hours[last].t ? last + 1 : fc.hours.findIndex((h) => h.t > iso));
   const at = (date, hour) => loc(`${addDays(date, Math.floor(hour / 24))}T${pad2(hour % 24)}:00`);
   const win = { kind: 'range', from: np.idx, to: np.idx, days: null, dates: null, label: '', past: false, beyond: false, clipped: false, nowIdx: np.idx, today, explicit: when.explicit };
 
@@ -5056,6 +5562,7 @@ const HELP = [
   '- **Milloin aurinko laskee?**',
   '- **Kannattaako pyykit viedä ulos?** tai **Voiko huomenna ajaa Ouluun?**',
   '- **Kumpi on lämpimämpi, huomenna vai lauantaina?**',
+  '- **Onko huomenna siitepölyä?**, **Millainen ilmanlaatu on?** tai **Tarvitaanko aurinkorasvaa?**',
 ];
 
 const COMPOSERS = {
@@ -5076,14 +5583,14 @@ const COMPOSERS = {
   tyres: (X) => composeTyres(X),
   moon: (X) => composeMoon(X),
   aurora: (X, w) => composeAurora(X, w),
-  uv: () => [NO_DATA.uv],
+  uv: (X, w) => composeUv(X, w),
   icecover: () => [NO_DATA.icecover],
-  pollen: () => [NO_DATA.pollen],
-  aqi: () => [NO_DATA.aqi],
+  pollen: (X, w, q) => composePollen(X, w, q),
+  aqi: (X, w) => composeAqi(X, w),
 };
 
 /** Oletusikkuna aiheelle, kun kysymyksessä ei ole ajankohtaa. */
-const DEFAULT_WINDOW = { clothing: 'next12', outdoor: 'next36', models: 'next24', confidence: 'next24', rain: 'next24', snow: 'next24', ice: 'next24', drive: 'next36', aurora: 'next12' };
+const DEFAULT_WINDOW = { clothing: 'next12', outdoor: 'next36', models: 'next24', confidence: 'next24', rain: 'next24', snow: 'next24', ice: 'next24', drive: 'next36', aurora: 'next12', uv: 'today', pollen: 'today', aqi: 'next24' };
 
 function pastNote(w, X) {
   return `Ajankohta "${w.label}" on jo mennyt. SääÄly näyttää ennusteen nykyhetkestä eteenpäin eikä tunne menneitä havaintoja. Kysy sää nyt tai tulevilta päiviltä (ennuste ulottuu ${dayName(X.fc.days.at(-1).date, X.today)} asti).`;
@@ -5115,10 +5622,24 @@ function pickGeocoded(cand, list) {
   return best?.r || null;
 }
 
+/** Käyttäjän suosikki kysymyksen sanalle ("Rukalla", "Mökkilässä"): taivutus kuten tunnetuilla paikoilla. */
+function favoriteFor(cand, favs) {
+  if (!Array.isArray(favs) || !favs.length) return null;
+  const entries = favs.filter((f) => f && f.name && Number.isFinite(f.lat) && Number.isFinite(f.lon)).map((f) => ({ ...f, key: fold(f.name) }));
+  const hit = matchInflected(cand.word, entries) || (cand.offline ? entries.find((e) => e.key === fold(cand.offline.name)) : null);
+  return hit ? { name: hit.name, region: hit.region || '', country: hit.country || '', lat: hit.lat, lon: hit.lon, favorite: true } : null;
+}
+
 async function resolvePlaces(q, ctx, budget = { geocode: 4 }) {
   const found = [];
   const unresolved = [];
   for (const cand of q.places) {
+    // Suosikit ensin: käyttäjän tallentama paikka voittaa samannimisen paikkahaun tuloksen eikä vaadi verkkoa
+    const fav = favoriteFor(cand, ctx.favorites);
+    if (fav) {
+      found.push({ ...fav, word: cand.word });
+      continue;
+    }
     if (cand.offline) {
       found.push({ ...cand.offline, word: cand.word });
       continue;
@@ -5147,8 +5668,10 @@ const isCurrent = (p, cur) => Boolean(cur) && (lc(p.name) === lc(cur.name) || ha
 // ---------- Pääfunktio ----------
 
 /**
- * Vastaa kysymykseen. ctx: { place, fc, results, nowMs, last, geocode(query), forecastFor(place), nowcast? }.
+ * Vastaa kysymykseen. ctx: { place, fc, results, nowMs, last, geocode(query), forecastFor(place), nowcast?, favorites?, air? }.
+ * favorites: käyttäjän suosikkipaikat (favorites.js); niiden nimet ratkeavat ennen paikkahakua.
  * nowcast: tutkaennusteen tulkinta (nowcast.js summarizeNowcast), vain nykyiselle paikalle.
+ * air: ilmanlaatu ja siitepöly (airquality.js parseAir) nykyiselle paikalle; muiden paikkojen ilma tulee forecastFor-funktion kentästä air.
  * Palauttaa { text, intents, place, last, understood }. last tallennetaan seuraavaa kysymystä varten.
  */
 async function answerQuestion(text, ctx) {
@@ -5240,7 +5763,7 @@ async function answerQuestion(text, ctx) {
       }
     }
     const used = cur ? ctx.place : place;
-    loaded.push({ place: used, cur, X: { fc: data.fc, results: data.results, place: used, nowMs: ctx.nowMs, today: nowPosition(data.fc, ctx.nowMs).local.date, nowcast: cur ? ctx.nowcast || null : null } });
+    loaded.push({ place: used, cur, X: { fc: data.fc, results: data.results, place: used, nowMs: ctx.nowMs, today: nowPosition(data.fc, ctx.nowMs).local.date, nowcast: cur ? ctx.nowcast || null : null, air: (cur ? ctx.air : data.air) || null } });
   }
 
   const qq = { ...q, activity, when };
@@ -5422,11 +5945,142 @@ function composeAurora(X, w) {
 }
 
 const NO_DATA = {
-  uv: 'SääÄly ei vielä hae UV-indeksiä, joten en voi sanoa, palaako iho tai tarvitaanko aurinkorasvaa. Pilvetön ja korkealla oleva aurinko nostaa UV-säteilyä eniten.',
+  uv: 'UV-indeksiä ei ole tälle ajalle saatavilla, joten en voi sanoa, palaako iho. Pilvetön ja korkealla oleva aurinko nostaa UV-säteilyä eniten.',
   icecover: 'SääÄly ei tiedä jään paksuutta eikä kantavuutta, eikä jäälle mennä ennusteen perusteella. Tarkista jään kunto paikallisilta tahoilta.',
-  pollen: 'SääÄly ei vielä hae siitepölytietoa. Tarkista tilanne siitepölytiedotteesta.',
-  aqi: 'SääÄly ei vielä hae ilmanlaatutietoa. Tarkista tilanne ilmanlaatupalvelusta.',
+  pollen: 'Siitepölytietoa ei juuri nyt saatu: ilmanlaadun lähde ei vastannut tai ei kata tätä paikkaa. Tarkista tilanne siitepölytiedotteesta.',
+  aqi: 'Ilmanlaatutietoa ei juuri nyt saatu: ilmanlaadun lähde ei vastannut tai ei kata tätä paikkaa. Tarkista tilanne ilmanlaatupalvelusta.',
 };
+
+// ---------- Ilma: siitepöly, ilmanlaatu ja UV (airquality.js) ----------
+
+const AIR_SRC = 'Lähde: Copernicus CAMS -malliennuste (Open-Meteo), ei mittaus.';
+const POLLEN_ASK = {
+  alder: /(?:^| )(?:leppä|lepän|leppi|leppa|lepan)/u,
+  birch: /(?:^| )koivu/u,
+  grass: /(?:^| )(?:heinä(?!kuu)|heinien|heina(?!kuu)|heinänuh|timotei)/u,
+  mugwort: /(?:^| )pujo/u,
+  ragweed: /(?:^| )(?:tuoksuk|ambros)/u,
+};
+
+/** Ilman ikkuna: päivälista tai yksi väli. Palauttaa [{ label, from, to, point }] (trimmattu nykyhetkestä eteenpäin). */
+function airSlots(X, w) {
+  const t = trim(w);
+  if (t.kind === 'days') return t.days.map((d) => ({ head: dayHead(d.date, X.today), from: d.from, to: d.to, ref: d.date }));
+  return [{ head: null, from: t.from, to: t.to, point: t.kind === 'point', ref: refDateOf(X, w) }];
+}
+
+/** Kattaako ilmanlaadun ennuste välin: vähintään puolet välistä (yksittäinen tunti: se tunti). */
+const airCovers = (sum, s) => (s.point ? sum.covered > 0 : sum.covered * 2 >= sum.hours);
+
+/** Yhteinen runko: otsikko päivälistalle, rivit ja tieto ennusteen päättymisestä. line(sum, slot) palauttaa rivin tai null (ei tietoa). */
+function airAnswer(X, w, slots, title, line) {
+  const rows = [];
+  let missing = 0;
+  for (const s of slots) {
+    const sum = airWindow(X.fc, X.air, s.from, s.to);
+    const txt = airCovers(sum, s) ? line(sum, s) : null;
+    if (txt == null) missing++;
+    if (s.head) rows.push(`- **${s.head}**: ${txt ?? 'ei vielä ennusteessa'}`);
+    else if (txt != null) rows.push(txt);
+  }
+  if (missing === slots.length) return { rows: [`${cap(title)} ${w.label} ei ole vielä ennusteessa. ${airEnd(X)}`], none: true };
+  if (slots.length > 1 || slots[0]?.head) rows.unshift(`**${cap(title)} ${w.label}:**`);
+  if (missing) rows.push(airEnd(X));
+  return { rows, none: false };
+}
+
+/** Ilmanlaadun ennuste ulottuu noin neljä vuorokautta: kerrotaan, jos kysytty aika on sen ulkopuolella. */
+function airEnd(X) {
+  const t = X.air?.t;
+  if (!t?.length) return '';
+  const last = localNow(t.at(-1) - 12 * 3600000, X.fc.tz).date; // viimeinen päivä, jonka ennuste kattaa suurimmaksi osaksi
+  return `Ilmanlaadun ja siitepölyn ennuste ulottuu ${dayName(last, X.today)} asti.`;
+}
+
+function pollenWord(p) {
+  return p.level >= 4 ? 'erittäin runsaasti' : p.level === 3 ? 'runsaasti' : p.level === 2 ? 'kohtalaisesti' : p.level === 1 ? 'vähän' : 'ei juuri lainkaan';
+}
+
+function composePollen(X, w, q) {
+  if (!X.air) return [NO_DATA.pollen];
+  if (!X.air.hasPollen) return ['**Siitepölyä ei ennusteta nyt.** Ennuste kattaa lepän, koivun, heinät, pujon ja tuoksukin vain kasvukaudella (noin maaliskuusta syyskuuhun) ja vain Euroopassa.', AIR_SRC];
+  const asked = POLLEN.filter((p) => POLLEN_ASK[p.key].test(q?.N || ''));
+  let top = 0;
+  const { rows, none } = airAnswer(X, w, airSlots(X, w), 'siitepöly', (sum, s) => {
+    const list = asked.length ? asked.map((a) => sum.pollen.find((p) => p.key === a.key) || { ...a, max: 0, level: 0, word: 'ei siitepölyä' }) : sum.pollen.filter((p) => p.level >= 1);
+    for (const p of list) top = Math.max(top, p.level);
+    if (asked.length && list.every((p) => !p.level)) {
+      // "Kukkiiko leppä?": kysyttyä lajia ei ole, mutta kerrotaan muut merkittävät lajit
+      const names = asked.map((a) => a.gen).join(' ja ');
+      const other = sum.pollen.filter((p) => p.level >= 2 && !asked.some((a) => a.key === p.key));
+      for (const p of other) top = Math.max(top, p.level);
+      const rest = other.length ? ` Muuta siitepölyä: ${other.map((p) => `${p.name} ${p.word}`).join(', ')}.` : '';
+      return s.head ? `${names} siitepölyä ei juuri ole${rest ? `;${rest.slice(0, -1).replace(' Muuta', ' muuta')}` : ''}` : `**${cap(names)} siitepölyä ei juuri ole ${w.label}.**${rest}`;
+    }
+    const txt = !list.length
+      ? 'siitepölyä ei juuri ole'
+      : list
+          .slice(0, 4)
+          .map((p) => {
+            if (!p.level) return `${p.name}: ei siitepölyä`;
+            const when = !s.point && p.peakStart >= 0 && p.level >= 2 && p.peakEnd - p.peakStart < 18 ? `, eniten ${spanText(X, p.peakStart, p.peakEnd, s.ref)}` : '';
+            return `${p.name} ${p.word} (${s.point ? '' : 'enintään '}${grains(p.max)}${when})`;
+          })
+          .join(', ');
+    return s.head ? txt : `**Siitepölyä ${w.label}:** ${txt}.`;
+  });
+  if (none) return rows;
+  if (top >= 3) rows.push('Allergisen kannattaa ottaa lääke ajoissa, pitää ikkunat kiinni päivällä ja vaihtaa vaatteet ulkoilun jälkeen. Sade huuhtoo siitepölyä ilmasta.');
+  else if (top === 2) rows.push('Herkimmät allergikot voivat saada oireita.');
+  rows.push(AIR_SRC);
+  return rows;
+}
+
+function composeAqi(X, w) {
+  if (!X.air || !X.air.aqi.some((v) => v != null)) return [NO_DATA.aqi];
+  let worst = null;
+  const { rows, none } = airAnswer(X, w, airSlots(X, w), 'ilmanlaatu', (sum, s) => {
+    const a = sum.aqi;
+    if (!a) return null;
+    if (!worst || a.max > worst.max) worst = a;
+    const why = a.dom && a.info.level >= 3 ? `, suurin vaikutus: ${a.dom.name}` : '';
+    const when = !s.point && a.info.level >= 3 && a.start >= 0 ? ` ${spanText(X, a.start, a.end, s.ref)}` : '';
+    if (s.head) return `${a.info.word}${when} (indeksi enintään ${Math.round(a.max)}${why})`;
+    return `**Ilmanlaatu ${w.label}: ${a.info.word}.** ${s.point ? `Eurooppalainen ilmanlaatuindeksi on ${Math.round(a.max)}${why}.` : `Eurooppalainen ilmanlaatuindeksi on enintään ${Math.round(a.max)}${when ? `, huonoimmillaan${when}` : ''}${why}.`}`;
+  });
+  if (none) return rows;
+  if (worst?.info.advice) rows.push(worst.info.advice);
+  rows.push('Indeksi: hyvä alle 20, tyydyttävä 20–40, kohtalainen 40–60, huono 60–80, erittäin huono yli 80.', AIR_SRC);
+  return rows;
+}
+
+function composeUv(X, w) {
+  const { fc } = X;
+  let ww = w;
+  // "Tarvitaanko aurinkorasvaa?" illalla: loppupäivä on pimeä, joten vastataan huomisesta
+  const t0 = trim(w);
+  if (!w.explicit && t0.kind !== 'days' && !fc.hours.slice(t0.from, t0.to + 1).some((h) => h.isDay)) {
+    const date = addDays(X.today, 1);
+    const d = fc.days.find((x) => x.date === date);
+    if (d) ww = { ...w, kind: 'range', from: d.from, to: d.to, label: 'huomenna', explicit: true };
+  }
+  let worst = null;
+  const slots = airSlots(X, ww);
+  const out = [];
+  for (const s of slots) {
+    const sum = airWindow(fc, X.air, s.from, s.to);
+    const u = sum.uv;
+    if (u && (!worst || u.max > worst.max)) worst = u;
+    const when = u && !s.point && u.info.level >= 1 && u.start >= 0 ? `, korkeimmillaan ${spanText(X, u.start, u.end, s.ref)}` : '';
+    const txt = u ? `${s.point ? '' : 'enintään '}${u.info.value} (${u.info.word})${when}` : null;
+    if (s.head) out.push(`- **${s.head}**: ${txt ?? 'ei tietoa'}`);
+    else out.push(txt ? `**UV-indeksi ${ww.label}: ${txt}.**` : NO_DATA.uv);
+  }
+  if (slots.length > 1 || slots[0]?.head) out.unshift(`**UV-indeksi ${ww.label}:**`);
+  if (worst) out.push(worst.info.advice);
+  if (ww !== w) out.unshift('Tänään aurinko ei enää paista, joten kerron huomisesta.');
+  return out;
+}
 
 /** Kahden päivän tai kahden paikan vertailu (sade, tuuli, ulkoilu, lämpö). items: [{ X, qv, name? }]. */
 function composeCompareGeneric(items, intent, q, nowMs) {
@@ -5465,162 +6119,6 @@ function composeCompareGeneric(items, intent, q, nowMs) {
   return [head, ...rows.map((r) => `- **${r.label}**: ${r.text}`)].join('\n');
 }
 return { dayName, resolveWindow, facts, pickGeocoded, answerQuestion };
-})();
-
-// ---- sources.js ----
-__m['sources'] = (() => {
-// sources.js: valinnaisten ulkoisten tietolähteiden hallinta (tutkaennuste, varoitukset, ilmanlaatu).
-// Periaate: lähde saa epäonnistua hiljaa. Käyttäjälle ei näytetä virheilmoituksia, ja epäonnistunutta lähdettä ei kokeilla heti uudelleen
-// (porrastettu odotus 15 min, 1 h, 6 h, 24 h). Tila näkyy vain "Tietoja ja tietolähteet" -näkymässä ja diagnostiikassa.
-// Selaimesta ei voi erottaa CORS-estoa verkkovirheestä, joten kaikki "ei vastannut" -tapaukset käsitellään samalla tavalla.
-
-const { store } = __m['util'];
-
-const SOURCE_INFO = {
-  nowcast: {
-    name: 'Tutkaennuste',
-    provider: 'MET Norway Nowcast',
-    url: 'https://api.met.no/weatherapi/nowcast/2.0/',
-    license: 'CC BY 4.0 / NLOD',
-    note: 'Tutkapohjainen sade seuraavalle kahdelle tunnille (Pohjoismaat).',
-  },
-  warnings: {
-    name: 'Viralliset varoitukset',
-    provider: 'Ilmatieteen laitos',
-    url: 'https://www.ilmatieteenlaitos.fi/varoitukset',
-    license: 'CC BY 4.0',
-    note: 'Säävaroitukset (CAP-syöte) sijaintisi alueelle. Haetaan GitHubin kautta, koska Ilmatieteen laitoksen palvelu ei salli selaimen suoraa hakua. Jos tieto on yli puolitoista tuntia vanha, etusivu kertoo sen.',
-  },
-  obs: {
-    name: 'Havainto',
-    provider: 'Ilmatieteen laitos, avoin data',
-    url: 'https://www.ilmatieteenlaitos.fi/avoin-data',
-    license: 'CC BY 4.0',
-    note: 'Lähimmän sääaseman mitattu lämpötila: vertailukohta ennusteelle (Varmuus-sivu).',
-  },
-  radarmap: {
-    name: 'Tutkakartta',
-    provider: 'RainViewer',
-    url: 'https://www.rainviewer.com',
-    license: 'Henkilökohtainen käyttö, lähdemaininta',
-    note: 'Havaittu sade kartalla viimeisen kahden tunnin ajalta (kehys 20 minuutin välein). Haetaan vain, kun avaat kartan.',
-  },
-  cloudmap: {
-    name: 'Pilvi- ja sade-ennuste kartalla',
-    provider: 'Open-Meteo',
-    url: 'https://open-meteo.com',
-    license: 'CC BY 4.0',
-    note: 'Säämallien pilvisyys ja sade noin 45 km:n ruudukossa seuraavalle vuorokaudelle. Haetaan vain, kun avaat kartan.',
-  },
-  air: {
-    name: 'Ilmanlaatu ja siitepöly',
-    provider: 'Open-Meteo / CAMS',
-    url: 'https://open-meteo.com/en/docs/air-quality-api',
-    license: 'CC BY 4.0',
-    note: 'Mallilaskelma, ei mittaus.',
-  },
-};
-
-const WAIT_MIN = [15, 60, 360, 1440];
-
-/** Muistinvarainen tallennus (esimerkkitilassa ei kirjoiteta oikeaan localStorageen). */
-function memoryStorage() {
-  const mem = {};
-  return { object: (k) => mem[k] ?? null, set: (k, v) => ((mem[k] = v), true) };
-}
-
-function createGuard({ storage = store, clock = () => Date.now() } = {}) {
-  const read = () => storage.object('src') || {};
-  const entry = (id) => {
-    const e = read()[id];
-    return e && typeof e === 'object' ? e : {};
-  };
-  const put = (id, e) => storage.set('src', { ...read(), [id]: e });
-  return {
-    /** Saako lähdettä yrittää nyt? Epäonnistumisen jälkeen odotetaan. */
-    canTry(id, now = clock()) {
-      const e = entry(id);
-      return !(Number(e.until) > now);
-    },
-    /** limited = lähde vastasi, mutta tietoa ei voinut käyttää (esim. vanhentunut peili tai ei kattavuutta). */
-    ok(id, now = clock(), note = '', limited = false) {
-      put(id, { fails: 0, until: 0, lastOk: now, note: String(note).slice(0, 80), ...(limited ? { limited: true } : {}) });
-    },
-    fail(id, err, now = clock()) {
-      const e = entry(id);
-      const fails = (Number(e.fails) || 0) + 1;
-      put(id, { ...e, fails, until: now + WAIT_MIN[Math.min(fails, WAIT_MIN.length) - 1] * 60000, lastFail: now, error: String(err?.message || err || 'virhe').slice(0, 80) });
-    },
-    status(id) {
-      return entry(id);
-    },
-  };
-}
-
-/**
- * Ajaa lähteen haun suojattuna. Palauttaa { value } onnistuessa, { skipped } kun odotusaika on käynnissä tai laite on offline,
- * ja { error } epäonnistuessa. Ei koskaan heitä. force ohittaa odotuksen (esim. käyttäjä päivitti käsin).
- */
-async function runSource(guard, id, fn, { force = false, now = Date.now() } = {}) {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return { skipped: 'offline' };
-  if (!force && !guard.canTry(id, now)) return { skipped: 'odotus' };
-  try {
-    const value = await fn();
-    if (value && value.ok === false) {
-      // Lähde vastasi, mutta ei kata paikkaa tai tieto puuttuu: ei virhe, mutta ei käyttökelpoista tietoa
-      guard.ok(id, now, value.reason || '', true);
-      return { value: null, reason: value.reason || 'ei kattavuutta', raw: value };
-    }
-    guard.ok(id, now, value?.note || '');
-    return { value };
-  } catch (e) {
-    if (e?.name === 'AbortError' && e?.cancelled) return { skipped: 'peruttu' };
-    guard.fail(id, e, now);
-    return { error: e };
-  }
-}
-
-/** Yksi rivi diagnostiikkaan ja tietoja-näkymään: "✓ Tutkaennuste (MET Norway Nowcast)" tai "– … ei vastannut (odotus 15 min)". */
-function sourceLine(id, st, now = Date.now()) {
-  const info = SOURCE_INFO[id];
-  if (!info) return '';
-  const head = `${info.name} (${info.provider})`;
-  if (st?.lastFail && (!st.lastOk || st.lastFail > st.lastOk)) {
-    const wait = Math.max(0, Math.ceil((Number(st.until) - now) / 60000));
-    return `– ${head}: ei vastannut${st.error ? ` (${st.error})` : ''}${wait ? `, uusi yritys ${wait >= 90 ? `${Math.round(wait / 60)} h` : `${wait} min`} päästä` : ''}`;
-  }
-  if (st?.lastOk) return `${st.limited ? '!' : '✓'} ${head}${st.note ? `: ${st.note}` : ''}`;
-  return `· ${head}: ei vielä kokeiltu`;
-}
-
-/**
- * Yksi verkkopyyntö aikarajalla ja ulkoisella peruutuksella; read(res) lukee vastauksen rungon saman aikarajan sisällä.
- * Heittää "<label>: aikakatkaisu", kun aikaraja täyttyy, ja AbortError (cancelled = true), kun signal peruttiin.
- */
-async function timedRequest(fetchFn, url, init, { timeoutMs = 8000, signal = null, label = 'Haku' } = {}, read = (res) => res) {
-  const ctl = new AbortController();
-  let cancelled = false;
-  const onAbort = () => {
-    cancelled = true;
-    ctl.abort();
-  };
-  if (signal) {
-    if (signal.aborted) onAbort();
-    else signal.addEventListener('abort', onAbort, { once: true });
-  }
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    return await read(await fetchFn(url, { ...init, signal: ctl.signal }));
-  } catch (e) {
-    if (cancelled) throw Object.assign(new Error('Peruttu'), { name: 'AbortError', cancelled: true });
-    if (ctl.signal.aborted) throw new Error(`${label}: aikakatkaisu`);
-    throw e;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener?.('abort', onAbort);
-  }
-}
-return { SOURCE_INFO, memoryStorage, createGuard, runSource, sourceLine, timedRequest };
 })();
 
 // ---- nowcast.js ----
@@ -5759,7 +6257,7 @@ function summarizeNowcast(nc, nowMs = Date.now()) {
     return { ...out, state: 'dry', startMin: null, endMin: null, peak: 0, mm: 0, word: '', tail, line: `Tutkan mukaan ${tail}.` };
   }
   const startMin = round5(minTo(j));
-  const { peak, mm } = span(j, j + 11); // tunnin ajan alusta
+  const { peak, mm } = span(j, j + Math.max(1, Math.round(3600000 / dt)) - 1); // tunnin ajan alusta (askelpituus vaihtelee)
   const word = intensityWord(peak);
   const tail = startMin <= 5 ? 'sade alkaa aivan pian' : `sade alkaa noin ${startMin} min päästä`;
   return { ...out, state: 'dry', startMin, endMin: null, peak, mm, word, tail, line: `Tutkan mukaan ${tail} (${word}).` };
@@ -6199,7 +6697,7 @@ return { OBS_BASE, obsUrl, parseObs, fetchObs };
 
 // ---- demo.js ----
 __m['demo'] = (() => {
-// demo.js: synteettinen säädata testeihin ja esikatseluun (?demo=1, ?demo=rain|snow|clear|thunder|fog).
+// demo.js: synteettinen säädata testeihin ja esikatseluun (?demo=1, ?demo=rain|snow|clear|thunder|fog), myös ilmanlaatu ja siitepöly.
 // Tuottaa Open-Meteon vastausmuotoa, joten koko sovelluksen koodipolku (haku, jäsennys, yhdistely) on sama kuin oikealla datalla.
 
 const { FI_CITIES, haversineKm } = __m['geo'];
@@ -6272,6 +6770,19 @@ function syntheticGrid({ lats, lons, nowMs = Date.now(), hours = 25, scenario = 
     }
     return { latitude: la, longitude: lo, hourly: { time, cloud_cover, precipitation, snowfall } };
   });
+}
+
+/** Suosikkien nykysää (Open-Meteon current-muoto, monta pistettä = taulukko) samasta esimerkkisäästä kuin ennuste. */
+function syntheticCurrent({ lats, lons, nowMs = Date.now(), scenario = 'mixed' }) {
+  const out = lats.map((la, k) => {
+    const lo = lons[k];
+    const r = syntheticResponse({ lat: la, lon: lo, modelId: 'ecmwf_ifs', nowMs, days: 2, scenario });
+    const iso = localNow(nowMs, 'Europe/Helsinki').iso.slice(0, 13) + ':00';
+    const i = Math.max(0, r.hourly.time.indexOf(iso));
+    const isDay = sunPosition(nowMs, la, lo).altitudeDeg > 0 ? 1 : 0;
+    return { latitude: la, longitude: lo, current: { time: iso, temperature_2m: r.hourly.temperature_2m[i], weather_code: r.hourly.weather_code[Math.min(i + 1, r.hourly.weather_code.length - 1)], is_day: isDay } };
+  });
+  return out.length === 1 ? out[0] : out;
 }
 
 /** RainViewerin weather-maps.json esimerkkinä: 13 kehystä 10 minuutin välein. */
@@ -6388,6 +6899,66 @@ function syntheticNowcast({ lat, lon, nowMs = Date.now(), tz = 'Europe/Helsinki'
   };
 }
 
+// Siitepölykaudet esimerkkitilassa (Lounais-Suomi): huippupäivä vuoden alusta, leveys (vrk) ja huippupitoisuus (kpl/m³).
+const POLLEN_SEASON = { alder_pollen: [95, 10, 160], birch_pollen: [132, 8, 650], grass_pollen: [178, 14, 55], mugwort_pollen: [214, 8, 24], ragweed_pollen: [236, 9, 2] };
+const AQ_BANDS = { pm2_5: [10, 20, 25, 50, 75], pm10: [20, 40, 50, 100, 150], nitrogen_dioxide: [40, 90, 120, 230, 340], ozone: [50, 100, 130, 240, 380] };
+
+/** Saasteen osaindeksi 0–100+ (20 yksikköä luokkaa kohden), josta eurooppalainen indeksi on suurin. */
+function subIndex(v, th) {
+  const edges = [0, ...th];
+  for (let k = 1; k < edges.length; k++) if (v < edges[k]) return (k - 1) * 20 + ((v - edges[k - 1]) / (edges[k] - edges[k - 1])) * 20;
+  return 100 + (v - th.at(-1)) / 5;
+}
+
+/**
+ * Open-Meteo Air Quality -muotoinen synteettinen vastaus (timeformat=unixtime, 4 vrk). Siitepöly noudattaa kasvukautta (talvella null kuten oikeassa
+ * rajapinnassa), päivärytmiä ja sadetta; sumuskenaariossa inversio heikentää ilmanlaatua aamulla. UV samasta auringon korkeudesta kuin säämalleissa.
+ */
+function syntheticAir({ lat, lon, nowMs = Date.now(), tz = 'Europe/Helsinki', scenario = 'mixed', days = 4 }) {
+  const t0 = Date.UTC(...new Date(nowMs).toISOString().slice(0, 10).split('-').map((x, k) => (k === 1 ? +x - 1 : +x)));
+  const sc = SCENARIOS[scenario];
+  const time = [];
+  const hourly = { time };
+  for (const k of ['european_aqi', 'pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone', 'uv_index', ...Object.keys(POLLEN_SEASON)]) hourly[k] = [];
+  const noise = rng(hashStr(`air${scenario}`));
+  for (let i = 0; i < days * 24; i++) {
+    const ms = t0 + i * 3600000;
+    time.push(ms / 1000);
+    const ln = localNow(ms, tz);
+    const doy = Math.round((Date.parse(ln.date + 'T00:00:00Z') - Date.UTC(+ln.date.slice(0, 4), 0, 1)) / 86400000) + 1;
+    const hr = ln.hour + ln.minute / 60;
+    const rush = Math.exp(-(((hr - 8) / 1.6) ** 2)) + 0.8 * Math.exp(-(((hr - 16.5) / 1.8) ** 2));
+    const sunAlt = sunPosition(ms, lat, lon).altitudeDeg;
+    const wet = sc ? sc.precip > 0 : Math.exp(-(((i - 31) / 4.5) ** 2)) > 0.3;
+    const cloud = sc ? sc.cloud : 50;
+    const inv = scenario === 'fog' ? 3.2 : scenario === 'snow' ? 1.4 : 1;
+    const pm25 = (3 + 5 * rush) * inv * (wet ? 0.6 : 1) + noise() * 1.5;
+    const pm10 = pm25 * 1.7 + noise() * 2;
+    const no2 = (6 + 26 * rush) * inv + noise() * 3;
+    const o3 = Math.max(10, 38 + 30 * Math.max(0, Math.sin((sunAlt * Math.PI) / 180)) * (1 - cloud / 160) - no2 * 0.3 + noise() * 4);
+    const aqi = Math.max(subIndex(pm25, AQ_BANDS.pm2_5), subIndex(pm10, AQ_BANDS.pm10), subIndex(no2, AQ_BANDS.nitrogen_dioxide), subIndex(o3, AQ_BANDS.ozone));
+    hourly.pm2_5.push(+pm25.toFixed(1));
+    hourly.pm10.push(+pm10.toFixed(1));
+    hourly.nitrogen_dioxide.push(+no2.toFixed(1));
+    hourly.ozone.push(+o3.toFixed(1));
+    hourly.european_aqi.push(Math.round(aqi));
+    hourly.uv_index.push(+Math.max(0, 5.5 * Math.sin((Math.max(0, sunAlt) * Math.PI) / 180) * (1 - 0.7 * (cloud / 100))).toFixed(2));
+    // Kasvukauden ulkopuolella (loka–helmikuu) CAMS ei anna siitepölyä: null, ei nolla
+    const season = doy >= 60 && doy <= 273;
+    const diurnal = 0.35 + 0.65 * Math.exp(-(((hr - 14) / 4) ** 2));
+    const washout = sc ? (sc.snow ? 0 : sc.precip > 0 ? 0.15 : 1) : wet ? 0.25 : 1;
+    for (const [k, [peak, width, max]] of Object.entries(POLLEN_SEASON)) {
+      if (!season) {
+        hourly[k].push(null);
+        continue;
+      }
+      const v = max * Math.exp(-(((doy - peak) / width) ** 2)) * diurnal * washout * (0.85 + 0.3 * noise());
+      hourly[k].push(v < 0.05 ? 0 : +v.toFixed(1));
+    }
+  }
+  return { latitude: +lat.toFixed(2), longitude: +lon.toFixed(2), generationtime_ms: 0.4, utc_offset_seconds: 0, timezone: 'GMT', hourly_units: { european_aqi: 'EAQI', birch_pollen: 'grains/m³' }, hourly };
+}
+
 const DEMO_WARNINGS = {
   thunder: ['Ukkosvaroitus', 'Severe', 'orange', 'Voimakkaita ukkoskuuroja, paikoin rakeita. Kuurojen mukana voi tulla puuskia yli 20 m/s.'],
   snow: ['Liukkausvaroitus', 'Moderate', 'yellow', 'Tiet ja kevyen liikenteen väylät voivat olla erittäin liukkaita.'],
@@ -6427,12 +6998,18 @@ function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
   return async (input) => {
     const url = new URL(typeof input === 'string' ? input : input.url);
     log?.(url.href);
+    if (url.hostname === 'api.open-meteo.com' && url.searchParams.get('current')) {
+      const lats = (url.searchParams.get('latitude') || '').split(',').map(Number);
+      const lons = (url.searchParams.get('longitude') || '').split(',').map(Number);
+      return json(syntheticCurrent({ lats, lons, nowMs: nowMs ?? Date.now(), scenario }));
+    }
     if (url.hostname === 'api.open-meteo.com' && (url.searchParams.get('latitude') || '').includes(',')) {
       const lats = url.searchParams.get('latitude').split(',').map(Number);
       const lons = url.searchParams.get('longitude').split(',').map(Number);
       return json(syntheticGrid({ lats, lons, nowMs: nowMs ?? Date.now(), hours: +url.searchParams.get('forecast_hours') || 25, scenario }));
     }
     if (url.hostname === 'api.rainviewer.com') return json(syntheticRadarMaps(nowMs ?? Date.now()));
+    if (url.hostname === 'air-quality-api.open-meteo.com') return json(syntheticAir({ lat: +url.searchParams.get('latitude'), lon: +url.searchParams.get('longitude'), nowMs: nowMs ?? Date.now(), scenario, days: +url.searchParams.get('forecast_days') || 4 }));
     if (url.hostname === 'api.open-meteo.com') {
       const id = url.searchParams.get('models');
       if (id === 'fmi_seamless' || id === 'dead_model') return json({ error: true, reason: `Cannot initialize MultiDomains from invalid String value ${id} for key models` }, 400);
@@ -6478,7 +7055,7 @@ function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
     return json({ error: { message: 'Demo-tilassa ei ole yhteyttä tähän palveluun' } }, 403);
   };
 }
-return { syntheticMapWx, syntheticGrid, syntheticRadarMaps, syntheticResponse, syntheticNowcast, syntheticWarningsFeed, syntheticObs, makeDemoFetch };
+return { syntheticMapWx, syntheticGrid, syntheticCurrent, syntheticRadarMaps, syntheticResponse, syntheticNowcast, syntheticAir, syntheticWarningsFeed, syntheticObs, makeDemoFetch };
 })();
 
 // ---- headline.js ----
@@ -6816,7 +7393,8 @@ function weekendLine(days, today) {
 
 /** Liukkaus päivälle: 0 = ei, 2 = liukasta, 3 = erittäin liukasta. */
 function daySlippery(fc, d) {
-  return slippery(fc, d.from, d.to).level >= 2 ? slippery(fc, d.from, d.to).level : 0;
+  const { level } = slippery(fc, d.from, d.to);
+  return level >= 2 ? level : 0;
 }
 
 // ---------- Varmuus ----------
@@ -7040,6 +7618,183 @@ function icon3d(sym, isDay = true, size = 48) {
 return { icon, icon3dKey, icon3d };
 })();
 
+// ---- favorites.js ----
+__m['favorites'] = (() => {
+// favorites.js: tallennetut suosikkipaikat ja niiden kevyt "nyt"-sää paikkalistaan.
+// Puhtaita funktioita (testattavissa ilman selainta); app.js tallentaa listan store-apurilla ja piirtää sen.
+// Suosikki on { name, region, country, lat, lon, home? }. Koti (home) on aina listan ensimmäinen, ja niitä on enintään yksi.
+
+const { haversineKm } = __m['geo'];
+const { timedRequest } = __m['sources'];
+const { defaultFetch } = __m['util'];
+
+const FAV_MAX = 8;
+const FAV_SAME_KM = 1; // alle kilometrin päässä oleva paikka on sama paikka (sama tarkkuus kuin säähaussa)
+const FAV_WX_TTL = 15 * 60000; // suosikkien nykysää haetaan enintään neljännestunnin välein
+const NAME_MAX = 80;
+
+const str = (v, max = NAME_MAX) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+
+/** Siistii yhden tallennetun paikan. Väärän muotoinen (käsin muokattu, rikkoutunut) palauttaa null. */
+function normalizeFav(p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+  const lat = Number(p.lat);
+  const lon = Number(p.lon);
+  const name = str(p.name);
+  if (!name || typeof p.lat === 'boolean' || typeof p.lon === 'boolean' || p.lat == null || p.lon == null) return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  const out = { name, region: str(p.region), country: str(p.country), lat: Math.round(lat * 1e4) / 1e4, lon: Math.round(lon * 1e4) / 1e4 };
+  if (p.home === true) out.home = true;
+  return out;
+}
+
+/** Sama paikka: alle kilometrin päässä toisistaan (nimi voi olla eri, esim. GPS:n kaupunginosa ja haun kaupunki). */
+function samePlace(a, b) {
+  if (!a || !b || !Number.isFinite(+a.lat) || !Number.isFinite(+b.lat)) return false;
+  return haversineKm(+a.lat, +a.lon, +b.lat, +b.lon) < FAV_SAME_KM;
+}
+
+/** Järjestää: koti ensin (vain yksi), muuten tallennusjärjestys. Poistaa kaksoiskappaleet ja rajaa määrän. */
+function tidy(list) {
+  const out = [];
+  for (const p of list) {
+    if (!p || out.some((q) => samePlace(q, p))) continue;
+    out.push(p);
+  }
+  const hi = out.findIndex((p) => p.home);
+  const sorted = hi > 0 ? [out[hi], ...out.slice(0, hi), ...out.slice(hi + 1)] : out;
+  return sorted.slice(0, FAV_MAX).map((p, i) => {
+    const { home, ...rest } = p;
+    return i === 0 && home ? { ...rest, home: true } : rest;
+  });
+}
+
+/** Lukee suosikit tallennetusta arvosta (mikä tahansa JSON). Rikkinäinen data ei kaada: kelvottomat rivit jätetään pois. */
+function parseFavs(raw) {
+  if (!Array.isArray(raw)) return [];
+  return tidy(raw.slice(0, 50).map(normalizeFav));
+}
+
+const findFav = (list, p) => (p ? list.findIndex((q) => samePlace(q, p)) : -1);
+const isFav = (list, p) => findFav(list, p) >= 0;
+
+/**
+ * Lisää suosikin. Palauttaa { list, ok, reason }: reason 'dup' (jo listalla), 'full' (enintään FAV_MAX) tai 'bad' (kelvoton paikka).
+ * Ensimmäisestä suosikista tulee koti, ellei kotia ole.
+ */
+function addFav(list, p, { home = false } = {}) {
+  const f = normalizeFav({ ...p, home: false });
+  if (!f) return { list, ok: false, reason: 'bad' };
+  if (isFav(list, f)) return { list, ok: false, reason: 'dup' };
+  if (list.length >= FAV_MAX) return { list, ok: false, reason: 'full' };
+  const next = home || !list.length ? [{ ...f, home: true }, ...list.map(({ home: _h, ...r }) => r)] : [...list, f];
+  return { list: tidy(next), ok: true, reason: '' };
+}
+
+/** Poistaa suosikin (sama paikka ~1 km:n sisällä). Jos koti poistuu, seuraavasta ei tule kotia automaattisesti. */
+function removeFav(list, p) {
+  const i = findFav(list, p);
+  if (i < 0) return list;
+  return list.filter((_, k) => k !== i);
+}
+
+/** Lisää tai poistaa; palauttaa { list, ok, reason, on } (on = onko paikka nyt suosikki). */
+function toggleFav(list, p) {
+  if (isFav(list, p)) return { list: removeFav(list, p), ok: true, reason: '', on: false };
+  const r = addFav(list, p);
+  return { ...r, on: r.ok };
+}
+
+/** Tekee suosikista kodin (siirtyy ensimmäiseksi). Jo kotina oleva: koti poistuu (paikka jää suosikiksi). */
+function toggleHome(list, p) {
+  const i = findFav(list, p);
+  if (i < 0) return list;
+  if (list[i].home) return list.map(({ home: _h, ...r }) => r);
+  return tidy([{ ...list[i], home: true }, ...list.filter((_, k) => k !== i).map(({ home: _h, ...r }) => r)]);
+}
+
+// ---------- Nykysää ----------
+
+/** WMO-säätunnus (Open-Meteo weather_code) sovelluksen symboliksi (icons.js, blend.js SYMBOLS). */
+function codeToSym(code) {
+  const c = Number(code);
+  if (!Number.isFinite(c)) return 'overcast';
+  if (c === 0) return 'clear';
+  if (c === 1) return 'mostly_clear';
+  if (c === 2) return 'partly_cloudy';
+  if (c === 3) return 'overcast';
+  if (c === 45 || c === 48) return 'fog';
+  if (c >= 51 && c <= 55) return 'drizzle';
+  if (c === 56 || c === 57 || c === 66 || c === 67) return 'sleet';
+  if (c === 61 || c === 80) return 'rain_light';
+  if (c === 63 || c === 81) return 'rain';
+  if (c === 65 || c === 82) return 'rain_heavy';
+  if (c === 71 || c === 77 || c === 85) return 'snow_light';
+  if (c === 73) return 'snow';
+  if (c === 75 || c === 86) return 'snow_heavy';
+  if (c >= 95 && c <= 99) return 'thunder';
+  return 'overcast';
+}
+
+const coord = (v) => Number(v).toFixed(2); // noin 1 km, kuten muissa hauissa
+
+/** Yksi kevyt haku usealle paikalle: Open-Meteo hyväksyy pilkuin erotellut koordinaatit. */
+function currentUrl(places) {
+  const q = new URLSearchParams({
+    latitude: places.map((p) => coord(p.lat)).join(','),
+    longitude: places.map((p) => coord(p.lon)).join(','),
+    current: 'temperature_2m,weather_code,is_day',
+    timezone: 'auto',
+  });
+  return `https://api.open-meteo.com/v1/forecast?${q.toString()}`;
+}
+
+/** Jäsentää vastauksen (yksi paikka = olio, monta = taulukko). Palauttaa n alkiota: { temp, sym, isDay } tai null. */
+function parseCurrent(json, n) {
+  const arr = Array.isArray(json) ? json : json && typeof json === 'object' ? [json] : [];
+  return Array.from({ length: n }, (_, i) => {
+    const c = arr[i]?.current;
+    const t = Number(c?.temperature_2m);
+    if (!c || c.temperature_2m == null || !Number.isFinite(t) || t < -90 || t > 60) return null;
+    return { temp: t, sym: codeToSym(c.weather_code), isDay: c.is_day == null ? true : Number(c.is_day) === 1 };
+  });
+}
+
+/** Hakee nykysään annetuille paikoille yhdellä pyynnöllä. Heittää virheen; peruttu haku heittää AbortErrorin. */
+async function fetchCurrent(places, { fetchFn = defaultFetch, signal = null, timeoutMs = 8000 } = {}) {
+  if (!places.length) return [];
+  const json = await timedRequest(fetchFn, currentUrl(places), {}, { timeoutMs, signal, label: 'Suosikkien sää' }, async (res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  });
+  return parseCurrent(json, places.length);
+}
+
+/** Välimuistin avain paikalle (sama pyöristys kuin haussa). */
+const wxKey = (p) => `${coord(p.lat)},${coord(p.lon)}`;
+
+/** Lukee tallennetun nykysäävälimuistin; rikkinäiset rivit pois. */
+function parseWxCache(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw).slice(0, 40)) {
+    if (!/^-?\d+\.\d\d,-?\d+\.\d\d$/.test(k) || !v || typeof v !== 'object') continue;
+    if (!Number.isFinite(v.temp) || !Number.isFinite(v.at) || typeof v.sym !== 'string') continue;
+    out[k] = { temp: v.temp, sym: v.sym, isDay: v.isDay !== false, at: v.at };
+  }
+  return out;
+}
+
+/** Paikat, joiden nykysää puuttuu tai on vanhempi kuin FAV_WX_TTL. */
+function staleFavs(list, cache, now) {
+  return list.filter((p) => {
+    const c = cache[wxKey(p)];
+    return !c || now - c.at >= FAV_WX_TTL || c.at > now + 60000;
+  });
+}
+return { FAV_MAX, FAV_SAME_KM, FAV_WX_TTL, normalizeFav, samePlace, parseFavs, findFav, isFav, addFav, removeFav, toggleFav, toggleHome, codeToSym, currentUrl, parseCurrent, fetchCurrent, wxKey, parseWxCache, staleFavs };
+})();
+
 // ---- views.js ----
 __m['views'] = (() => {
 // views.js: näkymät HTML-merkkijonoina. Puhtaita funktioita: sama syöte antaa saman HTML:n.
@@ -7052,6 +7807,8 @@ const { icon, icon3d } = __m['icons'];
 const { meteogram, RANGES } = __m['meteogram'];
 const { sunEvents, dayLengthMs } = __m['sun'];
 const { placeSubtitle } = __m['geo'];
+const { FAV_MAX } = __m['favorites'];
+const { hourAir, airWindow, grains } = __m['airquality'];
 
 const SVG = {
   locate: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
@@ -7064,6 +7821,8 @@ const SVG = {
   caret: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>',
   sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>',
   info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.1"/></svg>',
+  star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.3l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.7l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/></svg>',
+  home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5.5h4V20"/></svg>',
 };
 
 /** Neuvojen piirrokset: yksinkertaiset viivakuvat, väri tulee tekstistä (currentColor). */
@@ -7097,8 +7856,18 @@ function agoText(ms) {
 }
 const STALE_MIN = 60;
 
+/**
+ * Ilmoitus, kun näytetään tallennettua ennustetta: kellonaika (ja päivä, jos ei tänään) sekä ikä.
+ * offline: laite on ilman verkkoa (navigator.onLine false), muuten haku vain epäonnistui.
+ */
+function staleText({ fetchedAt, nowMs, offline = false }) {
+  const d = new Date(fetchedAt);
+  const sameDay = d.toDateString() === new Date(nowMs).toDateString();
+  const t = `${sameDay ? '' : `${d.getDate()}.${d.getMonth() + 1}. `}klo ${d.getHours()}.${String(d.getMinutes()).padStart(2, '0')}`;
+  return `${offline ? 'Ei verkkoyhteyttä' : 'Päivitys ei onnistunut'}. Näytetään ennuste ${t} (${agoText(nowMs - fetchedAt)}).`;
+}
+
 const hh = (iso) => iso.slice(11, 13);
-const clock = (ms) => new Date(ms).toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit' });
 
 function selLabel(sel) {
   if (sel.type === 'hour') return `${weekday(sel.iso.slice(0, 10))} ${fmtDM(sel.iso.slice(0, 10))} klo ${hh(sel.iso)}`;
@@ -7109,11 +7878,12 @@ function selLabel(sel) {
 // ---------- Otsikko ----------
 
 function placeHtml(place) {
-  if (!place || !place.name) return '<span class="place-name"><span class="pn">Haetaan sijaintia…</span></span><span class="place-sub">Hetki vain</span>';
+  if (!place || !place.name) return '<span class="place-name"><span class="pn">Haetaan sijaintia…</span></span><span class="place-sub">Hetki vain</span><span class="sr-only">, vaihda paikkakuntaa</span>';
   const sub = placeSubtitle(place);
   const note = place.note ? ` (${place.note})` : '';
   const pin = place.gps ? `<span class="pin" title="Perustuu sijaintiisi">${SVG.locate}</span>` : '';
-  return `<span class="place-name">${pin}<span class="pn">${esc(place.name)}</span>${SVG.caret}</span><span class="place-sub">${esc(sub)}${esc(note)}</span>`;
+  // Painikkeen nimi = näkyvä paikka + piiloteksti (WCAG 2.5.3), ei erillistä aria-labelia.
+  return `<span class="place-name">${pin}<span class="pn">${esc(place.name)}</span>${SVG.caret}</span><span class="place-sub">${esc(sub)}${esc(note)}</span><span class="sr-only">, vaihda paikkakuntaa</span>`;
 }
 
 // ---------- Sankari ----------
@@ -7209,7 +7979,7 @@ const FMI_WARN = 'https://www.ilmatieteenlaitos.fi/varoitukset';
  * Etusivun varoitusrivi radan yläpuolella: viralliset varoitukset (värillinen rengas) ja SääÄlyn omat huomiot (katkoviiva).
  * officialState 'unknown' tai varoitustiedon ikä yli 90 min: rauhallinen siru, jossa tiedon ikä ja linkki Ilmatieteen laitokselle.
  */
-function alertsHtml({ alerts = [], official = [], officialState = 'ok', checkedAt = 0, nowMs = 0 }) {
+function alertsHtml({ alerts = [], official = [], officialState = 'ok', checkedAt = 0, nowMs = 0, tz = 'Europe/Helsinki' }) {
   const off = official.slice(0, 3);
   const dup = (a) => off.some((o) => OWN_COVERED_BY[a.key]?.test(o.title || ''));
   const old = checkedAt && nowMs && nowMs - checkedAt > 90 * 60000;
@@ -7227,17 +7997,55 @@ function alertsHtml({ alerts = [], official = [], officialState = 'ok', checkedA
     rows.push(`<details class="alert own"><summary><i class="sev-dot" aria-hidden="true"></i><span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')} · SääÄlyn huomio</small></span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="${FMI_WARN}" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`);
   }
   if (unknown) {
-    const d = checkedAt ? new Date(checkedAt) : null;
-    const t = d ? `${d.toDateString() === new Date(nowMs || Date.now()).toDateString() ? '' : `${d.getDate()}.${d.getMonth() + 1}. `}klo ${d.getHours()}.${String(d.getMinutes()).padStart(2, '0')}` : '';
+    // Kellonaika paikan aikavyöhykkeessä (ei laitteen): sama kuin muualla sovelluksessa
+    const d = checkedAt ? localNow(checkedAt, tz) : null;
+    const t = d ? `${d.date === localNow(nowMs || Date.now(), tz).date ? '' : `${fmtDM(d.date)} `}klo ${d.hour}.${String(d.minute).padStart(2, '0')}` : '';
     const txt = d ? `Varoitustieto ${t}` : 'Varoituksia ei voitu tarkistaa';
     rows.push(`<a class="alert-chip" href="${FMI_WARN}" target="_blank" rel="noopener"><i aria-hidden="true"></i>${esc(txt)} · tarkista Ilmatieteen laitokselta</a>`);
   }
-  return `<div class="alert-list" role="region" aria-label="Varoitukset ja huomiot">${rows.join('')}</div>`;
+  return `<div class="alert-list">${rows.join('')}</div>`;
 }
 
-/** Etusivun otsikko: kaksi riviä (toiminto + aika) ja pieni lisärivi. Ei laatikoita eikä painikkeita. */
-function verdictHtml({ hl }) {
-  return `<p class="vsay"><b>${esc(hl.l1)}</b><span>${esc(hl.l2)}</span></p>${hl.small ? `<p class="vsmall">${esc(hl.small)}</p>` : ''}`;
+/** Etusivun otsikko: kaksi riviä (toiminto + aika) ja pieni lisärivi. Ei laatikoita eikä painikkeita. air: airHighlights()-rivi. */
+function verdictHtml({ hl, air = [] }) {
+  return `<h2 class="vsay"><b>${esc(hl.l1)}</b> <span>${esc(hl.l2)}</span></h2>${hl.small ? `<p class="vsmall">${esc(hl.small)}</p>` : ''}${airPillsHtml(air, 'vair')}`;
+}
+
+// ---------- Ilma: siitepöly, ilmanlaatu ja UV ----------
+
+const AIR_GLYPH = { pollen: GLYPH.pollen, aqi: GLYPH.air, uv: GLYPH.uv };
+
+/** Pienet ilmapillerit (Koti ja Tunnit). items: [{ kind, text, level 0–3, sr }]. Väripiste kertoo tason, teksti sanoo sen. */
+function airPillsHtml(items, cls = 'air-row') {
+  if (!items?.length) return '';
+  const pills = items.map((x) => `<span class="ap lv${Math.max(0, Math.min(3, x.level))}">${AIR_GLYPH[x.kind] || ''}<b>${esc(x.text)}</b></span>`).join('');
+  return `<p class="${cls}" role="note" aria-label="${esc(`Ilma: ${items.map((x) => x.sr || x.text).join(', ')}`)}">${pills}</p>`;
+}
+
+/** Tunnin ilmapillerit: ilmanlaatu, UV (päivällä) ja siitepöly lajeittain (vähäisestä alkaen). Neuvo, kun UV on vähintään 3 tai ilma huono. */
+function hourAirHtml(fc, i, air) {
+  const a = hourAir(fc, air, i);
+  if (!a) return '';
+  const items = [];
+  if (a.aqiInfo) items.push({ kind: 'aqi', text: `Ilmanlaatu ${a.aqiInfo.word}`, level: a.aqiInfo.level >= 5 ? 3 : a.aqiInfo.level >= 4 ? 2 : a.aqiInfo.level === 3 ? 1 : 0, sr: `Ilmanlaatu ${a.aqiInfo.word}${a.dom && a.aqiInfo.level >= 3 ? `, eniten ${a.dom.name}` : ''}` });
+  if (a.uvInfo && (fc.hours[i].isDay || a.uvInfo.level >= 1)) items.push({ kind: 'uv', text: `UV ${a.uvInfo.value} · ${a.uvInfo.word}`, level: Math.min(3, a.uvInfo.level), sr: `UV-indeksi ${a.uvInfo.value}, ${a.uvInfo.word}` });
+  for (const p of a.pollen.filter((x) => x.level >= 1).sort((x, y) => y.level - x.level || y.v - x.v).slice(0, 3)) {
+    items.push({ kind: 'pollen', text: `${cap(p.name)} ${p.word}`, level: p.level >= 4 ? 3 : p.level - 1, sr: `${cap(p.gen)} siitepölyä ${grains(p.v)}, ${p.word}` });
+  }
+  const tips = [];
+  if (a.aqiInfo?.level >= 3 && a.aqiInfo.advice) tips.push(a.aqiInfo.advice);
+  if (a.uvInfo?.level >= 1) tips.push(a.uvInfo.advice);
+  return `${airPillsHtml(items)}${tips.length ? `<p class="air-tip">${esc(tips.join(' '))}</p>` : ''}`;
+}
+
+/** Päivän ilma lyhyesti Viikko-sivun tuntinauhan yhteenvetoon: vain kun sillä on merkitystä. */
+function dayAirBits(fc, air, day) {
+  const sum = airWindow(fc, air, day.from, day.to);
+  const bits = [];
+  for (const p of sum.pollen.filter((x) => x.level >= 2).slice(0, 2)) bits.push(`${p.name} ${p.word}`);
+  if (sum.aqi?.info.level >= 4) bits.push(`ilmanlaatu ${sum.aqi.info.word}`);
+  if (sum.uv?.info.level >= 1) bits.push(`UV enintään ${sum.uv.info.value}`);
+  return bits;
 }
 
 // ---------- Tuntirata ----------
@@ -7274,10 +8082,11 @@ function trackHtml({ fc, nowMs, sel, day = 'today' }) {
     const h = fc.hours[start + k];
     if (!h) return;
     const pressed = sel.type === 'hour' && sel.iso === h.t;
-    const name = `${weekday(h.t.slice(0, 10))} klo ${hr(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}`;
+    // Ruudunlukijan nimi alkaa näkyvällä tekstillä (WCAG 2.5.3), lisätieto piilotekstinä perässä.
+    const extra = `, ${weekday(h.t.slice(0, 10))}, ${SYMBOLS[h.sym]}`;
     out.push(`<i class="td" style="left:${pct(pt.d[0], 412)};top:${pct(pt.d[1], 750)}"></i>`);
     out.push(
-      `<button class="th" type="button" style="left:${pct(pt.c[0], 412)};top:${pct(pt.c[1], 750)}" data-act="hour" data-iso="${esc(h.t)}" aria-pressed="${pressed}" aria-label="${esc(name)}"><span class="th-ic">${icon3d(h.sym, h.isDay, 0)}</span><b>${esc(fmtTemp(h.temp))}</b><span>klo ${hh(h.t)}</span></button>`,
+      `<button class="th" type="button" style="left:${pct(pt.c[0], 412)};top:${pct(pt.c[1], 750)}" data-act="hour" data-iso="${esc(h.t)}" aria-pressed="${pressed}"><span class="th-ic">${icon3d(h.sym, h.isDay, 0)}</span><b>${esc(fmtTemp(h.temp))}</b> <span>klo ${hh(h.t)}</span><span class="sr-only">${esc(extra)}</span></button>`,
     );
   });
   return `<div class="trk-img" aria-hidden="true"></div>${out.join('')}`;
@@ -7347,7 +8156,7 @@ function meteoHtml({ fc, nowMs, range = '24h', inspectIso = null, width = 360, c
 // ---------- Tunnit ----------
 
 /** Tunnin lisätiedot riville avattuna: tuntuu kuin, tuuli, sade, pilvisyys ja mallien ero. */
-function hourDetailsHtml(fc, i, { now = false, nowMs, fetchedAt = 0, loading = false, obs = null } = {}) {
+function hourDetailsHtml(fc, i, { now = false, nowMs, fetchedAt = 0, loading = false, obs = null, air = null } = {}) {
   const h = fc.hours[i];
   const gust = h.gust - h.wind >= 3 ? `, puuskat ${fmtNum(h.gust)} m/s` : '';
   const rain = h.precip >= 0.05 ? `Sade ${fmtMm(h.precip)} tunnissa · ${popText(h)}` : h.pop >= 0.15 ? `Ei sadetta todennäköisesti · ${popText(h)}` : 'Ei sadetta';
@@ -7360,7 +8169,7 @@ function hourDetailsHtml(fc, i, { now = false, nowMs, fetchedAt = 0, loading = f
     <li>Pilvisyys ${Math.round(h.cloud ?? 0)} %${esc(spread)}</li>
     ${now && obs ? `<li>Mitattu ${esc(fmtTemp(obs.value, { digits: 1 }))} · ${esc(obs.name || 'lähin asema')}</li>` : ''}
     ${now ? nowExtrasHtml({ fc, nowMs, fetchedAt, loading }) : ''}
-  </ul><button class="pill sm" type="button" data-act="ask-open" data-q="${esc(q)}">${SVG.spark}Kysy tästä tunnista</button></div>`;
+  </ul>${hourAirHtml(fc, i, air)}<button class="pill sm" type="button" data-act="ask-open" data-q="${esc(q)}">${SVG.spark}Kysy tästä tunnista</button></div>`;
 }
 
 /** Tutkan kahden tunnin sadekäyrä, kun sade on lähellä. raw: nowcast.js:n jäsentämä { steps:[{t, rate}] }. */
@@ -7375,15 +8184,16 @@ function radarHtml({ raw, nc, nowMs, tz }) {
   const clock = (ms) => new Date(ms).toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit', timeZone: tz }).replace(':', '.');
   // Otsikko kertoo jo ajoituksen: kuvateksti kertoo voimakkuuden. Ruudunlukija saa koko lauseen.
   const cap2 = nc.word ? `Tutka: ${nc.word} sadetta ${nc.state === 'wet' ? 'nyt' : 'tulossa'}` : 'Tutka: sadetta lähellä';
-  return `<div class="radar" role="img" aria-label="${esc(`Tutka: ${nc.line || ''}`)}"><p class="radar-t">${GLYPH.radar}<span>${esc(cap2)}</span><button class="radar-map" type="button" data-act="open-map" data-tab="radar">Kartta</button></p>
-    <div class="radar-bars">${bars}</div><div class="radar-ax"><span>nyt</span><span>${esc(clock(nowMs + 60 * 60000))}</span><span>${esc(clock(nowMs + 120 * 60000))}</span></div></div>`;
+  // Kuvaaja on ruudunlukijalle yksi lause; Kartta-painike pysyy erillisenä (ei vuorovaikutteista elementtiä role="img":n sisällä).
+  return `<div class="radar"><p class="radar-t">${GLYPH.radar}<span aria-hidden="true">${esc(cap2)}</span><span class="sr-only">${esc(`Tutka: ${nc.line || ''}`)}</span><button class="radar-map" type="button" data-act="open-map" data-tab="radar">Kartta</button></p>
+    <div class="radar-bars" aria-hidden="true">${bars}</div><div class="radar-ax" aria-hidden="true"><span>nyt</span><span>${esc(clock(nowMs + 60 * 60000))}</span><span>${esc(clock(nowMs + 120 * 60000))}</span></div></div>`;
 }
 
 /**
  * Tunnit-sivu: otsikko, Lista/Kaavio-valinta ja tuntilista kromipunoksen vieressä. Rivin napautus avaa lisätiedot paikallaan.
  * day 'tomorrow': huomisen tunnit klo 6–23. more: 48 tuntia 13 sijaan.
  */
-function hoursPageHtml({ fc, nowMs, day = 'today', open = null, more = false, view = 'list', radar = '', fetchedAt = 0, loading = false, obs = null, nowcast = null }) {
+function hoursPageHtml({ fc, nowMs, day = 'today', open = null, more = false, view = 'list', radar = '', fetchedAt = 0, loading = false, obs = null, nowcast = null, air = null }) {
   const { idx, local } = nowPosition(fc, nowMs);
   let hs;
   let kick;
@@ -7420,15 +8230,16 @@ function hoursPageHtml({ fc, nowMs, day = 'today', open = null, more = false, vi
     const now = isNow(i);
     const pc = popPctRow(h);
     const expanded = open === h.t;
-    const name = `${now ? 'Nyt' : `${weekday(date)} klo ${hr(h.t)}`}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}${dry ? '' : `, sateen todennäköisyys ${pc} %`}`;
-    block.push(`<div class="hv-item"><button class="hv${now ? ' now' : ''}" type="button" data-act="hrow" data-iso="${esc(h.t)}" aria-expanded="${expanded}" aria-controls="hm-${esc(h.t)}" aria-label="${esc(name)}">
-      <span class="hv-t"><i></i>${now ? 'nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 0)}<span class="hv-temp">${esc(fmtTemp(h.temp))}</span>${dry ? '' : `<span class="hv-bar" aria-hidden="true"><b style="width:${pc}%"></b></span><span class="hv-pc">${pc} %</span>`}</button>
-      ${expanded ? hourDetailsHtml(fc, i, { now, nowMs, fetchedAt, loading, obs }) : ''}</div>`);
+    // Nimi = näkyvä teksti + piiloteksti (WCAG 2.5.3: näkyvä teksti sisältyy nimeen).
+    const sr = (t) => `<span class="sr-only">${esc(t)}</span>`;
+    block.push(`<div class="hv-item"><button class="hv${now ? ' now' : ''}" type="button" data-act="hrow" data-iso="${esc(h.t)}" aria-expanded="${expanded}" aria-controls="hm-${esc(h.t)}">
+      <span class="hv-t"><i></i>${now ? 'nyt' : hh(h.t)}${sr(now ? ', ' : ` ${weekday(date)}, `)}</span>${icon3d(h.sym, h.isDay, 0)}${sr(`${SYMBOLS[h.sym]}, `)}<span class="hv-temp">${esc(fmtTemp(h.temp))}</span>${dry ? '' : `<span class="hv-bar" aria-hidden="true"><b style="width:${pc}%"></b></span>${sr(', sateen todennäköisyys')} <span class="hv-pc">${pc} %</span>`}</button>
+      ${expanded ? hourDetailsHtml(fc, i, { now, nowMs, fetchedAt, loading, obs, air }) : ''}</div>`);
   });
   flush();
   const moreBtn = day === 'tomorrow' ? '' : `<button class="more-btn" type="button" data-act="hours-more" aria-expanded="${more}">${more ? 'Näytä vähemmän' : 'Näytä 48 tuntia'}</button>`;
   const seg = `<div class="modebar hv-seg" role="group" aria-label="Näkymä"><button class="seg" type="button" data-act="hours-view" data-view="list" aria-pressed="${view !== 'chart'}">Lista</button><button class="seg" type="button" data-act="hours-view" data-view="chart" aria-pressed="${view === 'chart'}">Kaavio</button></div>`;
-  return `<p class="kick">${esc(kick)}</p><h2 class="hl"><b>${esc(l1)}</b><span>${esc(l2)}</span></h2>${seg}${radar}
+  return `<p class="kick">${esc(kick)}</p><h2 class="hl"><b>${esc(l1)}</b> <span>${esc(l2)}</span></h2>${seg}${radar}
     ${view === 'chart' ? '<p class="hint">Liu\'uta sormea kaaviossa, niin näet tunnin tiedot.</p>' : `${dry ? '' : '<p class="hv-cap" aria-hidden="true">sateen todennäköisyys</p>'}<div class="hvs${dry ? ' dry' : ''}" id="strip">${rows.join('')}</div>${moreBtn}`}`;
 }
 
@@ -7441,23 +8252,23 @@ function popPctRow(h) {
 // ---------- Viikko ----------
 
 /** Päivän tunnit vaakasuuntaisena nauhana päivän rivin alla. */
-function dayHoursHtml({ fc, nowMs, day }) {
+function dayHoursHtml({ fc, nowMs, day, air = null }) {
   const { idx, local } = nowPosition(fc, nowMs);
   const hours = fc.hours.filter((h, i) => h.t.slice(0, 10) === day.date && (day.date !== local.date || i >= idx));
   if (!hours.length) return '';
   const wind = Math.max(...hours.map((h) => h.wind || 0));
-  const bits = [`ylin ${fmtTemp(day.tmax)}, alin ${fmtTemp(day.tmin)}`, day.precip >= 0.1 ? `sadetta ${fmtMm(day.precip)}` : 'ei merkittävää sadetta', `tuulta enintään ${fmtNum(wind)} m/s`];
+  const bits = [`ylin ${fmtTemp(day.tmax)}, alin ${fmtTemp(day.tmin)}`, day.precip >= 0.1 ? `sadetta ${fmtMm(day.precip)}` : 'ei merkittävää sadetta', `tuulta enintään ${fmtNum(wind)} m/s`, ...dayAirBits(fc, air, day)];
   const cells = hours.map((h) => {
     const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
     return `<div class="hr" role="listitem" data-iso="${esc(h.t)}" aria-label="${esc(`klo ${hr(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}${p ? `, sadetta ${p} mm` : ''}`)}">
       <span class="hr-t">${hh(h.t)}</span>${icon3d(h.sym, h.isDay, 0)}<span class="hr-temp">${esc(fmtTemp(h.temp))}</span><span class="hr-p">${p ? esc(p) + ' mm' : ''}</span></div>`;
   });
   return `<div class="day-hours" id="dh-${esc(day.date)}" role="region" aria-label="${esc(`Tuntiennuste ${weekday(day.date)} ${fmtDM(day.date)}`)}">
-    <p class="dh-sum">${esc(bits.join(' · '))}</p><div class="dstrip" role="list" data-date="${esc(day.date)}">${cells.join('')}</div></div>`;
+    <p class="dh-sum">${esc(bits.join(' · '))}</p><div class="dstrip" role="list" tabindex="0" aria-label="Päivän tunnit" data-date="${esc(day.date)}">${cells.join('')}</div></div>`;
 }
 
 /** Viikko-sivu: otsikko, viikonloppu, ja päivät kromikapseleina yhteisellä lämpöasteikolla. Päivän napautus avaa sen tunnit. */
-function weekPageHtml({ fc, nowMs, open = null }) {
+function weekPageHtml({ fc, nowMs, open = null, air = null }) {
   const { idx, frac, local } = nowPosition(fc, nowMs);
   const today = local.date;
   const days = fc.days.slice(0, 7);
@@ -7476,16 +8287,17 @@ function weekPageHtml({ fc, nowMs, open = null }) {
     const slip = daySlippery(fc, d);
     const expanded = open === d.date;
     const dot = d.date === today ? `<i class="wd-now" style="left:${Math.max(0, Math.min(100, pos(nowT))).toFixed(1)}%" aria-hidden="true"></i>` : '';
-    const label = `${k === 0 ? 'Tänään' : weekday(d.date, true)} ${fmtDM(d.date)}, ${SYMBOLS[d.sym]}, alin ${fmtTemp(d.tmin)}, ylin ${fmtTemp(d.tmax)}${rain ? `, sade ${rain}` : ''}${slip ? ', liukasta' : ''}. ${expanded ? 'Piilota tunnit' : 'Näytä tunnit'}`;
-    return `<div class="wd-item"><button class="wd" type="button" data-act="day" data-date="${esc(d.date)}" aria-expanded="${expanded}" aria-controls="dh-${esc(d.date)}" aria-label="${esc(label)}">
-      <span class="wd-n"><b>${esc(name)}</b><small>${esc(sub)}</small></span>${icon3d(d.sym, true, 0)}
+    // Nimi = näkyvä päivä + piiloteksti (WCAG 2.5.3); avautumisen tila kerrotaan aria-expandedilla.
+    const label = `, ${SYMBOLS[d.sym]}, alin ${fmtTemp(d.tmin)}, ylin ${fmtTemp(d.tmax)}${rain ? `, sade ${rain}` : ''}${slip ? ', liukasta' : ''}`;
+    return `<div class="wd-item"><button class="wd" type="button" data-act="day" data-date="${esc(d.date)}" aria-expanded="${expanded}" aria-controls="dh-${esc(d.date)}">
+      <span class="wd-n"><b>${esc(name)}</b> <small>${esc(sub)}</small></span>${icon3d(d.sym, true, 0)}<span class="sr-only">${esc(label)}</span>
       <span class="wd-r" aria-hidden="true"><span class="wd-cap" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"><em class="lo">${esc(fmtTemp(d.tmin))}</em><em class="hi">${esc(fmtTemp(d.tmax))}</em></span>${dot}</span>
       <span class="wd-x" aria-hidden="true">${rain ? `<span>${esc(rain)}</span>` : ''}${slip ? '<span class="slip">liukasta</span>' : ''}</span></button>
-      ${expanded ? dayHoursHtml({ fc, nowMs, day: d }) : ''}</div>`;
+      ${expanded ? dayHoursHtml({ fc, nowMs, day: d, air }) : ''}</div>`;
   });
   const [w1, w2] = weekHeadline(days, today);
   const we = weekendLine(days, today);
-  return `<p class="kick">Seuraavat ${days.length} päivää</p><h2 class="hl"><b>${esc(w1)}</b><span>${esc(w2)}</span></h2>
+  return `<p class="kick">Seuraavat ${days.length} päivää</p><h2 class="hl"><b>${esc(w1)}</b> <span>${esc(w2)}</span></h2>
     ${we ? `<p class="wk-sub">${esc(we)}</p>` : ''}<p class="hint">Napauta päivää, niin näet sen tunnit.</p><div class="wds">${rows.join('')}</div>`;
 }
 
@@ -7540,7 +8352,7 @@ function certPageHtml({ fc, results, nowMs, obs = null }) {
     const verdict = Math.abs(diff) < 1 ? 'ennuste osuu' : Math.abs(diff) < 2.5 ? 'ennuste lähellä' : diff > 0 ? 'ennuste liian lämmin' : 'ennuste liian kylmä';
     obsCard = `<div class="glass cert-c obs"><b>Havainto · ${esc(verdict)}</b><span>${esc(`${obs.name || 'Lähin asema'}${Number.isFinite(obs.km) ? ` (${Math.round(obs.km)} km)` : ''} mittasi ${fmtTemp(obs.value, { digits: 1 })} klo ${at}. SääÄly: ${fmtTemp(s.temp, { digits: 1 })}, ero ${fmtNum(Math.abs(diff), 1)}°.`)}</span><small>Ilmatieteen laitoksen avoin data</small></div>`;
   }
-  return `<p class="kick">Varmuus</p><h2 class="hl"><b>${esc(ci.l1)}</b><span>${esc(ci.l2)}</span></h2>
+  return `<p class="kick">Varmuus</p><h2 class="hl"><b>${esc(ci.l1)}</b> <span>${esc(ci.l2)}</span></h2>
     <p class="cert-d">Jokainen helmi on yksi säämalli: vasemmalla kylmempi, oikealla lämpimämpi kuin SääÄlyn ennuste. Mitä tiiviimpi rypäs, sitä varmempi ennuste.</p>
     ${pearlsHtml(ci.today, 'Tänään')}${card(ci.today, 'Tänään')}
     ${obsCard}
@@ -7610,23 +8422,69 @@ function modeSwitchHtml({ mode, hasKey }) {
 
 // ---------- Sivupaneelit ----------
 
-function searchSheetHtml({ recent }) {
+/** Tähti (suosikki) tai talo (koti) paikkarivin perään. Tila kerrotaan aria-pressed-ominaisuudella; nimi pysyy samana. */
+function favToggle({ act, i, on, label, kind = 'star', extra = '' }) {
+  const svg = kind === 'home' ? SVG.home : SVG.star;
+  return `<button class="fav-ic ${kind}${on ? ' on' : ''}" type="button" data-act="${act}"${i != null ? ` data-i="${i}"` : ''} aria-pressed="${on}" aria-label="${esc(label)}"${extra}>${svg}</button>`;
+}
+
+/** Suosikin nykysää: 3D-kuvake ja lämpötila; ruudunlukijalle sanallinen sää. Ennen hakua näkyy vain viiva. */
+function favWxHtml(wx) {
+  if (!wx || !Number.isFinite(wx.temp)) return '<span class="fav-wx pending" aria-hidden="true">–</span>';
+  return `<span class="fav-wx">${icon3d(wx.sym, wx.isDay, 30)}<span class="fav-t">${esc(fmtTemp(wx.temp))}</span><span class="sr-only">, ${esc(SYMBOLS[wx.sym] || '')}</span></span>`;
+}
+
+/**
+ * Suosikkilista paikkapaneelissa: koti ensin. favs: [{ name, region, country, home }], wx: sama järjestys, { temp, sym, isDay } tai null.
+ * current: nykyisen paikan indeksi listalla (-1 = ei listalla).
+ */
+function favListHtml({ favs = [], wx = [], current = -1 } = {}) {
+  if (!favs.length) return '<p class="note fav-empty">Tallenna paikka tähdellä, niin se on tässä yhden napautuksen päässä.</p>';
+  return favs
+    .map((p, i) => {
+      const tag = p.home ? '<span class="fav-tag">Koti</span>' : i === current ? '<span class="fav-tag now">Nyt</span>' : '';
+      const sub = placeSubtitle(p);
+      return `<div class="fav-row${p.home ? ' home' : ''}"><button class="row-btn fav-pick" type="button" data-act="pick-fav" data-i="${i}"${i === current ? ' aria-current="true"' : ''}><span class="fav-txt"><b>${esc(p.name)}${tag}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>${favWxHtml(wx[i])}</button>${favToggle({ act: 'fav-home', i, on: Boolean(p.home), label: `Koti: ${p.name}`, kind: 'home' })}${favToggle({ act: 'fav-del', i, on: true, label: `Suosikki: ${p.name}` })}</div>`;
+    })
+    .join('');
+}
+
+/** Paikkapaneelin yläosa: nykyinen paikka ja sen tähti. */
+function favCurrentHtml({ place, on = false, full = false } = {}) {
+  if (!place?.name) return '';
+  const sub = placeSubtitle(place);
+  const hint = on ? 'Tallennettu suosikiksi' : full ? 'Suosikkeja on jo enimmäismäärä' : 'Tallenna suosikiksi';
+  return `<div class="fav-cur"><span class="fav-txt"><small>Nyt näytetään</small><b>${esc(place.name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span><span class="fav-hint" aria-hidden="true">${esc(hint)}</span>${favToggle({ act: 'fav-cur', on, label: `Suosikki: ${place.name}` })}</div>`;
+}
+
+/** isFav(p) kertoo, onko paikka jo suosikki (rivien tähdet). */
+function searchSheetHtml({ recent, favs = [], wx = [], current = -1, place = null, isFav = () => false, full = false }) {
   const rec = (recent || [])
-    .map((p, i) => `<button class="row-btn" type="button" data-act="pick-recent" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>`)
+    .map((p, i) => (isFav(p) ? '' : `<div class="fav-row"><button class="row-btn" type="button" data-act="pick-recent" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>${favToggle({ act: 'fav-recent', i, on: false, label: `Suosikki: ${p.name}` })}</div>`))
     .join('');
   return `
     <div class="sheet-head"><h2>Paikkakunta</h2><button class="icon-btn" type="button" data-act="close" aria-label="Sulje">${SVG.close}</button></div>
     <div class="sheet-scroll">
       <form class="search" data-form="search" role="search">${SVG.search}<input id="q" name="q" type="search" placeholder="Hae paikkakuntaa" autocomplete="off" autocapitalize="words" enterkeyhint="search" aria-label="Hae paikkakuntaa"></form>
-      <button class="row-btn locate" type="button" data-act="locate">${SVG.locate}<span><b>Käytä sijaintiani</b><small>Paikannus selaimen kautta</small></span></button>
       <div id="results" class="results" aria-live="polite"></div>
+      <div id="favCur">${favCurrentHtml({ place, on: current >= 0, full })}</div>
+      <h3 class="label" id="favLbl">Suosikit${favs.length ? ` <span class="fav-count">${favs.length}/${FAV_MAX}</span>` : ''}</h3>
+      <div id="favs" class="results favs" role="group" aria-labelledby="favLbl">${favListHtml({ favs, wx, current })}</div>
+      <p id="favNote" class="note fav-note" role="status"></p>
+      <button class="row-btn locate" type="button" data-act="locate">${SVG.locate}<span><b>Käytä sijaintiani</b><small>Paikannus selaimen kautta</small></span></button>
       ${rec ? `<div class="label">Viimeksi katsotut</div><div class="results">${rec}</div>` : ''}
     </div>`;
 }
 
-function resultsHtml(list, status) {
+/** Hakutulokset; isFav(p) näyttää rivin tähden tilan. */
+function resultsHtml(list, status, isFav = () => false) {
   if (status) return `<p class="note">${esc(status)}</p>`;
-  return list.map((p, i) => `<button class="row-btn" type="button" data-act="pick" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>`).join('');
+  return list
+    .map((p, i) => {
+      const on = isFav(p);
+      return `<div class="fav-row"><button class="row-btn" type="button" data-act="pick" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>${favToggle({ act: 'fav-found', i, on, label: `Suosikki: ${p.name}` })}</div>`;
+    })
+    .join('');
 }
 
 function settingsSheetHtml({ hasKey, mode = 'internal', model, refreshMin, models, demo, sens = 0, anim = true, advOpen = false }) {
@@ -7716,6 +8574,7 @@ function aboutSheetHtml({ version, demo, sources = [] }) {
         <p class="note">Nämä ovat valinnaisia: jos lähde ei vastaa tai ei kata paikkaasi, SääÄly toimii ilman sitä eikä näytä virhettä.</p>
         <ul class="plain">
           <li>Tutkaennuste (sade seuraavien kahden tunnin aikana, Pohjoismaat): <a href="https://api.met.no/weatherapi/nowcast/2.0/documentation" target="_blank" rel="noopener">MET Norway Nowcast</a>, CC BY 4.0.</li>
+          <li>Ilmanlaatu, siitepöly ja UV-indeksin varalähde: <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noopener">Open-Meteo Air Quality</a> (Copernicus CAMS, CC BY 4.0). Mallilaskelma, ei mittaus; siitepöly vain Euroopassa kasvukaudella.</li>
           <li>Viralliset säävaroitukset (Suomi): <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Ilmatieteen laitos</a>, CAP-syöte, CC BY 4.0. Koko maan syöte ladataan ja oma alueesi valitaan laitteella, joten sijaintiasi ei lähetetä.</li>
         </ul>
         ${sources.length ? `<ul class="plain src-status" aria-label="Lähteiden tila">${sources.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
@@ -7727,7 +8586,7 @@ function aboutSheetHtml({ version, demo, sources = [] }) {
       <section class="set">
         <h3>Mihin tietosi menevät</h3>
         <ul class="plain">
-          <li><b>Sijainti</b> (koordinaatit) lähtee Open-Meteolle ennusteen hakua varten, MET Norwayn tutkaennusteelle ja BigDataCloudille paikannimen hakua varten.</li>
+          <li><b>Sijainti</b> (koordinaatit) lähtee Open-Meteolle ennusteen ja ilmanlaadun hakua varten, MET Norwayn tutkaennusteelle ja BigDataCloudille paikannimen hakua varten.</li>
           <li><b>Hakusanat</b> lähtevät Open-Meteon paikkahakuun.</li>
           <li><b>Gemini</b> (valinnainen): jos lisäät avaimen, kysymyksesi ja sovelluksen säädata lähetetään Googlelle. Avain tallentuu vain tämän laitteen selaimeen.</li>
           <li>Ei mainoksia, ei analytiikkaa, ei seurantaa eikä omaa palvelinta. Paikka, asetukset ja välimuisti tallentuvat vain tämän laitteen selaimeen (Tiedot-kohdasta ne voi tyhjentää).</li>
@@ -7771,7 +8630,7 @@ function chatEmptyHtml({ mode = 'internal', intro = null }) {
   const note = mode === 'internal' ? 'Vastaan sovelluksen keräämän säädatan perusteella. Kysy esimerkiksi sateesta, tuulesta, pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.' : 'Gemini vastaa sovelluksen keräämän säädatan perusteella. Kysy esimerkiksi pukeutumisesta, ulkoilusta tai muun paikkakunnan säästä.';
   return `${first}<p class="note center">${note}</p>`;
 }
-return { SVG, GLYPH, agoText, STALE_MIN, selLabel, placeHtml, sunLine, heroHtml, alertsHtml, verdictHtml, TRACK_HOURS, trackHtml, selectionLines, nightSpans, meteoHtml, radarHtml, hoursPageHtml, weekPageHtml, certPageHtml, modelsHtml, MODE_INFO, modeNote, modeSwitchHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, welcomeHtml, aboutSheetHtml, CHAT_CHIPS, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml };
+return { SVG, GLYPH, agoText, STALE_MIN, staleText, selLabel, placeHtml, sunLine, heroHtml, alertsHtml, verdictHtml, airPillsHtml, TRACK_HOURS, trackHtml, selectionLines, nightSpans, meteoHtml, radarHtml, hoursPageHtml, weekPageHtml, certPageHtml, modelsHtml, MODE_INFO, modeNote, modeSwitchHtml, favListHtml, favCurrentHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, welcomeHtml, aboutSheetHtml, CHAT_CHIPS, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml };
 })();
 
 // ---- cube.js ----
@@ -8048,7 +8907,7 @@ function createCube(root, { onSettle = () => {}, onStart = () => {}, onTurn = ()
  * joten koko näyttö kääntyy yhtenä esineenä. Levossa kopiot poistetaan ja oikeat palaavat (ainoat vuorovaikutteiset).
  * app: alue, jonka kokoisia kyljet ovat; sky: taivaskangas; chrome(): kopioitavat elementit; dots: valitsin pisteille.
  */
-function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]' }) {
+function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]', skyVersion = null }) {
   const layers = faces.map((f) => {
     const cv = document.createElement('canvas');
     cv.className = 'face-sky';
@@ -8059,7 +8918,7 @@ function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]' }) {
     ch.inert = true;
     f.prepend(cv);
     f.append(ch);
-    return { cv, ch, ctx: cv.getContext('2d') };
+    return { cv, ch, ctx: cv.getContext('2d'), ver: -1 };
   });
   let src = null; // taivaskankaan alue, joka vastaa kylkeä (kangaspikseleinä)
 
@@ -8071,6 +8930,7 @@ function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]' }) {
     const k = sky && sky.clientWidth ? sky.width / sky.clientWidth : 1;
     src = sky ? { x: base.left * k, y: base.top * k, w: base.width * k, h: base.height * k } : null;
     layers.forEach((L, i) => {
+      L.ver = -1;
       L.ch.textContent = '';
       items.forEach((e, j) => {
         const c = e.cloneNode(true);
@@ -8094,8 +8954,12 @@ function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]' }) {
 
   function frame(shown) {
     if (!src) return;
+    // skyVersion: taivaan piirtokerta. Kopio vain, kun taivas on piirretty uudelleen (10–20 kertaa sekunnissa), ei jokaisella käännön kuvalla.
+    const v = skyVersion ? skyVersion() : NaN;
     for (const i of shown) {
       const L = layers[i];
+      if (L.ver === v) continue;
+      L.ver = v;
       try {
         L.ctx.drawImage(sky, src.x, src.y, src.w, src.h, 0, 0, L.cv.width, L.cv.height);
       } catch {
@@ -8897,6 +9761,10 @@ function createMapView(root, { getPlace, getTz = () => 'Europe/Helsinki', nowMs 
     if (!on) return;
     const tick = () => {
       if (!S.playing || !S.open) return;
+      if (globalThis.document?.hidden) {
+        S.timer = setTimeout(tick, 1000); // taustalla ei vaihdeta kehyksiä (ei piirtoa eikä tiilihakuja)
+        return;
+      }
       const n = steps();
       const next = current() + 1 >= n ? 0 : current() + 1;
       setStep(next);
@@ -8916,7 +9784,6 @@ function createMapView(root, { getPlace, getTz = () => 'Europe/Helsinki', nowMs 
   function chrome() {
     root.querySelectorAll('[data-mv="tab"]').forEach((b) => {
       const on = b.dataset.tab === S.tab;
-      b.setAttribute('aria-selected', on ? 'true' : 'false');
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
     legend.innerHTML =
@@ -9183,15 +10050,17 @@ const { fetchNowcast, summarizeNowcast, nowcastUrl } = __m['nowcast'];
 const { createGuard, runSource, memoryStorage, sourceLine } = __m['sources'];
 const { fetchWarnings, officialRows, inFinland, MIRROR_URL } = __m['warnings'];
 const { fetchObs } = __m['observations'];
+const { fetchAir, airUrl, airWindow, airHighlights, airAlerts, airUsable, AIR_TTL } = __m['airquality'];
 const { makeDemoFetch } = __m['demo'];
-const { agoText, selLabel, placeHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
-const { homeHeadline } = __m['headline'];
+const { agoText, staleText, selLabel, placeHtml, favListHtml, favCurrentHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } = __m['views'];
+const { homeHeadline, tomorrowWindow } = __m['headline'];
 const { createCube, createCubeChrome } = __m['cube'];
 const { createMapView } = __m['mapview'];
-const { FOREIGN_CITIES } = __m['gazetteer'];
+const { FOREIGN_CITIES, fold } = __m['gazetteer'];
+const { FAV_MAX, parseFavs, findFav, isFav, toggleFav, removeFav, toggleHome, fetchCurrent, parseWxCache, staleFavs, wxKey, samePlace } = __m['favorites'];
 
-const VERSION = '0.8.0';
-const BUILD = 'd1e98e054d'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
+const VERSION = '1.0.0';
+const BUILD = 'cf6a46e2b4'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
 const SCHEMA = 1; // tallennetun datan rakenne; kasvata, kun avaimia muutetaan epäyhteensopivasti
 
 // ---------- Ympäristö ----------
@@ -9267,6 +10136,7 @@ const state = {
   sheet: null,
   found: [],
   recent: store.array('recent').filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon)),
+  favs: DEMO ? [] : parseFavs(store.get('favs', [])), // suosikkipaikat (favorites.js), koti ensin; esimerkkitilassa vain muistissa
   chat: [],
   chatBusy: false,
   chatLast: null, // vastausmoottorin muisti: edellisen kysymyksen paikka, aihe ja ajankohta ("Entä huomenna?")
@@ -9281,7 +10151,14 @@ const state = {
   warn: { raw: null, at: 0 }, // koko maan CAP-varoitukset (warnings.js); oma alue valitaan piirrettäessä
   official: [], // viralliset varoitukset (warnings.js), jos saatavilla
   obs: { raw: null, key: '', at: 0 }, // lähimmän sääaseman havainto (observations.js), jos saatavilla
+  air: restoreAir(), // ilmanlaatu, siitepöly ja UV (airquality.js), jos saatavilla: { raw, key, at }
 };
+
+/** Edellinen ilmanlaatuhaku laitteen muistista, jottei jokainen avaus hae uudelleen (haku tunnin välein riittää). */
+function restoreAir() {
+  const a = DEMO ? null : store.object('air');
+  return a && typeof a.key === 'string' && Number.isFinite(a.at) && (a.raw === null || Array.isArray(a.raw?.t)) ? a : { raw: null, key: '', at: 0 };
+}
 
 // Gemini on käytettävissä vain, kun avain on tallennettu (esimerkkitilassa ei koskaan). Ilman sitä vastataan sovelluksen omalla laskennalla.
 const keyOn = () => !DEMO && Boolean(aiSettings.key());
@@ -9330,7 +10207,7 @@ function renderHeader() {
   if (last.header !== html) {
     last.header = html;
     el.place.innerHTML = html;
-    el.place.setAttribute('aria-label', state.place?.name ? `Vaihda paikkakuntaa. Nyt: ${state.place.name}` : 'Vaihda paikkakuntaa');
+    el.place.removeAttribute('aria-label'); // nimi tulee näkyvästä tekstistä ja piilotekstistä (placeHtml, WCAG 2.5.3)
   }
   $('#refreshBtn')?.classList.toggle('spin', state.loading && (state.manualLoad || !state.fc));
 }
@@ -9365,8 +10242,22 @@ function renderAdvice(fc, now) {
   }
   document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.day === state.vday)));
   el.verdict.hidden = !hl;
-  patch('verdict', el.verdict, hl ? verdictHtml({ hl }) : '');
-  const html = alertsHtml({ alerts: v?.alerts || [], official: state.official, officialState: officialState(now), checkedAt: state.warn.fetchedAt || 0, nowMs: now });
+  const air = currentAir(now);
+  let airHl = [];
+  let airAl = [];
+  try {
+    airHl = airHighlights(airWindow(fc, air, ...homeAirSpan(fc, now)));
+    const { idx } = nowPosition(fc, now);
+    airAl = airAlerts(fc, air, idx, idx + 23);
+    // Sama asia ei näy kahdesti: huomio kertoo huonon ilman ja erittäin runsaan siitepölyn, pilleri jää pois
+    airHl = airHl.filter((x) => !(x.kind === 'aqi' && airAl.some((a) => a.key === 'aqi')) && !(x.kind === 'pollen' && x.level >= 3 && airAl.some((a) => a.key === 'pollen')));
+  } catch {
+    /* ilma on lisä eikä saa kaataa etusivua */
+  }
+  patch('verdict', el.verdict, hl ? verdictHtml({ hl, air: airHl }) : '');
+  // Omat huomiot: säähuomiot ensin samalla tasolla, ilma niiden jälkeen
+  const own = [...(v?.alerts || []), ...airAl].sort((a, b) => b.level - a.level);
+  const html = alertsHtml({ alerts: own, official: state.official, officialState: officialState(now), checkedAt: state.warn.fetchedAt || 0, nowMs: now, tz: fc.tz });
   el.alerts.hidden = !html;
   if (patch('alerts', el.alerts, html)) sizeStage();
 }
@@ -9397,7 +10288,7 @@ function sizeStage() {
 
 const NC_TTL = 5 * 60000; // tutkaennuste päivittyy viiden minuutin välein
 const NC_TTL_NOCOV = 60 * 60000; // kattavuuden ulkopuolella kysytään harvoin
-let ncBusy = false;
+let ncBusy = ''; // paikka, jolle tutkaennustetta haetaan parhaillaan (toisen paikan haku ei estä uuden paikan hakua)
 const ncKey = (p) => (p && Number.isFinite(p.lat) && Number.isFinite(p.lon) ? `${p.lat.toFixed(2)},${p.lon.toFixed(2)}` : '');
 
 /** Tutkaennusteen tulkinta hetkelle now; null, jos ei saatavilla, vanhentunut tai haettu toiselle paikalle. */
@@ -9412,16 +10303,16 @@ function currentNowcast(now) {
 async function refreshNowcast({ ignoreAge = false } = {}) {
   const p = state.place;
   const key = ncKey(p);
-  if (!key || ncBusy) return;
+  if (!key || ncBusy === key) return;
   const now = nowMs();
   const nc = state.nc;
   if (!ignoreAge && nc.key === key && now - nc.at < nc.ttl) return;
-  ncBusy = true;
+  ncBusy = key;
   try {
     const r = await runSource(sources, 'nowcast', () => fetchNowcast(p.lat, p.lon, { fetchFn }), { now });
     if (ncKey(state.place) === key && 'value' in r) state.nc = { raw: r.value, key, at: now, ttl: r.value ? NC_TTL : NC_TTL_NOCOV }; // value null = tutka ei kata paikkaa
   } finally {
-    ncBusy = false;
+    if (ncBusy === key) ncBusy = '';
   }
   if (state.fc) {
     renderAdvice(state.fc, nowMs());
@@ -9430,7 +10321,7 @@ async function refreshNowcast({ ignoreAge = false } = {}) {
 }
 
 const OBS_TTL = 10 * 60000; // asemat mittaavat kymmenen minuutin välein
-let obsBusy = false;
+let obsBusy = ''; // paikka, jonka havaintoa haetaan parhaillaan
 
 /** Lähimmän aseman havainto, jos se on haettu tälle paikalle eikä ole vanha. */
 function currentObs(now) {
@@ -9443,19 +10334,61 @@ function currentObs(now) {
 async function refreshObs({ ignoreAge = false } = {}) {
   const p = state.place;
   const key = ncKey(p);
-  if (!key || obsBusy || !inFinland(p.lat, p.lon)) return;
+  if (!key || obsBusy === key || !inFinland(p.lat, p.lon)) return;
   const now = nowMs();
   if (!ignoreAge && state.obs.key === key && now - state.obs.at < OBS_TTL) return;
-  obsBusy = true;
+  obsBusy = key;
   try {
     const r = await runSource(sources, 'obs', () => fetchObs(p.lat, p.lon, { fetchFn, now }), { now });
     if (ncKey(state.place) === key && 'value' in r) state.obs = { raw: r.value, key, at: now };
   } finally {
-    obsBusy = false;
+    if (obsBusy === key) obsBusy = '';
   }
   if (state.fc) {
     renderHours();
     patch('certainty', el.certainty, certPageHtml({ fc: state.fc, results: state.results, nowMs: nowMs(), obs: currentObs(nowMs()) }));
+  }
+}
+
+let airBusy = false;
+
+/** Ilmanlaatu tälle paikalle, jos se on haettu eikä ole liian vanha; null muuten (myös kun lähde ei kata paikkaa). */
+function currentAir(now) {
+  return airUsable(state.air, ncKey(state.place), now) ? state.air.raw : null;
+}
+
+/** Etusivun ilmarivin aikaväli: tänään loppupäivä (vähintään 6 tuntia), huomenna klo 7–21. */
+function homeAirSpan(fc, now) {
+  const { idx, local } = nowPosition(fc, now);
+  if (state.vday === 'tomorrow') {
+    const w = tomorrowWindow(fc, now);
+    if (w) return [w.from, w.to];
+  }
+  const end = fc.hours.findIndex((h) => h.t === `${local.date}T23:00`);
+  return [idx, Math.max(idx + 5, end)];
+}
+
+/** Hakee ilmanlaadun, siitepölyn ja UV:n (Open-Meteo, CAMS). Hiljainen lisälähde kuten tutkaennuste: virhe ei näy käyttäjälle. */
+async function refreshAir({ ignoreAge = false } = {}) {
+  const p = state.place;
+  const key = ncKey(p);
+  if (!key || airBusy) return;
+  const now = nowMs();
+  if (!ignoreAge && state.air.key === key && now - state.air.at < AIR_TTL) return;
+  airBusy = true;
+  try {
+    const r = await runSource(sources, 'air', () => fetchAir(p.lat, p.lon, { fetchFn }), { now });
+    if (ncKey(state.place) === key && 'value' in r) {
+      state.air = { raw: r.value, key, at: now }; // value null = ei kattavuutta tälle paikalle
+      if (!DEMO) store.set('air', state.air);
+    }
+  } finally {
+    airBusy = false;
+  }
+  if (state.fc) {
+    renderAdvice(state.fc, nowMs());
+    renderHours();
+    renderWeek();
   }
 }
 
@@ -9640,7 +10573,7 @@ function renderHours(now = nowMs()) {
   const chart = state.hoursView === 'chart';
   const raw = state.nc.key === ncKey(state.place) ? state.nc.raw : null;
   const radar = state.vday === 'today' ? radarHtml({ raw, nc: state.nowcast, nowMs: now, tz: fc.tz }) : '';
-  patch('hourly', el.hourly, hoursPageHtml({ fc, nowMs: now, day: state.vday, open: state.hourOpen, more: state.hoursMore, view: state.hoursView, radar, fetchedAt: state.fetchedAt, loading: state.loading && state.manualLoad, obs: currentObs(now), nowcast: state.vday === 'today' ? state.nowcast : null }));
+  patch('hourly', el.hourly, hoursPageHtml({ fc, nowMs: now, day: state.vday, open: state.hourOpen, more: state.hoursMore, view: state.hoursView, radar, fetchedAt: state.fetchedAt, loading: state.loading && state.manualLoad, obs: currentObs(now), nowcast: state.vday === 'today' ? state.nowcast : null, air: currentAir(now) }));
   el.meteo.hidden = !chart;
   if (chart) renderMeteo(now);
 }
@@ -9651,7 +10584,7 @@ function renderWeek(now = nowMs()) {
   if (!fc) return;
   if (state.dayOpen && !fc.days.slice(0, 7).some((d) => d.date === state.dayOpen)) state.dayOpen = null;
   const dayLeft = $('.dstrip', el.daily)?.scrollLeft || 0;
-  if (patch('daily', el.daily, weekPageHtml({ fc, nowMs: now, open: state.dayOpen }))) {
+  if (patch('daily', el.daily, weekPageHtml({ fc, nowMs: now, open: state.dayOpen, air: currentAir(now) }))) {
     const ds = $('.dstrip', el.daily);
     if (ds) {
       if (dayLeft && ds.dataset.date === state.dayScrolled) ds.scrollLeft = dayLeft;
@@ -9751,6 +10684,13 @@ async function updateApp() {
   location.reload();
 }
 
+/** Tallennettu ennuste näkyy, mutta uutta ei saatu: kerrotaan, milloin näkyvä ennuste on haettu ja onko verkko poissa. */
+function staleBanner() {
+  if (!state.fc || !state.fetchedAt) return;
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  setBanner({ id: 'stale', kind: 'warn', text: staleText({ fetchedAt: state.fetchedAt, nowMs: nowMs(), offline }), action: { act: 'refresh', label: 'Yritä uudelleen' } });
+}
+
 function setBanner(b) {
   state.banner = b;
   if (!b) {
@@ -9840,7 +10780,8 @@ function restoreCache() {
   if (DEMO) return false;
   const c = store.object('cache');
   if (!c || c.v !== CACHE_V || !Array.isArray(c.results) || c.placeKey !== placeKey(state.place)) return false;
-  if (nowMs() - c.fetchedAt > CACHE_MAX_AGE) return false;
+  // Rikkinäinen aikaleima (NaN) ohittaisi ikätarkistuksen ja estäisi myöhemmin ajastetun päivityksen (tick vertaa fetchedAt-arvoon)
+  if (!Number.isFinite(c.fetchedAt) || nowMs() - c.fetchedAt > CACHE_MAX_AGE) return false;
   try {
     const results = c.results.map((r) => ({ ...r, model: MODELS.find((m) => m.key === r.key) })).filter((r) => r.model);
     state.fc = blendForecast(results, { nowMs: nowMs() });
@@ -9860,6 +10801,153 @@ function rememberRecent(p) {
   store.set('recent', state.recent);
 }
 
+// ---------- Suosikit ----------
+
+let favWx = DEMO ? {} : parseWxCache(store.get('favWx', null)); // suosikkien nykysää: wxKey -> { temp, sym, isDay, at }
+let favBusy = false;
+let favAgain = false;
+let favFailAt = 0;
+const FAV_WX_SHOW = 3 * 3600000; // vanhempaa nykysäätä ei näytetä lainkaan
+const FAV_RETRY = 2 * 60000; // epäonnistuneen haun jälkeen ei yritetä heti uudelleen
+
+function persistFavs() {
+  if (!DEMO) store.set('favs', state.favs);
+}
+
+/** Suosikin nykysää. Nykyiselle paikalle käytetään yhdistelmäennustetta, jotta luku on sama kuin etusivulla. */
+function favWxFor(p, now = nowMs()) {
+  if (state.fc && samePlace(p, state.place)) {
+    try {
+      const { idx, frac } = nowPosition(state.fc, now);
+      const s = snapshot(state.fc, idx, frac);
+      return { temp: s.temp, sym: s.sym, isDay: s.isDay };
+    } catch {
+      /* ennusteen ulkopuolella: käytetään haettua */
+    }
+  }
+  const c = favWx[wxKey(p)];
+  return c && now - c.at < FAV_WX_SHOW && c.at <= now + 60000 ? c : null;
+}
+
+/**
+ * Hakee vanhentuneiden suosikkien nykysään yhdellä pyynnöllä (Open-Meteo, pilkuin erotellut koordinaatit). Hiljainen lisä:
+ * ei virheilmoitusta eikä vaikutusta pääennusteen hakuun. Haetaan vain, kun paikkapaneeli avataan tai suosikki lisätään.
+ */
+async function refreshFavWx() {
+  const now = nowMs();
+  if (favBusy) {
+    favAgain = true; // esim. kaksi tähteä nopeasti peräkkäin: jälkimmäinen haetaan heti edellisen perään
+    return;
+  }
+  if (now - favFailAt < FAV_RETRY) return;
+  const need = staleFavs(
+    state.favs.filter((p) => !(state.fc && samePlace(p, state.place))),
+    favWx,
+    now,
+  );
+  if (!need.length) return;
+  favBusy = true;
+  favAgain = false;
+  try {
+    const got = await fetchCurrent(need, { fetchFn });
+    need.forEach((p, i) => {
+      if (got[i]) favWx[wxKey(p)] = { ...got[i], at: now };
+    });
+    // Vain listalla olevat paikat säilytetään (poistettu suosikki voi poistua kesken haun)
+    const keep = new Set(state.favs.map(wxKey));
+    favWx = Object.fromEntries(Object.entries(favWx).filter(([k]) => keep.has(k)));
+    if (!DEMO) store.set('favWx', favWx);
+  } catch {
+    favFailAt = nowMs();
+    return;
+  } finally {
+    favBusy = false;
+  }
+  if (state.sheet === 'search') renderFavs();
+  if (favAgain) void refreshFavWx();
+}
+
+const favCheck = (p) => isFav(state.favs, p);
+
+/** Paikkapaneelin suosikkiosat (nykyinen paikka, lista, laskuri) uudelleen; hakukenttä säilyy. Palauttaa fokusoidun painikkeen, jos se löytyi. */
+function renderFavs() {
+  if (state.sheet !== 'search') return null;
+  const a = document.activeElement;
+  const sel = a && el.panel.contains(a) ? focusSelector(a) : null;
+  const cur = findFav(state.favs, state.place);
+  const box = $('#favs', el.panel);
+  if (box) box.innerHTML = favListHtml({ favs: state.favs, wx: state.favs.map((p) => favWxFor(p)), current: cur });
+  const top = $('#favCur', el.panel);
+  if (top) top.innerHTML = favCurrentHtml({ place: state.place, on: cur >= 0, full: state.favs.length >= FAV_MAX });
+  const lbl = $('#favLbl', el.panel);
+  if (lbl) lbl.innerHTML = `Suosikit${state.favs.length ? ` <span class="fav-count">${state.favs.length}/${FAV_MAX}</span>` : ''}`;
+  const out = $('#results', el.panel);
+  if (out && state.found.length && out.querySelector('.fav-row')) out.innerHTML = resultsHtml(state.found, '', favCheck);
+  // Viimeksi katsotut: suosikiksi tallennettu rivi siirtyy suosikkeihin
+  el.panel.querySelectorAll('[data-act="fav-recent"]').forEach((b) => {
+    if (favCheck(state.recent[+b.dataset.i])) b.closest('.fav-row')?.remove();
+  });
+  if (!sel) return null;
+  try {
+    const n = el.panel.querySelector(sel);
+    n?.focus({ preventScroll: true });
+    return n;
+  } catch {
+    return null; // huono valitsin
+  }
+}
+
+function favNote(text) {
+  const n = $('#favNote', el.panel);
+  if (n) n.textContent = text;
+}
+
+/** Tähden napautus: lisää tai poistaa paikan. Täysi lista kertoo syyn eikä tee mitään. */
+function favToggleAt(p) {
+  if (!p) return;
+  const r = toggleFav(state.favs, p);
+  if (!r.ok) {
+    if (r.reason === 'full') favNote(`Suosikkeja voi olla enintään ${FAV_MAX}. Poista ensin jokin.`);
+    return;
+  }
+  state.favs = r.list;
+  persistFavs();
+  const home = r.on && state.favs[0]?.home && samePlace(state.favs[0], p);
+  favNote(r.on ? `${p.name} tallennettu suosikiksi${home ? ' ja kodiksi' : ''}.` : `${p.name} poistettu suosikeista.`);
+  if (!renderFavs()) $('#favCur .fav-ic', el.panel)?.focus({ preventScroll: true });
+  if (r.on) void refreshFavWx();
+}
+
+/** Poisto suosikkilistasta: fokus siirtyy seuraavan rivin tähteen (tai nykyisen paikan tähteen), ettei se putoa paneelin alkuun. */
+function favRemoveAt(i) {
+  const p = state.favs[i];
+  if (!p) return;
+  state.favs = removeFav(state.favs, p);
+  persistFavs();
+  favNote(`${p.name} poistettu suosikeista.`);
+  renderFavs();
+  const next = $(`#favs [data-act="fav-del"][data-i="${Math.min(i, state.favs.length - 1)}"]`, el.panel) || $('#favCur .fav-ic', el.panel) || $('#q', el.panel);
+  next?.focus({ preventScroll: true });
+}
+
+/** Koti-painike: suosikista tulee koti (ensimmäiseksi); uusi painallus poistaa kotimerkinnän. */
+function favHomeAt(i) {
+  const p = state.favs[i];
+  if (!p) return;
+  const was = Boolean(p.home);
+  state.favs = toggleHome(state.favs, p);
+  persistFavs();
+  favNote(was ? `${p.name} ei ole enää koti.` : `${p.name} on nyt koti, ja se näkyy suosikeissa ensimmäisenä.`);
+  renderFavs();
+  $(`#favs [data-act="fav-home"][data-i="${findFav(state.favs, p)}"]`, el.panel)?.focus({ preventScroll: true });
+}
+
+/** Suosikki nimellä (Geminin työkalu): koko nimi ilman ääkkösiä ja kirjainkokoa. */
+function favByName(q) {
+  const k = fold(String(q || '').trim());
+  return k ? state.favs.find((p) => fold(p.name) === k) || null : null;
+}
+
 // ---------- Datan haku ----------
 
 let loadSeq = 0;
@@ -9868,13 +10956,12 @@ let inflight = null; // käynnissä oleva haku: { key, ctl, promise }
 function validateSelection() {
   const { fc, sel } = state;
   if (!fc) return;
-  const { idx, local } = nowPosition(fc, nowMs());
+  const { idx } = nowPosition(fc, nowMs());
   if (sel.type === 'hour') {
     const i = fc.hours.findIndex((h) => h.t === sel.iso);
     if (i < idx) state.sel = { type: 'now' };
   } else if (sel.type !== 'now') state.sel = { type: 'now' };
   if (state.hourOpen && !fc.hours.some((h, i) => h.t === state.hourOpen && i >= idx)) state.hourOpen = null;
-  void local;
 }
 
 /** Yksi haku kerrallaan: sama paikka käynnissä -> odotetaan sitä; toinen paikka -> vanha haku perutaan. */
@@ -9922,7 +11009,7 @@ async function runLoad({ manual = false, signal } = {}) {
     const net = results.length && results.every((r) => r.kind === 'network' || r.kind === 'timeout');
     const hint = net ? ' Tarkista verkkoyhteys. Jos verkko toimii muuten, sisällönesto voi estää osoitteen api.open-meteo.com.' : '';
     if (state.fc) {
-      setBanner({ id: 'stale', kind: 'warn', text: `Päivitys ei onnistunut. Näytetään ennuste, joka haettiin ${agoText(nowMs() - state.fetchedAt)}.`, action: { act: 'refresh', label: 'Yritä uudelleen' } });
+      staleBanner();
     } else {
       state.error = `Yksikään säämalli ei vastannut. ${why}.${hint}`;
     }
@@ -9933,6 +11020,7 @@ async function runLoad({ manual = false, signal } = {}) {
   state.fc = fc;
   state.fetchedAt = nowMs();
   state.error = '';
+  rememberForecast(placeKey(place), { at: state.fetchedAt, fc, results });
   if (state.banner?.id === 'stale') setBanner(null);
   validateSelection();
   persistCache();
@@ -9943,6 +11031,7 @@ async function runLoad({ manual = false, signal } = {}) {
   void refreshNowcast({ ignoreAge: manual });
   void refreshWarnings({ ignoreAge: manual });
   void refreshObs({ ignoreAge: manual });
+  void refreshAir({ ignoreAge: manual });
 }
 
 // ---------- Paikka ----------
@@ -9952,13 +11041,24 @@ function setPlace(place) {
   state.fc = null;
   state.results = null;
   state.error = '';
+  // Nopea vaihto: äskettäin haettu ennuste (esim. suosikki) näkyy heti, ja uusi haku päivittää sen taustalla.
+  // Edellisen paikan kesken oleva haku perutaan (load), ja sen myöhästynyt vastaus ohitetaan (loadSeq).
+  const hit = placeData.get(placeKey(place));
+  if (hit && nowMs() - hit.at < SWITCH_CACHE_MS) {
+    state.fc = hit.fc;
+    state.results = hit.results;
+    state.fetchedAt = hit.at;
+  }
   state.sel = { type: 'now' };
   state.dayOpen = null;
   state.ai = { status: 'idle', text: '', error: '', fp: '' };
   state.chatLast = null;
   setBanner(null);
   persistPlace();
-  skyIdle();
+  if (state.fc) {
+    validateSelection();
+    updateSky(true);
+  } else skyIdle();
   renderAll();
   load();
 }
@@ -10019,7 +11119,7 @@ async function doSearch() {
     const list = await searchPlaces(q, { fetchFn });
     if (seq !== searchSeq) return;
     state.found = list;
-    out.innerHTML = resultsHtml(list, list.length ? '' : `Ei tuloksia haulle "${q}".`);
+    out.innerHTML = resultsHtml(list, list.length ? '' : `Ei tuloksia haulle "${q}".`, favCheck);
   } catch (e) {
     if (seq !== searchSeq) return;
     out.innerHTML = resultsHtml([], `Haku epäonnistui: ${e.message}`);
@@ -10084,7 +11184,7 @@ async function runAi({ force = false } = {}) {
   state.ai = { status: 'loading', text: '', error: '', fp };
   renderAi();
   try {
-    const text = await explain({ fc: state.fc, place: state.place, nowMs: nowMs(), selection: selection(), results: state.results, mode: aiMode(), fetchFn, signal: aiAbort.signal });
+    const text = await explain({ fc: state.fc, place: state.place, nowMs: nowMs(), selection: selection(), results: state.results, air: currentAir(nowMs()), mode: aiMode(), fetchFn, signal: aiAbort.signal });
     if (mySeq !== aiSeq) return;
     aiCache.set(fp, text);
     if (aiCache.size > AI_CACHE_MAX) aiCache.delete(aiCache.keys().next().value); // vanhin pois (Map säilyttää lisäysjärjestyksen)
@@ -10116,6 +11216,7 @@ function tick() {
   void refreshNowcast();
   void refreshWarnings();
   void refreshObs();
+  void refreshAir();
   validateSelection();
   renderAll();
   updateSky();
@@ -10134,9 +11235,12 @@ let hasEntry = false;
 const TITLES = { search: 'Paikkakunta', settings: 'Asetukset', chat: 'Kysy SääÄlyltä', about: 'Tietoja ja tietolähteet' };
 
 function sheetContent(kind) {
-  if (kind === 'search') return searchSheetHtml({ recent: state.recent });
+  if (kind === 'search') {
+    const cur = findFav(state.favs, state.place);
+    return searchSheetHtml({ recent: state.recent, favs: state.favs, wx: state.favs.map((p) => favWxFor(p)), current: cur, place: state.place, isFav: favCheck, full: state.favs.length >= FAV_MAX });
+  }
   if (kind === 'chat') return chatSheetHtml({ mode: aiMode(), hasKey: keyOn(), hasMessages: state.chat.length > 0 });
-  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs', 'radarmap', 'cloudmap'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
+  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs', 'air', 'radarmap', 'cloudmap'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
   return settingsSheetHtml({ hasKey: keyOn(), mode: aiMode(), model: aiSettings.model(), refreshMin: state.refreshMin, models: state.models, demo: DEMO, sens: state.sens, anim: store.bool('anim', true) });
 }
 
@@ -10198,6 +11302,10 @@ function openSheet(kind) {
     chatShown = 0;
     renderChat();
     syncAi();
+  }
+  if (kind === 'search') {
+    state.found = [];
+    void refreshFavWx();
   }
   el.sheet.hidden = false;
   el.app.inert = true;
@@ -10279,13 +11387,24 @@ function renderChat() {
 }
 
 const placeData = new Map();
+const SWITCH_CACHE_MS = 30 * 60000; // paikkaa vaihdettaessa näin tuore muistissa oleva ennuste näytetään heti
+
+/** Muistiin viimeisimmät ennusteet (enintään 8 paikkaa): chatin jatkokysymykset ja nopea paikan vaihto. */
+function rememberForecast(key, data) {
+  placeData.delete(key);
+  placeData.set(key, data);
+  if (placeData.size > 8) placeData.delete(placeData.keys().next().value);
+}
 
 /** Minkä tahansa paikan yhdistetty ennuste (chat ja Geminin työkalu). Pidetään muistissa 10 min, jotta jatkokysymykset eivät hae uudelleen. */
 async function forecastFor(place) {
   const key = placeKey(place);
   const hit = placeData.get(key);
   if (hit && nowMs() - hit.at < 10 * 60000) return hit;
+  // Ilmanlaatu haetaan rinnalla (chat: siitepöly, ilmanlaatu ja UV toisella paikkakunnalla); sen puute ei estä vastausta.
+  const airP = runSource(sources, 'air', () => fetchAir(place.lat, place.lon, { fetchFn }), { now: nowMs() }).then((r) => r.value || null, () => null);
   const results = await fetchAll(place.lat, place.lon, { fetchFn, now: nowMs() });
+  const air = await airP;
   let fc = null;
   try {
     fc = blendForecast(results, { nowMs: nowMs() });
@@ -10293,20 +11412,20 @@ async function forecastFor(place) {
     fc = null;
   }
   if (!fc) throw new Error(`yksikään säämalli ei vastannut. ${summarizeErrors(results)}`);
-  const data = { at: nowMs(), fc, results };
-  placeData.set(key, data);
-  if (placeData.size > 8) placeData.delete(placeData.keys().next().value);
+  const data = { at: nowMs(), fc, results, air };
+  rememberForecast(key, data);
   return data;
 }
 
 async function runTool(name, args) {
   if (name !== 'get_forecast') throw new Error('Tuntematon työkalu');
   const q = String(args.place || '').trim();
-  const found = await searchPlaces(q, { fetchFn, count: 3 });
+  const fav = favByName(q); // suosikki ensin: sama paikka kuin paikkalistassa
+  const found = fav ? [fav] : await searchPlaces(q, { fetchFn, count: 3 });
   if (!found.length) throw new Error(`Paikkaa "${q}" ei löytynyt`);
   const p = found[0];
-  const { fc, results } = await forecastFor(p);
-  return { paikka: placeLabel(p), ...compactForecast(fc, nowMs(), { hours: 36, results }) };
+  const { fc, results, air } = await forecastFor(p);
+  return { paikka: placeLabel(p), ...compactForecast(fc, nowMs(), { hours: 36, results, air }) };
 }
 
 /** Vastaa sovelluksen omalla laskennalla: ei tekoälyä eikä Gemini-kutsuja. */
@@ -10319,8 +11438,10 @@ async function internalAnswer(text) {
     last: state.chatLast,
     sensitivity: state.sens,
     nowcast: currentNowcast(nowMs()),
+    air: currentAir(nowMs()),
     geocode: (q) => searchPlaces(q, { fetchFn, count: 5 }),
     forecastFor,
+    favorites: state.favs,
   });
   state.chatLast = out.last || null;
   return out;
@@ -10356,7 +11477,7 @@ async function sendChat(text) {
   let why = '';
   if (mode !== 'internal' && state.fc) {
     try {
-      const out = await chat({ fc: state.fc, place: state.place, nowMs: nowMs(), history: chatHistory(), results: state.results, mode, runTool, fetchFn });
+      const out = await chat({ fc: state.fc, place: state.place, nowMs: nowMs(), history: chatHistory(), results: state.results, air: currentAir(nowMs()), mode, runTool, fetchFn });
       msg = { role: 'assistant', text: out, src: mode === 'free' ? 'Gemini · sovelluksen data + yleistieto' : 'Gemini · data: sovelluksen säämallit' };
     } catch (e) {
       why = shortReason(e); // Gemini ei vastannut: vastataan sovelluksen omalla laskennalla ja kerrotaan syy
@@ -10581,12 +11702,22 @@ async function probeSources(push, p, t) {
   } else if ('value' in r) push(`  – Tutkaennuste: ei kata tätä paikkaa (${r.reason})`);
   else if (r.error) push(`  ✗ Tutkaennuste: ${await explainFetchError(r.error, nowcastUrl(p.lat, p.lon))}`);
   else push(`  – Tutkaennuste: ohitettu (${r.skipped})`);
+  const ta = performance.now();
+  const a = await runSource(sources, 'air', () => fetchAir(p.lat, p.lon, { fetchFn }), { force: true, now: t });
+  const ams = Math.round(performance.now() - ta);
+  if (a.value) {
+    state.air = { raw: a.value, key: ncKey(p), at: t };
+    const sum = state.fc ? airWindow(state.fc, a.value, nowPosition(state.fc, t).idx, nowPosition(state.fc, t).idx + 23) : null;
+    push(`  ✓ Ilmanlaatu ja siitepöly (Open-Meteo, CAMS) ${ams} ms, ${a.value.note}${sum?.aqi ? `; ilmanlaatu enintään ${sum.aqi.info.word} (${Math.round(sum.aqi.max)})` : ''}${a.value.hasPollen ? '' : '; siitepölyä ei ennusteta nyt'}`);
+  } else if ('value' in a) push(`  – Ilmanlaatu ja siitepöly: ${a.reason}`);
+  else if (a.error) push(`  ✗ Ilmanlaatu ja siitepöly: ${await explainFetchError(a.error, airUrl(p.lat, p.lon))}`);
+  else push(`  – Ilmanlaatu ja siitepöly: ohitettu (${a.skipped})`);
   if (!inFinland(p.lat, p.lon)) return push('  – Viralliset varoitukset: koskevat vain Suomea');
   const t1 = performance.now();
   const w = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn }), { force: true, now: t });
   const wms = Math.round(performance.now() - t1);
   if (w.value) {
-    state.warn = { raw: w.value.alerts, at: t };
+    state.warn = { raw: w.value.alerts, at: t, stale: false, fetchedAt: w.value.fetchedAt };
     push(`  ✓ Viralliset varoitukset (Ilmatieteen laitos, GitHub-peilin kautta) ${wms} ms, ${w.value.note}; ${officialRows(w.value.alerts, p.lat, p.lon, t).length} tällä paikalla`);
   } else if ('value' in w) push(`  – Viralliset varoitukset: ${w.reason}`);
   else if (w.error) push(`  ✗ Viralliset varoitukset: ${await explainFetchError(w.error, MIRROR_URL)}`);
@@ -10745,6 +11876,12 @@ const ACTIONS = {
   'ai-run': () => runAi({ force: true }),
   pick: (t) => pickPlace(state.found[+t.dataset.i]),
   'pick-recent': (t) => pickPlace(state.recent[+t.dataset.i]),
+  'pick-fav': (t) => pickPlace(state.favs[+t.dataset.i]),
+  'fav-cur': () => favToggleAt(state.place),
+  'fav-found': (t) => favToggleAt(state.found[+t.dataset.i]),
+  'fav-recent': (t) => favToggleAt(state.recent[+t.dataset.i]),
+  'fav-del': (t) => favRemoveAt(+t.dataset.i),
+  'fav-home': (t) => favHomeAt(+t.dataset.i),
   ask: (t) => sendChat(t.dataset.q),
   mode: (t) => pickMode(t.dataset.mode),
   'mode-on': () => pickMode(aiSettings.mode() === 'internal' ? 'grounded' : aiSettings.mode()),
@@ -10906,6 +12043,7 @@ function bindEvents() {
       app: el.app,
       faces: [...el.pages.querySelectorAll('.face')],
       sky: $('#sky'),
+      skyVersion: () => sky?.frames?.() ?? NaN,
       chrome: () => [$('.top', el.app), el.banner, el.welcome, el.fab],
     });
     cube = createCube(el.pages, {
@@ -10928,6 +12066,9 @@ function bindEvents() {
       sky?.poke();
     }
   });
+  window.addEventListener('offline', () => {
+    if (!DEMO) staleBanner();
+  });
   window.addEventListener('online', () => {
     load();
     checkForUpdate();
@@ -10943,6 +12084,23 @@ function registerWorker() {
   if (DEMO || !('serviceWorker' in navigator)) return;
   if (!(location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) return;
   navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+/** Aloitusnäytön pikakuvakkeet (manifest.webmanifest: shortcuts): ?avaa=kysy, kartta, tunnit tai viikko. */
+function openShortcut() {
+  const what = params.get('avaa');
+  if (!what) return;
+  try {
+    const u = new URL(location.href);
+    u.searchParams.delete('avaa'); // uudelleenlataus ei avaa samaa uudelleen
+    history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+  } catch {
+    /* ei väliä */
+  }
+  if (what === 'kysy') openSheet('chat');
+  else if (what === 'kartta') openMap('radar');
+  else if (what === 'tunnit') goPage(1, { smooth: false });
+  else if (what === 'viikko') goPage(2, { smooth: false });
 }
 
 async function boot() {
@@ -10978,20 +12136,23 @@ async function boot() {
   }
   if (!state.place.name && !first) {
     // Tallennetulta paikalta puuttui nimi (sovellus suljettiin kesken haun)
-    reverseGeocode(state.place.lat, state.place.lon, { fetchFn }).then((geo) => {
-      Object.assign(state.place, { name: geo.name, region: geo.region, country: geo.country, note: geo.note || '' });
+    const place = state.place;
+    reverseGeocode(place.lat, place.lon, { fetchFn }).then((geo) => {
+      if (state.place !== place) return; // käyttäjä ehti valita toisen paikan: nimeä ei saa kirjoittaa sen päälle
+      Object.assign(place, { name: geo.name, region: geo.region, country: geo.country, note: geo.note || '' });
       persistPlace();
       renderAll();
       syncAi({ immediate: true });
     });
   }
+  openShortcut();
   startTimers();
   if (document.readyState === 'complete') registerWorker();
   else window.addEventListener('load', registerWorker);
   setTimeout(checkForUpdate, 4000, { force: true });
 }
 
-globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, openMap, get cube() { return cube; }, get map() { return mapView; } };
+globalThis.__saaaly = { state, get favWx() { return favWx; }, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, openMap, get cube() { return cube; }, get map() { return mapView; } };
 boot();
 })();
 })();

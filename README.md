@@ -1,4 +1,4 @@
-# SääÄly – AI Weather (versio 0.8.0)
+# SääÄly – AI Weather (versio 1.0.0)
 
 Sääsovellus, joka hakee ennusteen usealta säämallilta (ECMWF, MET Norway, DWD ICON, Météo-France, UK Met Office, NOAA GFS, Kanadan GEM ja kokeiluna Ilmatieteen laitos), yhdistää ne **koodilla** yhdeksi tunti- ja päiväennusteeksi ja kertoo suoraan, mitä se tarkoittaa: mitä pukea, tarvitaanko sateenvarjoa ja milloin sade alkaa tai loppuu. Mukana on chat, jolta voi kysyä säästä suomeksi, myös toisen paikkakunnan säästä.
 
@@ -16,12 +16,12 @@ Sovelluksen neljä sivua ovat näytön kokoisen kuution kyljet. Kuutiota käänn
 
 | Sivu | Mitä siinä on |
 |---|---|
-| **Koti** | Lämpötila, tuntuu kuin, sää, tuuli ja päivän alin ja ylin. Iso otsikko kertoo olennaisen: takki ja mihin asti on kuivaa, tai sateenvarjo ja milloin sade alkaa tai loppuu. Kromiradalla seuraavat 10 tuntia; tunnin napautus näyttää sen tiedot ylhäällä. Varoitukset ovat otsikon yläpuolella. |
-| **Tunnit** | Tuntilista (13 tuntia, "Näytä 48 tuntia"). Rivin napautus avaa tuulen, puuskat, sateen, pilvisyyden ja mallien eron (nyt-rivillä myös lähimmän sääaseman mittauksen). Kaavio-näkymässä sääkaavio 24 h / 48 h / 7 vrk. Kun sade on lähellä, tutkan sadekäyrä näyttää seuraavat 2 tuntia. |
-| **Viikko** | Seitsemän päivää, viikon suunta ja sadepäivät otsikossa, viikonlopun yhteenveto. Päivän napautus avaa sen tunnit. |
+| **Koti** | Lämpötila, tuntuu kuin, sää, tuuli ja päivän alin ja ylin. Iso otsikko kertoo olennaisen: takki ja mihin asti on kuivaa, tai sateenvarjo ja milloin sade alkaa tai loppuu. Kromiradalla seuraavat 10 tuntia; tunnin napautus näyttää sen tiedot ylhäällä. Varoitukset ovat otsikon yläpuolella. Siitepöly, ilmanlaatu ja UV näkyvät pieninä pillereinä otsikon alla vain silloin, kun niillä on merkitystä. |
+| **Tunnit** | Tuntilista (13 tuntia, "Näytä 48 tuntia"). Rivin napautus avaa tuulen, puuskat, sateen, pilvisyyden, mallien eron, ilmanlaadun, UV:n ja siitepölyn (nyt-rivillä myös lähimmän sääaseman mittauksen). Kaavio-näkymässä sääkaavio 24 h / 48 h / 7 vrk. Kun sade on lähellä, tutkan sadekäyrä näyttää seuraavat 2 tuntia. |
+| **Viikko** | Seitsemän päivää, viikon suunta ja sadepäivät otsikossa, viikonlopun yhteenveto. Päivän napautus avaa sen tunnit ja kertoo tarvittaessa siitepölyn ja UV:n. |
 | **Varmuus** | Kuinka luotettava ennuste on tänään ja huomenna. Jokainen helmi on yksi säämalli: vasemmalla kylmempi, oikealla lämpimämpi kuin SääÄlyn ennuste. Lisäksi mallivertailu ja lähimmän sääaseman havainto. |
 
-Yläpalkin **Tänään / Huomenna** vaihtaa kotisivun ja Tunnit-sivun huomiseen. **Kysy SääÄlyltä** avaa chatin, ja sen vieressä oleva **karttapainike** avaa koko näytön kartan: **Tutka** (havaittu sade viimeiset 2 tuntia) ja **Pilvet** (pilvisyys ja sade seuraavan vuorokauden ajan). Kartta liikkuu sormella ja zoomautuu nipistämällä. Valikosta (☰) löytyvät päivitys, sijainti, pukeutumisen kylmänsietokyky, päivitysväli, taustan animaatio, tiedot ja lisäasetukset.
+Yläpalkin **paikkapilleri** avaa paikkapaneelin: haku, oma sijainti ja enintään kahdeksan **suosikkipaikkaa** (tähti tallentaa, talo merkitsee kodin), joista jokaisesta näkyy nykyinen lämpötila. Äsken katsottu paikka avautuu heti. **Tänään / Huomenna** vaihtaa kotisivun ja Tunnit-sivun huomiseen. **Kysy SääÄlyltä** avaa chatin, ja sen vieressä oleva **karttapainike** avaa koko näytön kartan: **Tutka** (havaittu sade viimeiset 2 tuntia) ja **Pilvet** (pilvisyys ja sade seuraavan vuorokauden ajan). Kartta liikkuu sormella ja zoomautuu nipistämällä. Valikosta (☰) löytyvät päivitys, sijainti, pukeutumisen kylmänsietokyky, päivitysväli, taustan animaatio, tiedot ja lisäasetukset.
 
 ## Chatin vastausten lähde (Gemini-avain on valinnainen)
 
@@ -77,11 +77,12 @@ Sovellus ei käytä omaa palvelinta, mainoksia, analytiikkaa eikä seurantaa. Se
 | `raw.githubusercontent.com` | Viralliset varoitukset (valinnainen): repon haarassa `warnings-data` oleva peili Ilmatieteen laitoksen syötteestä | Ei sijaintia: koko maan varoitukset ladataan ja oma alue valitaan laitteella |
 | `api.rainviewer.com`, `tilecache.rainviewer.com` | Tutkakartta (vain kun avaat kartan) | Kartan alue tiilinä (noin 150 km:n ruutuina), ei tarkkaa sijaintia |
 | `api.open-meteo.com` (monta pistettä) | Pilvi- ja sade-ennuste kartalla (vain kun avaat kartan) | Kartan alueen ruudukon pisteet |
+| `air-quality-api.open-meteo.com` | Ilmanlaatu, siitepöly ja UV (valinnainen) | Sijainti pyöristettynä kahteen desimaaliin |
 | `generativelanguage.googleapis.com` | Gemini (valinnainen, vain jos lisäät avaimen) | Kysymys ja sovelluksen säädata |
 
 Paikka, asetukset ja välimuisti tallentuvat vain tämän laitteen selaimeen. Fontti (Inter Display, SIL Open Font License, `inter-OFL.txt`) ja kartan pohja (Natural Earth, julkista aineistoa) tulevat sovelluksen mukana, joten niitä ei haeta muualta.
 
-Sääennusteet: Open-Meteo.com (CC BY 4.0). Havainnot ja varoitukset: Ilmatieteen laitos (CC BY 4.0). Tutkaennuste: MET Norway. Tutkakartta: RainViewer (henkilökohtainen käyttö, lähdemaininta kartalla). Pohjakartta: Natural Earth. Paikkahaku: Open-Meteo / GeoNames. Paikannimet: BigDataCloud ja © OpenStreetMap-tekijät.
+Sääennusteet sekä ilmanlaatu ja siitepöly: Open-Meteo.com (CC BY 4.0; ilmanlaatu CAMS / Copernicus). Havainnot ja varoitukset: Ilmatieteen laitos (CC BY 4.0). Tutkaennuste: MET Norway. Tutkakartta: RainViewer (henkilökohtainen käyttö, lähdemaininta kartalla). Pohjakartta: Natural Earth. Paikkahaku: Open-Meteo / GeoNames. Paikannimet: BigDataCloud ja © OpenStreetMap-tekijät.
 
 ## Varoituspeili (GitHub Actions)
 
@@ -108,10 +109,10 @@ Repon juuressa ovat julkaistut tiedostot (GitHub Pages tarjoilee ne). Lähdekood
 
 ```
 cd src
-node --test tests/*.test.js            # yksikkötestit (233 kpl)
+node --test tests/*.test.js            # yksikkötestit (285 kpl)
 node tools/build.mjs                   # kokoaa js/-moduulit tiedostoksi saaaly.js, esikatselun ja julkaise/-kansion
 node tools/publish.mjs                 # kopioi julkaise/-kansion tiedostot repon juureen
-python3 tools/e2e.py                   # selaintestit (45 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages
+python3 tools/e2e.py                   # selaintestit (55 kpl) julkaise/-kansiolle samasta alipolusta kuin GitHub Pages
 python3 tools/shot.py kuva.png "?demo=rain&at=2026-10-14T14:04:00%2B03:00"   # kuvakaappaus esimerkkitilasta
 cd .. && git add -A && git commit && git push
 ```
