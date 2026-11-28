@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { alertsHtml } from '../js/views.js';
-import { blendForecast, nowPosition, modelRows } from '../js/blend.js';
+import { blendForecast, nowPosition, modelRows, windowPopPm } from '../js/blend.js';
 import { parseModelResponse } from '../js/weather.js';
 
 test('varoitusrivin tarkistusaika näytetään paikan aikavyöhykkeessä, ei laitteen', () => {
@@ -47,4 +47,17 @@ test('nykyhetki puuttuvalla tunnilla on edeltävä tunti, ei ennusteen viimeinen
   assert.equal(fc.hours[np.idx].t, '2026-10-14T01:00');
   assert.equal(nowPosition(fc, Date.UTC(2026, 9, 13, 12, 0)).idx, 0, 'ennen ennusteen alkua: ensimmäinen tunti');
   assert.equal(nowPosition(fc, Date.UTC(2026, 9, 20, 12, 0)).idx, fc.hours.length - 1, 'ennusteen jälkeen: viimeinen tunti');
+});
+
+test('päivän sateen todennäköisyys painottaa malleja ennusteen iän mukaan kuten sadejaksot', () => {
+  const temps = Array.from({ length: 72 }, () => 5);
+  const wet = temps.map((_, h) => (h >= 24 && h < 48 ? 1 : 0));
+  // a painaa lähitunneilla, b kauempana. Nyt on 15.10. klo 06, joten 15.10. on lähituntia (ikä 0 h), ei 24 h vanhaa ennustetta.
+  const a = hand('a', temps, { precip: wet, lead: [2, 0.1, 0.1, 0.1] });
+  const b = hand('b', temps, { lead: [0.1, 2, 2, 2] });
+  const fc = blendForecast([a, b], { nowMs: Date.UTC(2026, 9, 15, 3, 0) });
+  assert.equal(fc.lead0, 30);
+  const d = fc.days.find((x) => x.date === '2026-10-15');
+  assert.ok(Math.abs(d.pwin - 2 / 2.1) < 1e-9, `pwin ${d.pwin}`);
+  assert.ok(Math.abs(d.pwin - windowPopPm(fc.pm, d.from, d.to, 0.3, fc.lead0)) < 1e-12);
 });

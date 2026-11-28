@@ -365,7 +365,7 @@ export function blendForecast(results, { nowMs } = {}) {
     const base = dayHours.length >= 4 ? dayHours : hs;
     const from = idxs[0];
     const to = idxs[idxs.length - 1];
-    const pwin = windowPopPm(pm, from, to, 0.3);
+    const pwin = windowPopPm(pm, from, to, 0.3, lead0); // mallien painot ennusteen iän mukaan kuten wetSpans-funktiossa
     const uvs = hs.map((h) => h.uv).filter((x) => x != null);
     return {
       date,
