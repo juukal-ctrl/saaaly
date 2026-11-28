@@ -6,6 +6,8 @@ import { blendForecast, nowPosition, modelRows, windowPopPm } from '../js/blend.
 import { parseModelResponse } from '../js/weather.js';
 import { summarizeNowcast } from '../js/nowcast.js';
 import { searchPlaces } from '../js/geo.js';
+import { resolveWindow } from '../js/answer.js';
+import { parseQuestion } from '../js/nlu.js';
 
 test('varoitusrivin tarkistusaika näytetään paikan aikavyöhykkeessä, ei laitteen', () => {
   const now = Date.UTC(2026, 10, 26, 9, 45);
@@ -88,4 +90,17 @@ test('paikkahaku ohittaa rikkinäiset rivit eikä kaadu tyhjään vastaukseen', 
     fetchFn: json({ results: [{ name: 'Oulu', latitude: 65.01, longitude: 25.47, country: 'Suomi' }, { name: 'Rikki' }, { name: 'Rikki2', latitude: null, longitude: 25 }, null, { latitude: 60, longitude: 25 }] }),
   });
   assert.deepEqual(list.map((p) => p.name), ['Oulu']);
+});
+
+// ---------- Chatin ajankohdat ----------
+
+test('kysytty tunti, joka puuttuu ennusteen keskeltä, ei ole "ennusteen ulkopuolella"', () => {
+  const temps = Array.from({ length: 48 }, (_, h) => (h === 3 ? null : h));
+  const fc = blendForecast([hand('a', temps), hand('b', temps)], { nowMs: Date.UTC(2026, 9, 13, 21, 0) });
+  const now = Date.UTC(2026, 9, 13, 22, 10); // 14.10. klo 01.10 Helsingissä
+  const w = resolveWindow(parseQuestion('Paljonko on lämpöä klo 3?', { nowHour: 1 }), fc, now);
+  assert.equal(w.beyond, false);
+  assert.equal(fc.hours[w.from].t, '2026-10-14T04:00');
+  const r = resolveWindow(parseQuestion('Lämpötila klo 2-5?', { nowHour: 1 }), fc, now);
+  assert.deepEqual([fc.hours[r.from].t, fc.hours[r.to].t, r.beyond, r.clipped], ['2026-10-14T02:00', '2026-10-14T04:00', false, false]);
 });
