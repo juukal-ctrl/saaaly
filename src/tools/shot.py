@@ -1,6 +1,7 @@
 """Ottaa kuvakaappauksen sovelluksesta (esimerkkitilassa) ja listaa konsolivirheet.
-Käyttö: python3 tools/shot.py ulos.png "?demo=rain&at=2026-10-14T20:04:00%2B03:00" [--w 412] [--h 915] [--scroll 760] [--wait 1800] [--click SELECTOR]"""
-import argparse, json
+Käyttö: python3 tools/shot.py ulos.png "?demo=rain&at=2026-10-14T20:04:00%2B03:00" [--w 412] [--h 915] [--scroll 760] [--wait 1800] [--click SELECTOR] [--port 8765]
+PW_CHROMIUM=/polku/chrome käyttää valmiiksi asennettua Chromiumia."""
+import argparse, json, os
 from playwright.sync_api import sync_playwright
 
 ap = argparse.ArgumentParser()
@@ -11,16 +12,17 @@ ap.add_argument('--h', type=int, default=915)
 ap.add_argument('--scroll', type=int, default=0)
 ap.add_argument('--wait', type=int, default=1800)
 ap.add_argument('--click', action='append', default=[])
+ap.add_argument('--port', type=int, default=8765)
 a = ap.parse_args()
 
 with sync_playwright() as p:
-    b = p.chromium.launch()
+    b = p.chromium.launch(executable_path=os.environ.get('PW_CHROMIUM') or None)
     ctx = b.new_context(viewport={'width': a.w, 'height': a.h}, device_scale_factor=1.5, is_mobile=True, has_touch=True, locale='fi-FI', timezone_id='Europe/Helsinki')
     page = ctx.new_page()
     logs = []
     page.on('console', lambda m: logs.append(f'[{m.type}] {m.text}') if m.type in ('error', 'warning') else None)
     page.on('pageerror', lambda e: logs.append(f'[pageerror] {e}'))
-    page.goto('http://127.0.0.1:8765/index.html' + a.query)
+    page.goto(f'http://127.0.0.1:{a.port}/index.html' + a.query)
     page.wait_for_timeout(a.wait)
     for sel in a.click:
         page.click(sel)

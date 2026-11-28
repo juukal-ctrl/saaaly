@@ -17,11 +17,12 @@ import { createGuard, runSource, memoryStorage, sourceLine } from './sources.js'
 import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.js';
 import { fetchObs } from './observations.js';
 import { makeDemoFetch } from './demo.js';
-import { agoText, selLabel, placeHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
+import { agoText, selLabel, placeHtml, favListHtml, favCurrentHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 import { homeHeadline } from './headline.js';
 import { createCube, createCubeChrome } from './cube.js';
 import { createMapView } from './mapview.js';
-import { FOREIGN_CITIES } from './gazetteer.js';
+import { FOREIGN_CITIES, fold } from './gazetteer.js';
+import { FAV_MAX, parseFavs, findFav, isFav, toggleFav, removeFav, toggleHome, fetchCurrent, parseWxCache, staleFavs, wxKey, samePlace } from './favorites.js';
 
 const VERSION = '0.8.0';
 const BUILD = '__BUILD__'; // korvataan julkaisussa (tools/build.mjs); kehityspuussa paikanvaraaja
@@ -100,6 +101,7 @@ const state = {
   sheet: null,
   found: [],
   recent: store.array('recent').filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon)),
+  favs: DEMO ? [] : parseFavs(store.get('favs', [])), // suosikkipaikat (favorites.js), koti ensin; esimerkkitilassa vain muistissa
   chat: [],
   chatBusy: false,
   chatLast: null, // vastausmoottorin muisti: edellisen kysymyksen paikka, aihe ja ajankohta ("Entä huomenna?")
@@ -230,7 +232,7 @@ function sizeStage() {
 
 const NC_TTL = 5 * 60000; // tutkaennuste päivittyy viiden minuutin välein
 const NC_TTL_NOCOV = 60 * 60000; // kattavuuden ulkopuolella kysytään harvoin
-let ncBusy = false;
+let ncBusy = ''; // haettavan paikan avain: edellisen paikan kesken oleva haku ei estä uuden paikan hakua
 const ncKey = (p) => (p && Number.isFinite(p.lat) && Number.isFinite(p.lon) ? `${p.lat.toFixed(2)},${p.lon.toFixed(2)}` : '');
 
 /** Tutkaennusteen tulkinta hetkelle now; null, jos ei saatavilla, vanhentunut tai haettu toiselle paikalle. */
@@ -245,16 +247,16 @@ function currentNowcast(now) {
 async function refreshNowcast({ ignoreAge = false } = {}) {
   const p = state.place;
   const key = ncKey(p);
-  if (!key || ncBusy) return;
+  if (!key || ncBusy === key) return;
   const now = nowMs();
   const nc = state.nc;
   if (!ignoreAge && nc.key === key && now - nc.at < nc.ttl) return;
-  ncBusy = true;
+  ncBusy = key;
   try {
     const r = await runSource(sources, 'nowcast', () => fetchNowcast(p.lat, p.lon, { fetchFn }), { now });
     if (ncKey(state.place) === key && 'value' in r) state.nc = { raw: r.value, key, at: now, ttl: r.value ? NC_TTL : NC_TTL_NOCOV }; // value null = tutka ei kata paikkaa
   } finally {
-    ncBusy = false;
+    if (ncBusy === key) ncBusy = '';
   }
   if (state.fc) {
     renderAdvice(state.fc, nowMs());
@@ -263,7 +265,7 @@ async function refreshNowcast({ ignoreAge = false } = {}) {
 }
 
 const OBS_TTL = 10 * 60000; // asemat mittaavat kymmenen minuutin välein
-let obsBusy = false;
+let obsBusy = ''; // kuten ncBusy
 
 /** Lähimmän aseman havainto, jos se on haettu tälle paikalle eikä ole vanha. */
 function currentObs(now) {
@@ -276,15 +278,15 @@ function currentObs(now) {
 async function refreshObs({ ignoreAge = false } = {}) {
   const p = state.place;
   const key = ncKey(p);
-  if (!key || obsBusy || !inFinland(p.lat, p.lon)) return;
+  if (!key || obsBusy === key || !inFinland(p.lat, p.lon)) return;
   const now = nowMs();
   if (!ignoreAge && state.obs.key === key && now - state.obs.at < OBS_TTL) return;
-  obsBusy = true;
+  obsBusy = key;
   try {
     const r = await runSource(sources, 'obs', () => fetchObs(p.lat, p.lon, { fetchFn, now }), { now });
     if (ncKey(state.place) === key && 'value' in r) state.obs = { raw: r.value, key, at: now };
   } finally {
-    obsBusy = false;
+    if (obsBusy === key) obsBusy = '';
   }
   if (state.fc) {
     renderHours();
@@ -693,6 +695,153 @@ function rememberRecent(p) {
   store.set('recent', state.recent);
 }
 
+// ---------- Suosikit ----------
+
+let favWx = DEMO ? {} : parseWxCache(store.get('favWx', null)); // suosikkien nykysää: wxKey -> { temp, sym, isDay, at }
+let favBusy = false;
+let favAgain = false;
+let favFailAt = 0;
+const FAV_WX_SHOW = 3 * 3600000; // vanhempaa nykysäätä ei näytetä lainkaan
+const FAV_RETRY = 2 * 60000; // epäonnistuneen haun jälkeen ei yritetä heti uudelleen
+
+function persistFavs() {
+  if (!DEMO) store.set('favs', state.favs);
+}
+
+/** Suosikin nykysää. Nykyiselle paikalle käytetään yhdistelmäennustetta, jotta luku on sama kuin etusivulla. */
+function favWxFor(p, now = nowMs()) {
+  if (state.fc && samePlace(p, state.place)) {
+    try {
+      const { idx, frac } = nowPosition(state.fc, now);
+      const s = snapshot(state.fc, idx, frac);
+      return { temp: s.temp, sym: s.sym, isDay: s.isDay };
+    } catch {
+      /* ennusteen ulkopuolella: käytetään haettua */
+    }
+  }
+  const c = favWx[wxKey(p)];
+  return c && now - c.at < FAV_WX_SHOW && c.at <= now + 60000 ? c : null;
+}
+
+/**
+ * Hakee vanhentuneiden suosikkien nykysään yhdellä pyynnöllä (Open-Meteo, pilkuin erotellut koordinaatit). Hiljainen lisä:
+ * ei virheilmoitusta eikä vaikutusta pääennusteen hakuun. Haetaan vain, kun paikkapaneeli avataan tai suosikki lisätään.
+ */
+async function refreshFavWx() {
+  const now = nowMs();
+  if (favBusy) {
+    favAgain = true; // esim. kaksi tähteä nopeasti peräkkäin: jälkimmäinen haetaan heti edellisen perään
+    return;
+  }
+  if (now - favFailAt < FAV_RETRY) return;
+  const need = staleFavs(
+    state.favs.filter((p) => !(state.fc && samePlace(p, state.place))),
+    favWx,
+    now,
+  );
+  if (!need.length) return;
+  favBusy = true;
+  favAgain = false;
+  try {
+    const got = await fetchCurrent(need, { fetchFn });
+    need.forEach((p, i) => {
+      if (got[i]) favWx[wxKey(p)] = { ...got[i], at: now };
+    });
+    // Vain listalla olevat paikat säilytetään (poistettu suosikki voi poistua kesken haun)
+    const keep = new Set(state.favs.map(wxKey));
+    favWx = Object.fromEntries(Object.entries(favWx).filter(([k]) => keep.has(k)));
+    if (!DEMO) store.set('favWx', favWx);
+  } catch {
+    favFailAt = nowMs();
+    return;
+  } finally {
+    favBusy = false;
+  }
+  if (state.sheet === 'search') renderFavs();
+  if (favAgain) void refreshFavWx();
+}
+
+const favCheck = (p) => isFav(state.favs, p);
+
+/** Paikkapaneelin suosikkiosat (nykyinen paikka, lista, laskuri) uudelleen; hakukenttä säilyy. Palauttaa fokusoidun painikkeen, jos se löytyi. */
+function renderFavs() {
+  if (state.sheet !== 'search') return null;
+  const a = document.activeElement;
+  const sel = a && el.panel.contains(a) ? focusSelector(a) : null;
+  const cur = findFav(state.favs, state.place);
+  const box = $('#favs', el.panel);
+  if (box) box.innerHTML = favListHtml({ favs: state.favs, wx: state.favs.map((p) => favWxFor(p)), current: cur });
+  const top = $('#favCur', el.panel);
+  if (top) top.innerHTML = favCurrentHtml({ place: state.place, on: cur >= 0, full: state.favs.length >= FAV_MAX });
+  const lbl = $('#favLbl', el.panel);
+  if (lbl) lbl.innerHTML = `Suosikit${state.favs.length ? ` <span class="fav-count">${state.favs.length}/${FAV_MAX}</span>` : ''}`;
+  const out = $('#results', el.panel);
+  if (out && state.found.length && out.querySelector('.fav-row')) out.innerHTML = resultsHtml(state.found, '', favCheck);
+  // Viimeksi katsotut: suosikiksi tallennettu rivi siirtyy suosikkeihin
+  el.panel.querySelectorAll('[data-act="fav-recent"]').forEach((b) => {
+    if (favCheck(state.recent[+b.dataset.i])) b.closest('.fav-row')?.remove();
+  });
+  if (!sel) return null;
+  try {
+    const n = el.panel.querySelector(sel);
+    n?.focus({ preventScroll: true });
+    return n;
+  } catch {
+    return null; // huono valitsin
+  }
+}
+
+function favNote(text) {
+  const n = $('#favNote', el.panel);
+  if (n) n.textContent = text;
+}
+
+/** Tähden napautus: lisää tai poistaa paikan. Täysi lista kertoo syyn eikä tee mitään. */
+function favToggleAt(p) {
+  if (!p) return;
+  const r = toggleFav(state.favs, p);
+  if (!r.ok) {
+    if (r.reason === 'full') favNote(`Suosikkeja voi olla enintään ${FAV_MAX}. Poista ensin jokin.`);
+    return;
+  }
+  state.favs = r.list;
+  persistFavs();
+  const home = r.on && state.favs[0]?.home && samePlace(state.favs[0], p);
+  favNote(r.on ? `${p.name} tallennettu suosikiksi${home ? ' ja kodiksi' : ''}.` : `${p.name} poistettu suosikeista.`);
+  if (!renderFavs()) $('#favCur .fav-ic', el.panel)?.focus({ preventScroll: true });
+  if (r.on) void refreshFavWx();
+}
+
+/** Poisto suosikkilistasta: fokus siirtyy seuraavan rivin tähteen (tai nykyisen paikan tähteen), ettei se putoa paneelin alkuun. */
+function favRemoveAt(i) {
+  const p = state.favs[i];
+  if (!p) return;
+  state.favs = removeFav(state.favs, p);
+  persistFavs();
+  favNote(`${p.name} poistettu suosikeista.`);
+  renderFavs();
+  const next = $(`#favs [data-act="fav-del"][data-i="${Math.min(i, state.favs.length - 1)}"]`, el.panel) || $('#favCur .fav-ic', el.panel) || $('#q', el.panel);
+  next?.focus({ preventScroll: true });
+}
+
+/** Koti-painike: suosikista tulee koti (ensimmäiseksi); uusi painallus poistaa kotimerkinnän. */
+function favHomeAt(i) {
+  const p = state.favs[i];
+  if (!p) return;
+  const was = Boolean(p.home);
+  state.favs = toggleHome(state.favs, p);
+  persistFavs();
+  favNote(was ? `${p.name} ei ole enää koti.` : `${p.name} on nyt koti, ja se näkyy suosikeissa ensimmäisenä.`);
+  renderFavs();
+  $(`#favs [data-act="fav-home"][data-i="${findFav(state.favs, p)}"]`, el.panel)?.focus({ preventScroll: true });
+}
+
+/** Suosikki nimellä (Geminin työkalu): koko nimi ilman ääkkösiä ja kirjainkokoa. */
+function favByName(q) {
+  const k = fold(String(q || '').trim());
+  return k ? state.favs.find((p) => fold(p.name) === k) || null : null;
+}
+
 // ---------- Datan haku ----------
 
 let loadSeq = 0;
@@ -766,6 +915,7 @@ async function runLoad({ manual = false, signal } = {}) {
   state.fc = fc;
   state.fetchedAt = nowMs();
   state.error = '';
+  rememberForecast(placeKey(place), { at: state.fetchedAt, fc, results });
   if (state.banner?.id === 'stale') setBanner(null);
   validateSelection();
   persistCache();
@@ -785,13 +935,24 @@ function setPlace(place) {
   state.fc = null;
   state.results = null;
   state.error = '';
+  // Nopea vaihto: äskettäin haettu ennuste (esim. suosikki) näkyy heti, ja uusi haku päivittää sen taustalla.
+  // Edellisen paikan kesken oleva haku perutaan (load), ja sen myöhästynyt vastaus ohitetaan (loadSeq).
+  const hit = placeData.get(placeKey(place));
+  if (hit && nowMs() - hit.at < SWITCH_CACHE_MS) {
+    state.fc = hit.fc;
+    state.results = hit.results;
+    state.fetchedAt = hit.at;
+  }
   state.sel = { type: 'now' };
   state.dayOpen = null;
   state.ai = { status: 'idle', text: '', error: '', fp: '' };
   state.chatLast = null;
   setBanner(null);
   persistPlace();
-  skyIdle();
+  if (state.fc) {
+    validateSelection();
+    updateSky(true);
+  } else skyIdle();
   renderAll();
   load();
 }
@@ -852,7 +1013,7 @@ async function doSearch() {
     const list = await searchPlaces(q, { fetchFn });
     if (seq !== searchSeq) return;
     state.found = list;
-    out.innerHTML = resultsHtml(list, list.length ? '' : `Ei tuloksia haulle "${q}".`);
+    out.innerHTML = resultsHtml(list, list.length ? '' : `Ei tuloksia haulle "${q}".`, favCheck);
   } catch (e) {
     if (seq !== searchSeq) return;
     out.innerHTML = resultsHtml([], `Haku epäonnistui: ${e.message}`);
@@ -967,7 +1128,10 @@ let hasEntry = false;
 const TITLES = { search: 'Paikkakunta', settings: 'Asetukset', chat: 'Kysy SääÄlyltä', about: 'Tietoja ja tietolähteet' };
 
 function sheetContent(kind) {
-  if (kind === 'search') return searchSheetHtml({ recent: state.recent });
+  if (kind === 'search') {
+    const cur = findFav(state.favs, state.place);
+    return searchSheetHtml({ recent: state.recent, favs: state.favs, wx: state.favs.map((p) => favWxFor(p)), current: cur, place: state.place, isFav: favCheck, full: state.favs.length >= FAV_MAX });
+  }
   if (kind === 'chat') return chatSheetHtml({ mode: aiMode(), hasKey: keyOn(), hasMessages: state.chat.length > 0 });
   if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs', 'radarmap', 'cloudmap'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
   return settingsSheetHtml({ hasKey: keyOn(), mode: aiMode(), model: aiSettings.model(), refreshMin: state.refreshMin, models: state.models, demo: DEMO, sens: state.sens, anim: store.bool('anim', true) });
@@ -1031,6 +1195,10 @@ function openSheet(kind) {
     chatShown = 0;
     renderChat();
     syncAi();
+  }
+  if (kind === 'search') {
+    state.found = [];
+    void refreshFavWx();
   }
   el.sheet.hidden = false;
   el.app.inert = true;
@@ -1112,6 +1280,14 @@ function renderChat() {
 }
 
 const placeData = new Map();
+const SWITCH_CACHE_MS = 30 * 60000; // paikkaa vaihdettaessa näin tuore muistissa oleva ennuste näytetään heti
+
+/** Muistiin viimeisimmät ennusteet (enintään 8 paikkaa): chatin jatkokysymykset ja nopea paikan vaihto. */
+function rememberForecast(key, data) {
+  placeData.delete(key);
+  placeData.set(key, data);
+  if (placeData.size > 8) placeData.delete(placeData.keys().next().value);
+}
 
 /** Minkä tahansa paikan yhdistetty ennuste (chat ja Geminin työkalu). Pidetään muistissa 10 min, jotta jatkokysymykset eivät hae uudelleen. */
 async function forecastFor(place) {
@@ -1127,15 +1303,15 @@ async function forecastFor(place) {
   }
   if (!fc) throw new Error(`yksikään säämalli ei vastannut. ${summarizeErrors(results)}`);
   const data = { at: nowMs(), fc, results };
-  placeData.set(key, data);
-  if (placeData.size > 8) placeData.delete(placeData.keys().next().value);
+  rememberForecast(key, data);
   return data;
 }
 
 async function runTool(name, args) {
   if (name !== 'get_forecast') throw new Error('Tuntematon työkalu');
   const q = String(args.place || '').trim();
-  const found = await searchPlaces(q, { fetchFn, count: 3 });
+  const fav = favByName(q); // suosikki ensin: sama paikka kuin paikkalistassa
+  const found = fav ? [fav] : await searchPlaces(q, { fetchFn, count: 3 });
   if (!found.length) throw new Error(`Paikkaa "${q}" ei löytynyt`);
   const p = found[0];
   const { fc, results } = await forecastFor(p);
@@ -1154,6 +1330,7 @@ async function internalAnswer(text) {
     nowcast: currentNowcast(nowMs()),
     geocode: (q) => searchPlaces(q, { fetchFn, count: 5 }),
     forecastFor,
+    favorites: state.favs,
   });
   state.chatLast = out.last || null;
   return out;
@@ -1578,6 +1755,12 @@ const ACTIONS = {
   'ai-run': () => runAi({ force: true }),
   pick: (t) => pickPlace(state.found[+t.dataset.i]),
   'pick-recent': (t) => pickPlace(state.recent[+t.dataset.i]),
+  'pick-fav': (t) => pickPlace(state.favs[+t.dataset.i]),
+  'fav-cur': () => favToggleAt(state.place),
+  'fav-found': (t) => favToggleAt(state.found[+t.dataset.i]),
+  'fav-recent': (t) => favToggleAt(state.recent[+t.dataset.i]),
+  'fav-del': (t) => favRemoveAt(+t.dataset.i),
+  'fav-home': (t) => favHomeAt(+t.dataset.i),
   ask: (t) => sendChat(t.dataset.q),
   mode: (t) => pickMode(t.dataset.mode),
   'mode-on': () => pickMode(aiSettings.mode() === 'internal' ? 'grounded' : aiSettings.mode()),
@@ -1811,7 +1994,9 @@ async function boot() {
   }
   if (!state.place.name && !first) {
     // Tallennetulta paikalta puuttui nimi (sovellus suljettiin kesken haun)
-    reverseGeocode(state.place.lat, state.place.lon, { fetchFn }).then((geo) => {
+    const named = state.place;
+    reverseGeocode(named.lat, named.lon, { fetchFn }).then((geo) => {
+      if (state.place !== named) return; // käyttäjä ehti vaihtaa paikkaa: nimi kuului edelliselle
       Object.assign(state.place, { name: geo.name, region: geo.region, country: geo.country, note: geo.note || '' });
       persistPlace();
       renderAll();
@@ -1824,5 +2009,5 @@ async function boot() {
   setTimeout(checkForUpdate, 4000, { force: true });
 }
 
-globalThis.__saaaly = { state, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, openMap, get cube() { return cube; }, get map() { return mapView; } };
+globalThis.__saaaly = { state, get favWx() { return favWx; }, VERSION, BUILD, load, select, checkForUpdate, explainFetchError, goPage, openMap, get cube() { return cube; }, get map() { return mapView; } };
 boot();

@@ -441,3 +441,23 @@ test('satunnaiset kysymykset eivät kaada moottoria eivätkä tuota rikkinäist�
     ctx.last = r.last;
   }
 });
+
+test('suosikit: suosikin nimi ratkeaa ilman paikkahakua ja voittaa samannimisen tunnetun paikan', async () => {
+  const favorites = [
+    { name: 'Särkisalo', region: 'Varsinais-Suomi', country: 'Suomi', lat: 60.07, lon: 22.79 },
+    { name: 'Oulu', region: 'Pohjois-Pohjanmaa', country: 'Suomi', lat: 65.18, lon: 25.35 },
+  ];
+  const calls = [];
+  const ctx = { ...ctxFor({ calls }), favorites };
+  const seen = [];
+  const ff = ctx.forecastFor;
+  ctx.forecastFor = async (p) => (seen.push(p), ff(p));
+  const r = await answerQuestion('Sataako Särkisalossa huomenna?', ctx);
+  assert.match(r.text, /^\*\*Särkisalo, Varsinais-Suomi\*\*/);
+  assert.deepEqual(calls, [['forecastFor', 'Särkisalo']], 'paikkahakua ei tarvittu');
+  await answerQuestion('Millainen sää on Oulussa?', ctx);
+  assert.equal(seen.at(-1).lat, 65.18, 'suosikin koordinaatit, ei tunnetun Oulun keskustan');
+  const plain = [];
+  await answerQuestion('Millainen sää on Oulussa?', ctxFor({ calls: plain }));
+  assert.deepEqual(plain, [['forecastFor', 'Oulu']]);
+});

@@ -9,6 +9,7 @@ import { sunEvents, dayLengthMs, moonInfo } from './sun.js';
 import { fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, localNow, zonedToUtcMs } from './util.js';
 import { placeKey, haversineKm } from './geo.js';
 import { outfit, slipperyHours } from './advice.js';
+import { matchInflected, fold } from './gazetteer.js';
 
 // ---------- Apurit ----------
 
@@ -1096,10 +1097,24 @@ export function pickGeocoded(cand, list) {
   return best?.r || null;
 }
 
+/** Käyttäjän suosikki kysymyksen sanalle ("Rukalla", "Mökkilässä"): taivutus kuten tunnetuilla paikoilla. */
+function favoriteFor(cand, favs) {
+  if (!Array.isArray(favs) || !favs.length) return null;
+  const entries = favs.filter((f) => f && f.name && Number.isFinite(f.lat) && Number.isFinite(f.lon)).map((f) => ({ ...f, key: fold(f.name) }));
+  const hit = matchInflected(cand.word, entries) || (cand.offline ? entries.find((e) => e.key === fold(cand.offline.name)) : null);
+  return hit ? { name: hit.name, region: hit.region || '', country: hit.country || '', lat: hit.lat, lon: hit.lon, favorite: true } : null;
+}
+
 async function resolvePlaces(q, ctx, budget = { geocode: 4 }) {
   const found = [];
   const unresolved = [];
   for (const cand of q.places) {
+    // Suosikit ensin: käyttäjän tallentama paikka voittaa samannimisen paikkahaun tuloksen eikä vaadi verkkoa
+    const fav = favoriteFor(cand, ctx.favorites);
+    if (fav) {
+      found.push({ ...fav, word: cand.word });
+      continue;
+    }
     if (cand.offline) {
       found.push({ ...cand.offline, word: cand.word });
       continue;
@@ -1128,7 +1143,8 @@ const isCurrent = (p, cur) => Boolean(cur) && (lc(p.name) === lc(cur.name) || ha
 // ---------- Pääfunktio ----------
 
 /**
- * Vastaa kysymykseen. ctx: { place, fc, results, nowMs, last, geocode(query), forecastFor(place), nowcast? }.
+ * Vastaa kysymykseen. ctx: { place, fc, results, nowMs, last, geocode(query), forecastFor(place), nowcast?, favorites? }.
+ * favorites: käyttäjän suosikkipaikat (favorites.js); niiden nimet ratkeavat ennen paikkahakua.
  * nowcast: tutkaennusteen tulkinta (nowcast.js summarizeNowcast), vain nykyiselle paikalle.
  * Palauttaa { text, intents, place, last, understood }. last tallennetaan seuraavaa kysymystä varten.
  */

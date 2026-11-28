@@ -193,7 +193,7 @@ def expected_temp(lat, lon):
     return json.loads(out)
 
 with sync_playwright() as pw:
-    browser = pw.chromium.launch()
+    browser = pw.chromium.launch(executable_path=os.environ.get("PW_CHROMIUM") or None)  # PW_CHROMIUM: valmiiksi asennettu Chromium
     print('Ensimmäinen käynnistys (sijainti sallittu)')
     ctx, page = new_page(browser)
     page.goto(BASE)
@@ -722,7 +722,7 @@ with sync_playwright() as pw:
     ctx3.close()
 
     print('Kestävyys')
-    GARBAGE = {'recent': '{"a":1}', 'place': '[1,2]', 'cache': '"x"', 'sens': '"x"', 'refreshMin': '{}', 'geminiKey': '{"a":1}', 'geminiModel': '[]', 'aiMode': '[]', 'anim': '"x"', 'resolved': '1', 'dead': '[]', 'schema': '"x"'}
+    GARBAGE = {'recent': '{"a":1}', 'place': '[1,2]', 'cache': '"x"', 'sens': '"x"', 'refreshMin': '{}', 'geminiKey': '{"a":1}', 'geminiModel': '[]', 'aiMode': '[]', 'anim': '"x"', 'resolved': '1', 'dead': '[]', 'schema': '"x"', 'favs': '{"a":1}', 'favWx': '[1,2]'}
     ctx4, page4 = new_page(browser)
     def t_garbage():
         ctx4.add_init_script('(() => { const g = %s; for (const k in g) localStorage.setItem("saaaly." + k, g[k]); })()' % json.dumps(GARBAGE))
@@ -859,6 +859,151 @@ with sync_playwright() as pw:
     check('virheen selitys erottaa CORS-eston (palvelin vastaa) ja puuttuvan yhteyden', t_explain_cors)
     ctx9.close()
     other.shutdown()
+
+    print('Suosikit')
+    FAVS0 = [{'name': 'Rovaniemi', 'region': 'Lappi', 'country': 'Suomi', 'lat': 66.5039, 'lon': 25.7294},
+             {'name': 'Oulu', 'region': 'Pohjois-Pohjanmaa', 'country': 'Suomi', 'lat': 65.0121, 'lon': 25.4651},
+             {'name': 'Särkisalo', 'region': 'Varsinais-Suomi', 'country': 'Suomi', 'lat': 60.07, 'lon': 22.79}]
+    ctx10, page10 = new_page(browser)
+    # Tallennettu paikka (Turku) ja kolme suosikkia valmiina; vain ensimmäisellä latauksella, ettei testin muutoksia kirjoiteta yli
+    ctx10.add_init_script("""(() => { if (localStorage.getItem('saaaly.favs')) return;
+        localStorage.setItem('saaaly.place', JSON.stringify({ name: 'Turku', region: 'Varsinais-Suomi', country: 'Suomi', lat: 60.4518, lon: 22.2666, mode: 'manual' }));
+        localStorage.setItem('saaaly.favs', %s); })()""" % json.dumps(json.dumps(FAVS0)))
+    cur_reqs = lambda: [u for u in net_log if u.startswith('https://api.open-meteo.com/') and 'current=' in u]
+
+    def t_fav_lazy():
+        n0 = len(cur_reqs())
+        page10.goto(BASE)
+        ready(page10)
+        page10.wait_for_timeout(500)
+        assert len(cur_reqs()) == n0, 'suosikkien säätä haettiin ennen kuin paikkapaneeli avattiin (hidastaisi pääennustetta)'
+        page10.click('#placeBtn')
+        expect(page10.locator('#favs .fav-row')).to_have_count(3)
+        expect(page10.locator('#favs .fav-t')).to_have_count(3, timeout=8000)
+        new = cur_reqs()[n0:]
+        assert len(new) == 1, f'suosikkien sää pitää hakea yhdellä pyynnöllä: {new}'
+        q = new[0].split('?', 1)[1]
+        assert 'latitude=66.50%2C65.01%2C60.07' in q or 'latitude=66.50,65.01,60.07' in q, q
+        assert 'hourly' not in q, 'kevyt haku: ei tuntiennustetta'
+        page10.keyboard.press('Escape')
+        page10.click('#placeBtn')
+        expect(page10.locator('#favs .fav-t')).to_have_count(3)
+        page10.wait_for_timeout(300)
+        assert len(cur_reqs()) == n0 + 1, 'avattiin uudelleen 15 minuutin sisällä: välimuistin pitäisi riittää'
+        cached = json.loads(page10.evaluate("localStorage.getItem('saaaly.favWx')"))
+        assert len(cached) == 3, cached
+    check('suosikit: sää haetaan vasta paneelia avattaessa yhdellä monen paikan pyynnöllä ja välimuistista uudelleen', t_fav_lazy)
+
+    def t_fav_star():
+        star = page10.locator('#favCur [data-act=fav-cur]')
+        expect(star).to_have_attribute('aria-pressed', 'false')
+        expect(star).to_have_attribute('aria-label', 'Suosikki: Turku')
+        star.focus()
+        page10.keyboard.press('Space')  # näppäimistöllä
+        expect(page10.locator('#favCur [data-act=fav-cur]')).to_have_attribute('aria-pressed', 'true')
+        assert page10.evaluate("document.activeElement.dataset.act") == 'fav-cur', 'fokus katosi tähden painalluksessa'
+        expect(page10.locator('#favNote')).to_contain_text('Turku tallennettu suosikiksi')
+        expect(page10.locator('#favs .fav-row')).to_have_count(4)
+        row = page10.locator('#favs .fav-row').nth(3)
+        expect(row).to_contain_text('Nyt')
+        # Nykyisen paikan lämpötila tulee yhdistelmästä: sama luku kuin etusivulla
+        assert row.locator('.fav-t').text_content() == page10.text_content('.temp').strip(), 'suosikin lämpötila poikkeaa etusivusta'
+        saved = json.loads(page10.evaluate("localStorage.getItem('saaaly.favs')"))
+        assert [f['name'] for f in saved] == ['Rovaniemi', 'Oulu', 'Särkisalo', 'Turku'], saved
+        # Koti: Turku ensimmäiseksi
+        page10.click('#favs [data-act=fav-home][data-i="3"]')
+        expect(page10.locator('#favs .fav-row').first).to_contain_text('Turku')
+        expect(page10.locator('#favs [data-act=fav-home][data-i="0"]')).to_have_attribute('aria-pressed', 'true')
+        expect(page10.locator('#favs [data-act=fav-home][aria-pressed=true]')).to_have_count(1)
+        assert json.loads(page10.evaluate("localStorage.getItem('saaaly.favs')"))[0] == {'name': 'Turku', 'region': 'Varsinais-Suomi', 'country': 'Suomi', 'lat': 60.4518, 'lon': 22.2666, 'home': True}
+        # Haun tuloksen tähti; sama paikka ~1 km:n sisällä ei tule kahdesti
+        page10.fill('#q', 'Rovan')
+        res = page10.locator('#results .fav-row').first
+        expect(res).to_contain_text('Rovaniemi', timeout=6000)
+        expect(res.locator('[data-act=fav-found]')).to_have_attribute('aria-pressed', 'true')
+        page10.fill('#q', 'Kuop')
+        res = page10.locator('#results .fav-row').first
+        expect(res).to_contain_text('Kuopio', timeout=6000)
+        res.locator('[data-act=fav-found]').click()
+        expect(res.locator('[data-act=fav-found]')).to_have_attribute('aria-pressed', 'true')
+        expect(page10.locator('#favs .fav-row')).to_have_count(5)
+        expect(page10.locator('#favs .fav-t')).to_have_count(5, timeout=8000)
+        page10.fill('#q', '')
+    check('suosikit: tähti (myös näppäimistöllä) tallentaa paikan, koti siirtyy ensimmäiseksi, haun tuloksen voi tallentaa', t_fav_star)
+
+    def t_fav_full():
+        page10.evaluate("""() => { const s = window.__saaaly.state; for (let i = 0; s.favs.length < 8; i++) s.favs.push({ name: 'Testi ' + i, region: '', country: 'Suomi', lat: 61 + i, lon: 30 }); }""")
+        page10.keyboard.press('Escape')
+        page10.click('#placeBtn')
+        expect(page10.locator('.fav-count')).to_have_text('8/8')
+        page10.fill('#q', 'Tamp')
+        res = page10.locator('#results .fav-row').first
+        expect(res).to_contain_text('Tampere', timeout=6000)
+        res.locator('[data-act=fav-found]').click()
+        expect(page10.locator('#favNote')).to_contain_text('enintään 8')
+        expect(res.locator('[data-act=fav-found]')).to_have_attribute('aria-pressed', 'false')
+        page10.fill('#q', '')
+        # Poisto: rivi pois, fokus seuraavan rivin tähteen
+        for _ in range(3):
+            page10.click('#favs [data-act=fav-del][data-i="5"]')
+        expect(page10.locator('#favs .fav-row')).to_have_count(5)
+        assert page10.evaluate("document.activeElement.dataset.act") == 'fav-del', 'fokus putosi poiston jälkeen'
+        expect(page10.locator('#favNote')).to_contain_text('poistettu suosikeista')
+        assert len(json.loads(page10.evaluate("localStorage.getItem('saaaly.favs')"))) == 5
+    check('suosikit: enintään 8 (syy kerrotaan), poisto on yksi napautus ja fokus säilyy', t_fav_full)
+
+    def t_fav_stale():
+        # Oulun ennuste viivästyy; käyttäjä vaihtaa heti takaisin Turkuun. Myöhästynyt vastaus ei saa korvata Turun säätä.
+        held = []
+        rx = re.compile(r'https://api\.open-meteo\.com/v1/forecast\?latitude=65\.01&.*models=')
+        ctx10.route(rx, lambda r: held.append(r))
+        try:
+            page10.click('#favs .fav-row:has-text("Oulu") [data-act=pick-fav]')
+            page10.wait_for_function("() => window.__saaaly.state.place.name === 'Oulu' && window.__saaaly.state.loading")
+            page10.wait_for_timeout(300)
+            assert held, 'Oulun hakua ei pidätetty'
+            page10.click('#placeBtn')
+            page10.click('#favs .fav-row:has-text("Turku") [data-act=pick-fav]')
+            ready(page10, 'Turku')
+            temp = page10.text_content('.temp').strip()
+        finally:
+            ctx10.unroute(rx)
+        for r in held:
+            try:
+                m = mock_data(r.request.url)
+                r.fulfill(status=m['status'], headers=CORS, body=m['body'])
+            except Exception:
+                pass  # peruttu pyyntö: selain ei enää odota vastausta
+        page10.wait_for_timeout(1200)
+        s = page10.evaluate("(() => { const s = window.__saaaly.state; return { name: s.place.name, lat: s.fc.lat, loading: s.loading }; })()")
+        assert s['name'] == 'Turku' and abs(s['lat'] - TURKU[0]) < 0.01, f'vanhan paikan vastaus korvasi uuden: {s}'
+        assert page10.text_content('.temp').strip() == temp
+        expect(page10.locator('#placeBtn .pn')).to_have_text('Turku')
+    check('paikan vaihto: edellisen paikan myöhästynyt vastaus ei korvaa uuden paikan säätä', t_fav_stale)
+
+    def t_fav_switch():
+        # Äsken katsottu paikka näkyy heti muistista (ei luurankoa), ja uusi haku päivittää taustalla
+        page10.click('#placeBtn')
+        page10.click('#favs .fav-row:has-text("Rovaniemi") [data-act=pick-fav]')
+        ready(page10, 'Rovaniemi')
+        page10.click('#placeBtn')
+        page10.click('#favs .fav-row:has-text("Turku") [data-act=pick-fav]')
+        assert page10.evaluate("(() => { const s = window.__saaaly.state; return Boolean(s.fc) && Math.abs(s.fc.lat - s.place.lat) < 0.01; })()"), 'suosikin ennuste ei näkynyt heti'
+        expect(page10.locator('.temp')).to_be_visible()
+        ready(page10, 'Turku')
+    check('suosikkiin vaihto näyttää äsken haetun ennusteen heti', t_fav_switch)
+
+    def t_fav_chat():
+        page10.click('.ask-btn')
+        n0 = len(net_log)
+        ask(page10, 'Sataako Särkisalossa huomenna?')
+        expect(page10.locator('.msg.bot').last).to_contain_text('Särkisalo, Varsinais-Suomi', timeout=10000)
+        assert not [u for u in net_log[n0:] if 'geocoding-api' in u], 'suosikki haettiin paikkahaulla'
+        assert [u for u in net_log[n0:] if 'latitude=60.07' in u], 'suosikin säätä ei haettu sen koordinaateilla'
+        page10.click('.sheet-head [data-act=close]')
+        assert not [e for e in page10.errors if 'Failed to load resource' not in e], page10.errors[:3]
+    check('chat: suosikin nimi ratkeaa ilman paikkahakua', t_fav_chat)
+    ctx10.close()
 
     ctx7, page7 = new_page(browser)
     ctx7.route(re.compile(r'https://raw\.githubusercontent\.com/'), lambda r: r.fulfill(status=200, headers=CORS, body=mock_data(r.request.url, 'thunder')['body']))
