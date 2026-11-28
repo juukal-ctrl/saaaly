@@ -193,7 +193,7 @@ def expected_temp(lat, lon):
     return json.loads(out)
 
 with sync_playwright() as pw:
-    browser = pw.chromium.launch()
+    browser = pw.chromium.launch(executable_path=os.environ.get('PW_CHROMIUM') or None)  # PW_CHROMIUM: valmiiksi asennettu selain
     print('Ensimmäinen käynnistys (sijainti sallittu)')
     ctx, page = new_page(browser)
     page.goto(BASE)
