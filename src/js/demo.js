@@ -73,6 +73,19 @@ export function syntheticGrid({ lats, lons, nowMs = Date.now(), hours = 25, scen
   });
 }
 
+/** Suosikkien nykysää (Open-Meteon current-muoto, monta pistettä = taulukko) samasta esimerkkisäästä kuin ennuste. */
+export function syntheticCurrent({ lats, lons, nowMs = Date.now(), scenario = 'mixed' }) {
+  const out = lats.map((la, k) => {
+    const lo = lons[k];
+    const r = syntheticResponse({ lat: la, lon: lo, modelId: 'ecmwf_ifs', nowMs, days: 2, scenario });
+    const iso = localNow(nowMs, 'Europe/Helsinki').iso.slice(0, 13) + ':00';
+    const i = Math.max(0, r.hourly.time.indexOf(iso));
+    const isDay = sunPosition(nowMs, la, lo).altitudeDeg > 0 ? 1 : 0;
+    return { latitude: la, longitude: lo, current: { time: iso, temperature_2m: r.hourly.temperature_2m[i], weather_code: r.hourly.weather_code[Math.min(i + 1, r.hourly.weather_code.length - 1)], is_day: isDay } };
+  });
+  return out.length === 1 ? out[0] : out;
+}
+
 /** RainViewerin weather-maps.json esimerkkinä: 13 kehystä 10 minuutin välein. */
 export function syntheticRadarMaps(nowMs = Date.now()) {
   const last = Math.floor(nowMs / 600000) * 600 - 600;
@@ -226,6 +239,11 @@ export function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
   return async (input) => {
     const url = new URL(typeof input === 'string' ? input : input.url);
     log?.(url.href);
+    if (url.hostname === 'api.open-meteo.com' && url.searchParams.get('current')) {
+      const lats = (url.searchParams.get('latitude') || '').split(',').map(Number);
+      const lons = (url.searchParams.get('longitude') || '').split(',').map(Number);
+      return json(syntheticCurrent({ lats, lons, nowMs: nowMs ?? Date.now(), scenario }));
+    }
     if (url.hostname === 'api.open-meteo.com' && (url.searchParams.get('latitude') || '').includes(',')) {
       const lats = url.searchParams.get('latitude').split(',').map(Number);
       const lons = url.searchParams.get('longitude').split(',').map(Number);

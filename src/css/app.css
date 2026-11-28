@@ -5001,3 +5001,200 @@ body:not(.light) .lg-snow i:not(.rain) {
   font: inherit;
   font-size: 13px;
 }
+
+/* ---------- 1.0: suosikkipaikat paikkapaneelissa ---------- */
+
+.fav-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+body.light .fav-row {
+  border-bottom-color: var(--line);
+}
+
+.fav-row > .row-btn {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+
+.fav-row .row-btn b,
+.fav-row .row-btn small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fav-pick {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fav-txt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fav-txt b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fav-tag {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.fav-tag.now {
+  border-style: dashed;
+}
+
+.fav-wx {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fav-wx.pending {
+  min-width: 34px;
+  justify-content: flex-end;
+  color: var(--ink-3);
+}
+
+.fav-t {
+  min-width: 3ch;
+  font-size: 19px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.fav-ic {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--ink-3);
+}
+
+.fav-ic svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.fav-ic:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.fav-ic.home {
+  width: 40px;
+  opacity: 0.75;
+}
+
+.fav-ic.home svg {
+  width: 19px;
+  height: 19px;
+}
+
+.fav-ic.star.on {
+  color: var(--dusk);
+}
+
+.fav-ic.star.on svg {
+  fill: currentColor;
+}
+
+.fav-ic.home.on {
+  color: var(--ice);
+  opacity: 1;
+}
+
+.fav-ic.home.on svg {
+  fill: color-mix(in srgb, currentColor 28%, transparent);
+}
+
+.fav-cur {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 6px 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+body.light .fav-cur {
+  background: var(--glass);
+}
+
+.fav-cur .fav-txt {
+  flex: 1;
+}
+
+.fav-cur .fav-txt b {
+  display: block;
+  overflow: hidden;
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fav-cur small {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.fav-cur .fav-txt small:first-child {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.fav-hint {
+  flex: none;
+  max-width: 40%;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  text-align: right;
+}
+
+.sheet h3.label {
+  font-size: 13.5px;
+}
+
+.fav-count {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.fav-note:empty {
+  display: none;
+}
+
+.fav-empty {
+  margin: 6px 0 4px;
+}

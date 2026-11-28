@@ -182,6 +182,35 @@ export function editDistance(a, b) {
   return d[m][n];
 }
 
+/**
+ * Taivutetun sanan vertailu nimilistaan ({ key: fold(nimi) }): sanasta poistetaan taivutuspääte, ja vartaloa verrataan nimen alkuun.
+ * Palauttaa parhaiten osuvan alkion tai null. Käytetään sekä tunnetuille paikoille että käyttäjän suosikeille (answer.js).
+ */
+export function matchInflected(word, entries) {
+  const raw = String(word).trim();
+  const w = fold(raw);
+  if (w.length < 3) return null;
+  const capital = /^\p{Lu}/u.test(raw);
+  const sufs = capital ? [...CASE_SUFFIXES.map(fold), ...COLLOQ_SUFFIXES] : LOCATIVE_SUFFIXES.map(fold);
+  let best = null;
+  for (const c of entries) {
+    let score = -1;
+    if (w === c.key) score = 1000;
+    else {
+      for (const suf of sufs) {
+        if (w.length - suf.length < 3 || !w.endsWith(suf)) continue;
+        const stem = w.slice(0, -suf.length);
+        const cp = commonPrefix(stem, c.key);
+        if (cp < Math.max(3, c.key.length - (c.key.length <= 5 ? 1 : 2))) continue;
+        if (stem.length > c.key.length + 2 || stem.length < c.key.length - 3) continue;
+        score = Math.max(score, cp * 10 - Math.abs(stem.length - c.key.length) - (COLLOQ_SUFFIXES.includes(suf) ? 1 : 0));
+      }
+    }
+    if (score >= 0 && (!best || score > best.score)) best = { score, c };
+  }
+  return best ? best.c : null;
+}
+
 const ALIAS_ENDINGS = ['', 'ssa', 'sta', 'lla', 'lta', 'lle', 'n', 'a', 'an', 'in', 'iin', 'ista', 'issa', 'illa', 'ille', 's', 'st', 'l', 'lt'];
 
 function asPlace(c) {
@@ -212,24 +241,8 @@ export function findOffline(word) {
   }
 
   // 2) taivutetut perusnimet
-  let best = null;
-  for (const c of ENTRIES) {
-    let score = -1;
-    if (w === c.key) score = 1000;
-    else {
-      const sufs = capital ? [...CASE_SUFFIXES.map(fold), ...COLLOQ_SUFFIXES] : LOCATIVE_SUFFIXES.map(fold);
-      for (const suf of sufs) {
-        if (w.length - suf.length < 3 || !w.endsWith(suf)) continue;
-        const stem = w.slice(0, -suf.length);
-        const cp = commonPrefix(stem, c.key);
-        if (cp < Math.max(3, c.key.length - (c.key.length <= 5 ? 1 : 2))) continue;
-        if (stem.length > c.key.length + 2 || stem.length < c.key.length - 3) continue;
-        score = Math.max(score, cp * 10 - Math.abs(stem.length - c.key.length) - (COLLOQ_SUFFIXES.includes(suf) ? 1 : 0));
-      }
-    }
-    if (score >= 0 && (!best || score > best.score)) best = { score, c };
-  }
-  if (best) return asPlace(best.c);
+  const best = matchInflected(raw, ENTRIES);
+  if (best) return asPlace(best);
 
   // 3) yhden merkin kirjoitusvirhe (pitkät nimet, vähintään seitsemän merkin sana)
   if (w.length >= 7) {

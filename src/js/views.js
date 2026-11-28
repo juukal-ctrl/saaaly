@@ -8,6 +8,7 @@ import { icon, icon3d } from './icons.js';
 import { meteogram, RANGES } from './meteogram.js';
 import { sunEvents, dayLengthMs } from './sun.js';
 import { placeSubtitle } from './geo.js';
+import { FAV_MAX } from './favorites.js';
 
 export const SVG = {
   locate: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
@@ -20,6 +21,8 @@ export const SVG = {
   caret: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>',
   sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>',
   info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.1"/></svg>',
+  star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.3l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 16.7l-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/></svg>',
+  home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5.5h4V20"/></svg>',
 };
 
 /** Neuvojen piirrokset: yksinkertaiset viivakuvat, väri tulee tekstistä (currentColor). */
@@ -566,23 +569,69 @@ export function modeSwitchHtml({ mode, hasKey }) {
 
 // ---------- Sivupaneelit ----------
 
-export function searchSheetHtml({ recent }) {
+/** Tähti (suosikki) tai talo (koti) paikkarivin perään. Tila kerrotaan aria-pressed-ominaisuudella; nimi pysyy samana. */
+function favToggle({ act, i, on, label, kind = 'star', extra = '' }) {
+  const svg = kind === 'home' ? SVG.home : SVG.star;
+  return `<button class="fav-ic ${kind}${on ? ' on' : ''}" type="button" data-act="${act}"${i != null ? ` data-i="${i}"` : ''} aria-pressed="${on}" aria-label="${esc(label)}"${extra}>${svg}</button>`;
+}
+
+/** Suosikin nykysää: 3D-kuvake ja lämpötila; ruudunlukijalle sanallinen sää. Ennen hakua näkyy vain viiva. */
+function favWxHtml(wx) {
+  if (!wx || !Number.isFinite(wx.temp)) return '<span class="fav-wx pending" aria-hidden="true">–</span>';
+  return `<span class="fav-wx">${icon3d(wx.sym, wx.isDay, 30)}<span class="fav-t">${esc(fmtTemp(wx.temp))}</span><span class="sr-only">, ${esc(SYMBOLS[wx.sym] || '')}</span></span>`;
+}
+
+/**
+ * Suosikkilista paikkapaneelissa: koti ensin. favs: [{ name, region, country, home }], wx: sama järjestys, { temp, sym, isDay } tai null.
+ * current: nykyisen paikan indeksi listalla (-1 = ei listalla).
+ */
+export function favListHtml({ favs = [], wx = [], current = -1 } = {}) {
+  if (!favs.length) return '<p class="note fav-empty">Tallenna paikka tähdellä, niin se on tässä yhden napautuksen päässä.</p>';
+  return favs
+    .map((p, i) => {
+      const tag = p.home ? '<span class="fav-tag">Koti</span>' : i === current ? '<span class="fav-tag now">Nyt</span>' : '';
+      const sub = placeSubtitle(p);
+      return `<div class="fav-row${p.home ? ' home' : ''}"><button class="row-btn fav-pick" type="button" data-act="pick-fav" data-i="${i}"${i === current ? ' aria-current="true"' : ''}><span class="fav-txt"><b>${esc(p.name)}${tag}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>${favWxHtml(wx[i])}</button>${favToggle({ act: 'fav-home', i, on: Boolean(p.home), label: `Koti: ${p.name}`, kind: 'home' })}${favToggle({ act: 'fav-del', i, on: true, label: `Suosikki: ${p.name}` })}</div>`;
+    })
+    .join('');
+}
+
+/** Paikkapaneelin yläosa: nykyinen paikka ja sen tähti. */
+export function favCurrentHtml({ place, on = false, full = false } = {}) {
+  if (!place?.name) return '';
+  const sub = placeSubtitle(place);
+  const hint = on ? 'Tallennettu suosikiksi' : full ? 'Suosikkeja on jo enimmäismäärä' : 'Tallenna suosikiksi';
+  return `<div class="fav-cur"><span class="fav-txt"><small>Nyt näytetään</small><b>${esc(place.name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span><span class="fav-hint" aria-hidden="true">${esc(hint)}</span>${favToggle({ act: 'fav-cur', on, label: `Suosikki: ${place.name}` })}</div>`;
+}
+
+/** isFav(p) kertoo, onko paikka jo suosikki (rivien tähdet). */
+export function searchSheetHtml({ recent, favs = [], wx = [], current = -1, place = null, isFav = () => false, full = false }) {
   const rec = (recent || [])
-    .map((p, i) => `<button class="row-btn" type="button" data-act="pick-recent" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>`)
+    .map((p, i) => (isFav(p) ? '' : `<div class="fav-row"><button class="row-btn" type="button" data-act="pick-recent" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>${favToggle({ act: 'fav-recent', i, on: false, label: `Suosikki: ${p.name}` })}</div>`))
     .join('');
   return `
     <div class="sheet-head"><h2>Paikkakunta</h2><button class="icon-btn" type="button" data-act="close" aria-label="Sulje">${SVG.close}</button></div>
     <div class="sheet-scroll">
       <form class="search" data-form="search" role="search">${SVG.search}<input id="q" name="q" type="search" placeholder="Hae paikkakuntaa" autocomplete="off" autocapitalize="words" enterkeyhint="search" aria-label="Hae paikkakuntaa"></form>
-      <button class="row-btn locate" type="button" data-act="locate">${SVG.locate}<span><b>Käytä sijaintiani</b><small>Paikannus selaimen kautta</small></span></button>
       <div id="results" class="results" aria-live="polite"></div>
+      <div id="favCur">${favCurrentHtml({ place, on: current >= 0, full })}</div>
+      <h3 class="label" id="favLbl">Suosikit${favs.length ? ` <span class="fav-count">${favs.length}/${FAV_MAX}</span>` : ''}</h3>
+      <div id="favs" class="results favs" role="group" aria-labelledby="favLbl">${favListHtml({ favs, wx, current })}</div>
+      <p id="favNote" class="note fav-note" role="status"></p>
+      <button class="row-btn locate" type="button" data-act="locate">${SVG.locate}<span><b>Käytä sijaintiani</b><small>Paikannus selaimen kautta</small></span></button>
       ${rec ? `<div class="label">Viimeksi katsotut</div><div class="results">${rec}</div>` : ''}
     </div>`;
 }
 
-export function resultsHtml(list, status) {
+/** Hakutulokset; isFav(p) näyttää rivin tähden tilan. */
+export function resultsHtml(list, status, isFav = () => false) {
   if (status) return `<p class="note">${esc(status)}</p>`;
-  return list.map((p, i) => `<button class="row-btn" type="button" data-act="pick" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>`).join('');
+  return list
+    .map((p, i) => {
+      const on = isFav(p);
+      return `<div class="fav-row"><button class="row-btn" type="button" data-act="pick" data-i="${i}"><b>${esc(p.name)}</b><small>${esc(placeSubtitle(p))}</small></button>${favToggle({ act: 'fav-found', i, on, label: `Suosikki: ${p.name}` })}</div>`;
+    })
+    .join('');
 }
 
 export function settingsSheetHtml({ hasKey, mode = 'internal', model, refreshMin, models, demo, sens = 0, anim = true, advOpen = false }) {
