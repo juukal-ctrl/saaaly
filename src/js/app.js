@@ -199,7 +199,7 @@ function renderAdvice(fc, now) {
   document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.day === state.vday)));
   el.verdict.hidden = !hl;
   patch('verdict', el.verdict, hl ? verdictHtml({ hl }) : '');
-  const html = alertsHtml({ alerts: v?.alerts || [], official: state.official, officialState: officialState(now), checkedAt: state.warn.fetchedAt || 0, nowMs: now });
+  const html = alertsHtml({ alerts: v?.alerts || [], official: state.official, officialState: officialState(now), checkedAt: state.warn.fetchedAt || 0, nowMs: now, tz: fc?.tz });
   el.alerts.hidden = !html;
   if (patch('alerts', el.alerts, html)) sizeStage();
 }

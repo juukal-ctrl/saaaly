@@ -1,7 +1,7 @@
 // views.js: näkymät HTML-merkkijonoina. Puhtaita funktioita: sama syöte antaa saman HTML:n.
 // Kaikki dynaaminen teksti kulkee esc()-funktion kautta.
 
-import { escapeHtml as esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, mdToHtml, zonedToUtcMs, localNow } from './util.js';
+import { escapeHtml as esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, mdToHtml, zonedToUtcMs, localNow, partsIn } from './util.js';
 import { SYMBOLS, nowPosition, snapshot, modelRows, describeNow, describeDay, describeHour, popText } from './blend.js';
 import { homeHeadline, hoursHeadline, weekHeadline, weekendLine, daySlippery, certaintyInfo, tomorrowHero, tomorrowWindow } from './headline.js';
 import { icon, icon3d } from './icons.js';
@@ -165,7 +165,7 @@ const FMI_WARN = 'https://www.ilmatieteenlaitos.fi/varoitukset';
  * Etusivun varoitusrivi radan yläpuolella: viralliset varoitukset (värillinen rengas) ja SääÄlyn omat huomiot (katkoviiva).
  * officialState 'unknown' tai varoitustiedon ikä yli 90 min: rauhallinen siru, jossa tiedon ikä ja linkki Ilmatieteen laitokselle.
  */
-export function alertsHtml({ alerts = [], official = [], officialState = 'ok', checkedAt = 0, nowMs = 0 }) {
+export function alertsHtml({ alerts = [], official = [], officialState = 'ok', checkedAt = 0, nowMs = 0, tz = 'Europe/Helsinki' }) {
   const off = official.slice(0, 3);
   const dup = (a) => off.some((o) => OWN_COVERED_BY[a.key]?.test(o.title || ''));
   const old = checkedAt && nowMs && nowMs - checkedAt > 90 * 60000;
@@ -183,8 +183,11 @@ export function alertsHtml({ alerts = [], official = [], officialState = 'ok', c
     rows.push(`<details class="alert own"><summary><i class="sev-dot" aria-hidden="true"></i><span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')} · SääÄlyn huomio</small></span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="${FMI_WARN}" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`);
   }
   if (unknown) {
-    const d = checkedAt ? new Date(checkedAt) : null;
-    const t = d ? `${d.toDateString() === new Date(nowMs || Date.now()).toDateString() ? '' : `${d.getDate()}.${d.getMonth() + 1}. `}klo ${d.getHours()}.${String(d.getMinutes()).padStart(2, '0')}` : '';
+    // Kellonaika paikan aikavyöhykkeessä (sama kuin muualla sovelluksessa), ei laitteen.
+    const d = checkedAt ? partsIn(checkedAt, tz) : null;
+    const n = partsIn(nowMs || Date.now(), tz);
+    const sameDay = d && d.y === n.y && d.m === n.m && d.d === n.d;
+    const t = d ? `${sameDay ? '' : `${d.d}.${d.m}. `}klo ${d.h}.${String(d.mi).padStart(2, '0')}` : '';
     const txt = d ? `Varoitustieto ${t}` : 'Varoituksia ei voitu tarkistaa';
     rows.push(`<a class="alert-chip" href="${FMI_WARN}" target="_blank" rel="noopener"><i aria-hidden="true"></i>${esc(txt)} · tarkista Ilmatieteen laitokselta</a>`);
   }
