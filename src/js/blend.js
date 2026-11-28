@@ -420,7 +420,9 @@ export function nowPosition(fc, nowMs) {
   let idx = fc.hours.findIndex((h) => h.t === hourIso);
   let frac = ln.minute / 60;
   if (idx < 0) {
-    idx = hourIso < fc.hours[0].t ? 0 : fc.hours.length - 1;
+    // Tunti puuttuu (ennusteen ulkopuolella tai aukko keskellä, kun mikään malli ei antanut lämpötilaa): viimeisin edeltävä tunti
+    idx = 0;
+    for (let i = 0; i < fc.hours.length && fc.hours[i].t <= hourIso; i++) idx = i;
     frac = 0;
   }
   return { idx, frac, local: ln };
@@ -458,13 +460,16 @@ export function snapshot(fc, idx, frac = 0) {
   };
 }
 
-/** Jokaisen mallin oma lämpötila nyt (interpoloitu) ja ero yhdistelmään. */
+/** Jokaisen mallin oma lämpötila nyt (interpoloitu) ja ero yhdistelmään. idx on fc.hours-indeksi, ei aikajanan indeksi. */
 export function modelRows(results, fc, idx, frac, blendTemp) {
+  const ti = timeIndex(fc);
   return results.map((r) => {
     if (!r.ok) return { model: r.model, ok: false, skipped: !!r.skipped, coverage: !!r.coverage, error: r.error };
     const arr = r.data.vars.temperature_2m;
+    // fc.align ottaa aikajanan indeksin: hours-indeksi muunnetaan aikaleiman kautta (hours ohittaa tunnit, joilta lämpötila puuttuu)
+    const jOf = (i) => (fc.hours[i] ? fc.align[r.model.key]?.(ti.get(fc.hours[i].t)) : null);
     const at = (i) => {
-      const j = fc.align[r.model.key]?.(i);
+      const j = jOf(i);
       const v = j == null ? null : arr[j];
       return v == null || !Number.isFinite(v) ? null : v;
     };
@@ -474,7 +479,7 @@ export function modelRows(results, fc, idx, frac, blendTemp) {
     let p24 = 0;
     const parr = r.data.vars.precipitation;
     for (let i = idx; i < Math.min(fc.hours.length, idx + 24); i++) {
-      const j = fc.align[r.model.key]?.(i);
+      const j = jOf(i);
       const v = parr && j != null ? parr[j] : null;
       if (v != null && Number.isFinite(v)) p24 += v;
     }

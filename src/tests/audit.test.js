@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { alertsHtml } from '../js/views.js';
+import { blendForecast, nowPosition, modelRows } from '../js/blend.js';
+import { parseModelResponse } from '../js/weather.js';
 
 test('varoitusrivin tarkistusaika näytetään paikan aikavyöhykkeessä, ei laitteen', () => {
   const now = Date.UTC(2026, 10, 26, 9, 45);
@@ -11,4 +13,38 @@ test('varoitusrivin tarkistusaika näytetään paikan aikavyöhykkeessä, ei lai
   // Päivä vaihtuu paikan mukaan: 21.30 UTC 25.11. on Helsingissä jo 26.11. (sama päivä kuin nyt), UTC:ssä edellinen päivä
   assert.match(alertsHtml({ checkedAt: Date.UTC(2026, 10, 25, 22, 30), nowMs: now, tz: 'Europe/Helsinki' }), /Varoitustieto klo 0\.30 /);
   assert.match(alertsHtml({ checkedAt: Date.UTC(2026, 10, 25, 22, 30), nowMs: now, tz: 'UTC' }), /Varoitustieto 25\.11\. klo 22\.30 /);
+});
+
+// ---------- Yhdistelmä: tunnit, joilta kaikilta malleilta puuttuu lämpötila ----------
+
+/** Käsintehty malli Helsingin ajassa 14.10.2026 klo 00 alkaen. temps: lämpötila tunneittain (null = puuttuu). */
+function hand(key, temps, { precip = null, weight = 1, lead = null } = {}) {
+  const time = temps.map((_, h) => `2026-10-${14 + Math.floor(h / 24)}T${String(h % 24).padStart(2, '0')}:00`);
+  const fill = (v) => time.map(() => v);
+  const json = {
+    latitude: 60.17, longitude: 24.94, timezone: 'Europe/Helsinki', utc_offset_seconds: 10800,
+    hourly: { time, temperature_2m: temps, precipitation: precip || fill(0), cloud_cover: fill(50), wind_speed_10m: fill(3), wind_gusts_10m: fill(5), wind_direction_10m: fill(225) },
+  };
+  const model = { key, ids: [key], label: key, short: key, weight, ...(lead ? { lead } : {}) };
+  return { model, ok: true, id: key, data: parseModelResponse(json, key), ms: 1 };
+}
+
+test('mallivertailu lukee mallin arvon samalta tunnilta kuin yhdistelmä, vaikka välistä puuttuu tunti', () => {
+  const temps = (base) => Array.from({ length: 30 }, (_, h) => (h === 2 ? null : base + h));
+  const results = [hand('a', temps(0)), hand('b', temps(10))];
+  const fc = blendForecast(results, { nowMs: Date.UTC(2026, 9, 13, 21, 0) });
+  assert.equal(fc.hours[2].t, '2026-10-14T03:00'); // klo 02 puuttuu kummaltakin mallilta
+  const rows = modelRows(results, fc, 2, 0, fc.hours[2].temp);
+  assert.equal(rows[0].temp, 3, 'mallin a lämpötila klo 03');
+  assert.equal(rows[1].temp, 13, 'mallin b lämpötila klo 03');
+  assert.ok(Math.abs(rows[0].delta + 5) < 1e-9);
+});
+
+test('nykyhetki puuttuvalla tunnilla on edeltävä tunti, ei ennusteen viimeinen tunti', () => {
+  const temps = Array.from({ length: 30 }, (_, h) => (h === 2 ? null : h));
+  const fc = blendForecast([hand('a', temps), hand('b', temps)], { nowMs: Date.UTC(2026, 9, 13, 21, 0) });
+  const np = nowPosition(fc, Date.UTC(2026, 9, 13, 23, 30)); // klo 02.30 Helsingissä
+  assert.equal(fc.hours[np.idx].t, '2026-10-14T01:00');
+  assert.equal(nowPosition(fc, Date.UTC(2026, 9, 13, 12, 0)).idx, 0, 'ennen ennusteen alkua: ensimmäinen tunti');
+  assert.equal(nowPosition(fc, Date.UTC(2026, 9, 20, 12, 0)).idx, fc.hours.length - 1, 'ennusteen jälkeen: viimeinen tunti');
 });
