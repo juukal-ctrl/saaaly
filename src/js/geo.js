@@ -150,7 +150,9 @@ export async function searchPlaces(query, { fetchFn = defaultFetch, count = 8 } 
   if (q.length < 2) return [];
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=${count}&language=fi&format=json`;
   const j = await getJson(url, { fetchFn });
-  return (j.results || []).map((r) => ({
+  // Vastaus ei ole luotettu: rivi ilman nimeä tai kelvollisia koordinaatteja ohitetaan (muuten haku tehtäisiin osoitteeseen NaN,NaN)
+  const rows = Array.isArray(j?.results) ? j.results : [];
+  return rows.filter((r) => r && typeof r.name === 'string' && r.name && Number.isFinite(r.latitude) && Number.isFinite(r.longitude)).map((r) => ({
     name: r.name,
     region: localizeRegion(r.admin1 || r.admin2 || ''),
     country: r.country || '',

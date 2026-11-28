@@ -5,6 +5,7 @@ import { alertsHtml } from '../js/views.js';
 import { blendForecast, nowPosition, modelRows, windowPopPm } from '../js/blend.js';
 import { parseModelResponse } from '../js/weather.js';
 import { summarizeNowcast } from '../js/nowcast.js';
+import { searchPlaces } from '../js/geo.js';
 
 test('varoitusrivin tarkistusaika näytetään paikan aikavyöhykkeessä, ei laitteen', () => {
   const now = Date.UTC(2026, 10, 26, 9, 45);
@@ -75,4 +76,16 @@ test('tutkaennuste: alkavan sateen voimakkuus ja määrä tunnin ajalta myös 15
   assert.equal(s.peak, 2);
   assert.equal(s.mm, 2);
   assert.equal(s.word, 'kohtalaista');
+});
+
+// ---------- Paikkahaku ----------
+
+test('paikkahaku ohittaa rikkinäiset rivit eikä kaadu tyhjään vastaukseen', async () => {
+  const json = (body) => async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  assert.deepEqual(await searchPlaces('Oulu', { fetchFn: json(null) }), []);
+  assert.deepEqual(await searchPlaces('Oulu', { fetchFn: json({ results: 'x' }) }), []);
+  const list = await searchPlaces('Oulu', {
+    fetchFn: json({ results: [{ name: 'Oulu', latitude: 65.01, longitude: 25.47, country: 'Suomi' }, { name: 'Rikki' }, { name: 'Rikki2', latitude: null, longitude: 25 }, null, { latitude: 60, longitude: 25 }] }),
+  });
+  assert.deepEqual(list.map((p) => p.name), ['Oulu']);
 });
