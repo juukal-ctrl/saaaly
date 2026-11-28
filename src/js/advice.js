@@ -350,8 +350,6 @@ function dryText(fc, win, nowIdx, today) {
   return next ? `${base} · seuraava sade ${spanLabel(fc, next.start, next.end, today)}` : base;
 }
 
-const pad2 = (n) => String(n).padStart(2, '0');
-
 /**
  * Vastauskaistan sisältö: enintään neljä kaistaa (takki, sateenvarjo + kaksi tärkeintä lisäkaistaa) ja yksi koodilla tehty lause.
  * Ääri-ilmiöt (alerts) palautetaan erikseen: ne näytetään sivun yläreunan huomiokaistalla, ei neuvojen joukossa.
@@ -367,7 +365,6 @@ export function verdict(fc, nowMs, opts = {}) {
   const a = fc.hours[from].t;
   const b = fc.hours[to].t;
   win.caption = win.kind === 'soon' ? 'Seuraavat 6 tuntia' : `${win.kind === 'tomorrow' ? 'Huomenna' : 'Tänään'} klo ${hh(a)}–${endHour(b)}`;
-  void pad2;
   const o = outfit(fc, from, to, opts);
   const u = umbrella(fc, from, to, { nowIdx: future ? null : nowIdx });
   const sl = slippery(fc, from, to);

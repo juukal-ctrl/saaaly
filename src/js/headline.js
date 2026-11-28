@@ -331,7 +331,8 @@ export function weekendLine(days, today) {
 
 /** Liukkaus päivälle: 0 = ei, 2 = liukasta, 3 = erittäin liukasta. */
 export function daySlippery(fc, d) {
-  return slippery(fc, d.from, d.to).level >= 2 ? slippery(fc, d.from, d.to).level : 0;
+  const { level } = slippery(fc, d.from, d.to);
+  return level >= 2 ? level : 0;
 }
 
 // ---------- Varmuus ----------

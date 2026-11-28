@@ -702,13 +702,12 @@ let inflight = null; // käynnissä oleva haku: { key, ctl, promise }
 function validateSelection() {
   const { fc, sel } = state;
   if (!fc) return;
-  const { idx, local } = nowPosition(fc, nowMs());
+  const { idx } = nowPosition(fc, nowMs());
   if (sel.type === 'hour') {
     const i = fc.hours.findIndex((h) => h.t === sel.iso);
     if (i < idx) state.sel = { type: 'now' };
   } else if (sel.type !== 'now') state.sel = { type: 'now' };
   if (state.hourOpen && !fc.hours.some((h, i) => h.t === state.hourOpen && i >= idx)) state.hourOpen = null;
-  void local;
 }
 
 /** Yksi haku kerrallaan: sama paikka käynnissä -> odotetaan sitä; toinen paikka -> vanha haku perutaan. */
