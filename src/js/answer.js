@@ -9,6 +9,7 @@ import { sunEvents, dayLengthMs, moonInfo } from './sun.js';
 import { fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, localNow, zonedToUtcMs } from './util.js';
 import { placeKey, haversineKm } from './geo.js';
 import { outfit, slipperyHours } from './advice.js';
+import { airWindow, grains, POLLEN } from './airquality.js';
 
 // ---------- Apurit ----------
 
@@ -1037,6 +1038,7 @@ const HELP = [
   '- **Milloin aurinko laskee?**',
   '- **Kannattaako pyykit viedä ulos?** tai **Voiko huomenna ajaa Ouluun?**',
   '- **Kumpi on lämpimämpi, huomenna vai lauantaina?**',
+  '- **Onko huomenna siitepölyä?**, **Millainen ilmanlaatu on?** tai **Tarvitaanko aurinkorasvaa?**',
 ];
 
 const COMPOSERS = {
@@ -1057,14 +1059,14 @@ const COMPOSERS = {
   tyres: (X) => composeTyres(X),
   moon: (X) => composeMoon(X),
   aurora: (X, w) => composeAurora(X, w),
-  uv: () => [NO_DATA.uv],
+  uv: (X, w) => composeUv(X, w),
   icecover: () => [NO_DATA.icecover],
-  pollen: () => [NO_DATA.pollen],
-  aqi: () => [NO_DATA.aqi],
+  pollen: (X, w, q) => composePollen(X, w, q),
+  aqi: (X, w) => composeAqi(X, w),
 };
 
 /** Oletusikkuna aiheelle, kun kysymyksessä ei ole ajankohtaa. */
-const DEFAULT_WINDOW = { clothing: 'next12', outdoor: 'next36', models: 'next24', confidence: 'next24', rain: 'next24', snow: 'next24', ice: 'next24', drive: 'next36', aurora: 'next12' };
+const DEFAULT_WINDOW = { clothing: 'next12', outdoor: 'next36', models: 'next24', confidence: 'next24', rain: 'next24', snow: 'next24', ice: 'next24', drive: 'next36', aurora: 'next12', uv: 'today', pollen: 'today', aqi: 'next24' };
 
 function pastNote(w, X) {
   return `Ajankohta "${w.label}" on jo mennyt. SääÄly näyttää ennusteen nykyhetkestä eteenpäin eikä tunne menneitä havaintoja. Kysy sää nyt tai tulevilta päiviltä (ennuste ulottuu ${dayName(X.fc.days.at(-1).date, X.today)} asti).`;
@@ -1128,8 +1130,9 @@ const isCurrent = (p, cur) => Boolean(cur) && (lc(p.name) === lc(cur.name) || ha
 // ---------- Pääfunktio ----------
 
 /**
- * Vastaa kysymykseen. ctx: { place, fc, results, nowMs, last, geocode(query), forecastFor(place), nowcast? }.
+ * Vastaa kysymykseen. ctx: { place, fc, results, nowMs, last, geocode(query), forecastFor(place), nowcast?, air? }.
  * nowcast: tutkaennusteen tulkinta (nowcast.js summarizeNowcast), vain nykyiselle paikalle.
+ * air: ilmanlaatu ja siitepöly (airquality.js parseAir) nykyiselle paikalle; muiden paikkojen ilma tulee forecastFor-funktion kentästä air.
  * Palauttaa { text, intents, place, last, understood }. last tallennetaan seuraavaa kysymystä varten.
  */
 export async function answerQuestion(text, ctx) {
@@ -1221,7 +1224,7 @@ export async function answerQuestion(text, ctx) {
       }
     }
     const used = cur ? ctx.place : place;
-    loaded.push({ place: used, cur, X: { fc: data.fc, results: data.results, place: used, nowMs: ctx.nowMs, today: nowPosition(data.fc, ctx.nowMs).local.date, nowcast: cur ? ctx.nowcast || null : null } });
+    loaded.push({ place: used, cur, X: { fc: data.fc, results: data.results, place: used, nowMs: ctx.nowMs, today: nowPosition(data.fc, ctx.nowMs).local.date, nowcast: cur ? ctx.nowcast || null : null, air: (cur ? ctx.air : data.air) || null } });
   }
 
   const qq = { ...q, activity, when };
@@ -1403,11 +1406,142 @@ function composeAurora(X, w) {
 }
 
 const NO_DATA = {
-  uv: 'SääÄly ei vielä hae UV-indeksiä, joten en voi sanoa, palaako iho tai tarvitaanko aurinkorasvaa. Pilvetön ja korkealla oleva aurinko nostaa UV-säteilyä eniten.',
+  uv: 'UV-indeksiä ei ole tälle ajalle saatavilla, joten en voi sanoa, palaako iho. Pilvetön ja korkealla oleva aurinko nostaa UV-säteilyä eniten.',
   icecover: 'SääÄly ei tiedä jään paksuutta eikä kantavuutta, eikä jäälle mennä ennusteen perusteella. Tarkista jään kunto paikallisilta tahoilta.',
-  pollen: 'SääÄly ei vielä hae siitepölytietoa. Tarkista tilanne siitepölytiedotteesta.',
-  aqi: 'SääÄly ei vielä hae ilmanlaatutietoa. Tarkista tilanne ilmanlaatupalvelusta.',
+  pollen: 'Siitepölytietoa ei juuri nyt saatu: ilmanlaadun lähde ei vastannut tai ei kata tätä paikkaa. Tarkista tilanne siitepölytiedotteesta.',
+  aqi: 'Ilmanlaatutietoa ei juuri nyt saatu: ilmanlaadun lähde ei vastannut tai ei kata tätä paikkaa. Tarkista tilanne ilmanlaatupalvelusta.',
 };
+
+// ---------- Ilma: siitepöly, ilmanlaatu ja UV (airquality.js) ----------
+
+const AIR_SRC = 'Lähde: Copernicus CAMS -malliennuste (Open-Meteo), ei mittaus.';
+const POLLEN_ASK = {
+  alder: /(?:^| )(?:leppä|lepän|leppi|leppa|lepan)/u,
+  birch: /(?:^| )koivu/u,
+  grass: /(?:^| )(?:heinä(?!kuu)|heinien|heina(?!kuu)|heinänuh|timotei)/u,
+  mugwort: /(?:^| )pujo/u,
+  ragweed: /(?:^| )(?:tuoksuk|ambros)/u,
+};
+
+/** Ilman ikkuna: päivälista tai yksi väli. Palauttaa [{ label, from, to, point }] (trimmattu nykyhetkestä eteenpäin). */
+function airSlots(X, w) {
+  const t = trim(w);
+  if (t.kind === 'days') return t.days.map((d) => ({ head: dayHead(d.date, X.today), from: d.from, to: d.to, ref: d.date }));
+  return [{ head: null, from: t.from, to: t.to, point: t.kind === 'point', ref: refDateOf(X, w) }];
+}
+
+/** Kattaako ilmanlaadun ennuste välin: vähintään puolet välistä (yksittäinen tunti: se tunti). */
+const airCovers = (sum, s) => (s.point ? sum.covered > 0 : sum.covered * 2 >= sum.hours);
+
+/** Yhteinen runko: otsikko päivälistalle, rivit ja tieto ennusteen päättymisestä. line(sum, slot) palauttaa rivin tai null (ei tietoa). */
+function airAnswer(X, w, slots, title, line) {
+  const rows = [];
+  let missing = 0;
+  for (const s of slots) {
+    const sum = airWindow(X.fc, X.air, s.from, s.to);
+    const txt = airCovers(sum, s) ? line(sum, s) : null;
+    if (txt == null) missing++;
+    if (s.head) rows.push(`- **${s.head}**: ${txt ?? 'ei vielä ennusteessa'}`);
+    else if (txt != null) rows.push(txt);
+  }
+  if (missing === slots.length) return { rows: [`${cap(title)} ${w.label} ei ole vielä ennusteessa. ${airEnd(X)}`], none: true };
+  if (slots.length > 1 || slots[0]?.head) rows.unshift(`**${cap(title)} ${w.label}:**`);
+  if (missing) rows.push(airEnd(X));
+  return { rows, none: false };
+}
+
+/** Ilmanlaadun ennuste ulottuu noin neljä vuorokautta: kerrotaan, jos kysytty aika on sen ulkopuolella. */
+function airEnd(X) {
+  const t = X.air?.t;
+  if (!t?.length) return '';
+  const last = localNow(t.at(-1) - 12 * 3600000, X.fc.tz).date; // viimeinen päivä, jonka ennuste kattaa suurimmaksi osaksi
+  return `Ilmanlaadun ja siitepölyn ennuste ulottuu ${dayName(last, X.today)} asti.`;
+}
+
+function pollenWord(p) {
+  return p.level >= 4 ? 'erittäin runsaasti' : p.level === 3 ? 'runsaasti' : p.level === 2 ? 'kohtalaisesti' : p.level === 1 ? 'vähän' : 'ei juuri lainkaan';
+}
+
+function composePollen(X, w, q) {
+  if (!X.air) return [NO_DATA.pollen];
+  if (!X.air.hasPollen) return ['**Siitepölyä ei ennusteta nyt.** Ennuste kattaa lepän, koivun, heinät, pujon ja tuoksukin vain kasvukaudella (noin maaliskuusta syyskuuhun) ja vain Euroopassa.', AIR_SRC];
+  const asked = POLLEN.filter((p) => POLLEN_ASK[p.key].test(q?.N || ''));
+  let top = 0;
+  const { rows, none } = airAnswer(X, w, airSlots(X, w), 'siitepöly', (sum, s) => {
+    const list = asked.length ? asked.map((a) => sum.pollen.find((p) => p.key === a.key) || { ...a, max: 0, level: 0, word: 'ei siitepölyä' }) : sum.pollen.filter((p) => p.level >= 1);
+    for (const p of list) top = Math.max(top, p.level);
+    if (asked.length && list.every((p) => !p.level)) {
+      // "Kukkiiko leppä?": kysyttyä lajia ei ole, mutta kerrotaan muut merkittävät lajit
+      const names = asked.map((a) => a.gen).join(' ja ');
+      const other = sum.pollen.filter((p) => p.level >= 2 && !asked.some((a) => a.key === p.key));
+      for (const p of other) top = Math.max(top, p.level);
+      const rest = other.length ? ` Muuta siitepölyä: ${other.map((p) => `${p.name} ${p.word}`).join(', ')}.` : '';
+      return s.head ? `${names} siitepölyä ei juuri ole${rest ? `;${rest.slice(0, -1).replace(' Muuta', ' muuta')}` : ''}` : `**${cap(names)} siitepölyä ei juuri ole ${w.label}.**${rest}`;
+    }
+    const txt = !list.length
+      ? 'siitepölyä ei juuri ole'
+      : list
+          .slice(0, 4)
+          .map((p) => {
+            if (!p.level) return `${p.name}: ei siitepölyä`;
+            const when = !s.point && p.peakStart >= 0 && p.level >= 2 && p.peakEnd - p.peakStart < 18 ? `, eniten ${spanText(X, p.peakStart, p.peakEnd, s.ref)}` : '';
+            return `${p.name} ${p.word} (${s.point ? '' : 'enintään '}${grains(p.max)}${when})`;
+          })
+          .join(', ');
+    return s.head ? txt : `**Siitepölyä ${w.label}:** ${txt}.`;
+  });
+  if (none) return rows;
+  if (top >= 3) rows.push('Allergisen kannattaa ottaa lääke ajoissa, pitää ikkunat kiinni päivällä ja vaihtaa vaatteet ulkoilun jälkeen. Sade huuhtoo siitepölyä ilmasta.');
+  else if (top === 2) rows.push('Herkimmät allergikot voivat saada oireita.');
+  rows.push(AIR_SRC);
+  return rows;
+}
+
+function composeAqi(X, w) {
+  if (!X.air || !X.air.aqi.some((v) => v != null)) return [NO_DATA.aqi];
+  let worst = null;
+  const { rows, none } = airAnswer(X, w, airSlots(X, w), 'ilmanlaatu', (sum, s) => {
+    const a = sum.aqi;
+    if (!a) return null;
+    if (!worst || a.max > worst.max) worst = a;
+    const why = a.dom && a.info.level >= 3 ? `, suurin vaikutus: ${a.dom.name}` : '';
+    const when = !s.point && a.info.level >= 3 && a.start >= 0 ? ` ${spanText(X, a.start, a.end, s.ref)}` : '';
+    if (s.head) return `${a.info.word}${when} (indeksi enintään ${Math.round(a.max)}${why})`;
+    return `**Ilmanlaatu ${w.label}: ${a.info.word}.** ${s.point ? `Eurooppalainen ilmanlaatuindeksi on ${Math.round(a.max)}${why}.` : `Eurooppalainen ilmanlaatuindeksi on enintään ${Math.round(a.max)}${when ? `, huonoimmillaan${when}` : ''}${why}.`}`;
+  });
+  if (none) return rows;
+  if (worst?.info.advice) rows.push(worst.info.advice);
+  rows.push('Indeksi: hyvä alle 20, tyydyttävä 20–40, kohtalainen 40–60, huono 60–80, erittäin huono yli 80.', AIR_SRC);
+  return rows;
+}
+
+function composeUv(X, w) {
+  const { fc } = X;
+  let ww = w;
+  // "Tarvitaanko aurinkorasvaa?" illalla: loppupäivä on pimeä, joten vastataan huomisesta
+  const t0 = trim(w);
+  if (!w.explicit && t0.kind !== 'days' && !fc.hours.slice(t0.from, t0.to + 1).some((h) => h.isDay)) {
+    const date = addDays(X.today, 1);
+    const d = fc.days.find((x) => x.date === date);
+    if (d) ww = { ...w, kind: 'range', from: d.from, to: d.to, label: 'huomenna', explicit: true };
+  }
+  let worst = null;
+  const slots = airSlots(X, ww);
+  const out = [];
+  for (const s of slots) {
+    const sum = airWindow(fc, X.air, s.from, s.to);
+    const u = sum.uv;
+    if (u && (!worst || u.max > worst.max)) worst = u;
+    const when = u && !s.point && u.info.level >= 1 && u.start >= 0 ? `, korkeimmillaan ${spanText(X, u.start, u.end, s.ref)}` : '';
+    const txt = u ? `${s.point ? '' : 'enintään '}${u.info.value} (${u.info.word})${when}` : null;
+    if (s.head) out.push(`- **${s.head}**: ${txt ?? 'ei tietoa'}`);
+    else out.push(txt ? `**UV-indeksi ${ww.label}: ${txt}.**` : NO_DATA.uv);
+  }
+  if (slots.length > 1 || slots[0]?.head) out.unshift(`**UV-indeksi ${ww.label}:**`);
+  if (worst) out.push(worst.info.advice);
+  if (ww !== w) out.unshift('Tänään aurinko ei enää paista, joten kerron huomisesta.');
+  return out;
+}
 
 /** Kahden päivän tai kahden paikan vertailu (sade, tuuli, ulkoilu, lämpö). items: [{ X, qv, name? }]. */
 function composeCompareGeneric(items, intent, q, nowMs) {

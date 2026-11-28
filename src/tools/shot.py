@@ -11,6 +11,7 @@ ap.add_argument('--h', type=int, default=915)
 ap.add_argument('--scroll', type=int, default=0)
 ap.add_argument('--wait', type=int, default=1800)
 ap.add_argument('--click', action='append', default=[])
+ap.add_argument('--port', type=int, default=8765)  # palvelin: python3 -m http.server <portti> src-kansiossa
 a = ap.parse_args()
 
 with sync_playwright() as p:
@@ -20,7 +21,7 @@ with sync_playwright() as p:
     logs = []
     page.on('console', lambda m: logs.append(f'[{m.type}] {m.text}') if m.type in ('error', 'warning') else None)
     page.on('pageerror', lambda e: logs.append(f'[pageerror] {e}'))
-    page.goto('http://127.0.0.1:8765/index.html' + a.query)
+    page.goto(f'http://127.0.0.1:{a.port}/index.html' + a.query)
     page.wait_for_timeout(a.wait)
     for sel in a.click:
         page.click(sel)

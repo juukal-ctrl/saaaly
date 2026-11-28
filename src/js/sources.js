@@ -46,7 +46,7 @@ export const SOURCE_INFO = {
     provider: 'Open-Meteo / CAMS',
     url: 'https://open-meteo.com/en/docs/air-quality-api',
     license: 'CC BY 4.0',
-    note: 'Mallilaskelma, ei mittaus.',
+    note: 'Ilmanlaatuindeksi, siitepöly (leppä, koivu, heinät, pujo, tuoksukki; vain Euroopassa kasvukaudella) ja UV-indeksin varalähde. Mallilaskelma, ei mittaus. Haetaan tunnin välein.',
   },
 };
 

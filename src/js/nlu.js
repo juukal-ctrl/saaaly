@@ -111,10 +111,10 @@ const INTENT_RES = [
   ['drive', S(['ajokel', 'ajaa', 'ajamaan', 'ajelu', 'autolla', 'mökkimatk'])],
   ['moon', S(['täysikuu', 'uusikuu', 'täydenkuun', 'kuun (?:vaihe|nousu|lasku)', 'kuu (?:nousee|laskee|näkyy|paistaa)', 'milloin kuu', 'kuutamo'])],
   ['aurora', S(['revontul', 'aurora', 'northern'])],
-  ['uv', S(['aurinkorasv', 'uv(?: |$)', 'auringonpolt', 'ruskett', 'aurinkosuoj', 'palaako', 'iho pala', 'ihon pala'])],
+  ['uv', S(['aurinkorasv', 'aurinkovoit', 'aurinkovoid', 'uv(?: |$)', 'uvi(?: |$)', 'uv indeks', 'ultravio', 'auringonpolt', 'ruskett', 'aurinkosuoj', 'palaako', 'iho pala', 'ihon pala'])],
   ['icecover', S(['kantaa(?:ko)? jää', 'jään (?:paksuu|kanta)', 'jäällä'])],
-  ['pollen', S(['siitepöl', 'allergi'])],
-  ['aqi', S(['ilmanlaat', 'aqi', 'pienhiukk', 'ilmansaast'])],
+  ['pollen', S(['siitepöl', 'allergi', 'pujo', 'tuoksukk', 'ambros', 'heinänuh', 'kukint', 'kukkii', 'kukkiiko', 'pölyää(?:kö)? koivu', 'koivu (?:pölyää|kukkii)', '(?:koivu|leppä|lepp|heinä|heinie)[a-zåäö]* (?:ilmassa|pölyä)'])],
+  ['aqi', S(['ilmanlaat', 'ilman laat', 'aqi', 'pienhiukk', 'hiukkaspitoi', 'ilmansaast', 'saaste', 'otsoni', 'typpidiok', 'pm2', 'pm10', 'katupöly', 'hengitysilm'])],
   [
     'summary',
     S(['sää', 'sään', 'säätä', 'säästä', 'säässä', 'sääl', 'sääenn', 'sääti', 'ennuste', 'ennusta', 'yhteenve', 'tulossa', 'miltä näyttää', 'millai', 'minkälai', 'millane', 'minkälane', 'keli', 'ilma(?:t|a|ssa|sta|ja)?(?= |$)', 'ilmoj']),

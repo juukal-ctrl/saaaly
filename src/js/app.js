@@ -16,9 +16,10 @@ import { fetchNowcast, summarizeNowcast, nowcastUrl } from './nowcast.js';
 import { createGuard, runSource, memoryStorage, sourceLine } from './sources.js';
 import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.js';
 import { fetchObs } from './observations.js';
+import { fetchAir, airUrl, airWindow, airHighlights, airAlerts, airUsable, AIR_TTL } from './airquality.js';
 import { makeDemoFetch } from './demo.js';
 import { agoText, selLabel, placeHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
-import { homeHeadline } from './headline.js';
+import { homeHeadline, tomorrowWindow } from './headline.js';
 import { createCube, createCubeChrome } from './cube.js';
 import { createMapView } from './mapview.js';
 import { FOREIGN_CITIES } from './gazetteer.js';
@@ -114,7 +115,14 @@ const state = {
   warn: { raw: null, at: 0 }, // koko maan CAP-varoitukset (warnings.js); oma alue valitaan piirrettäessä
   official: [], // viralliset varoitukset (warnings.js), jos saatavilla
   obs: { raw: null, key: '', at: 0 }, // lähimmän sääaseman havainto (observations.js), jos saatavilla
+  air: restoreAir(), // ilmanlaatu, siitepöly ja UV (airquality.js), jos saatavilla: { raw, key, at }
 };
+
+/** Edellinen ilmanlaatuhaku laitteen muistista, jottei jokainen avaus hae uudelleen (haku tunnin välein riittää). */
+function restoreAir() {
+  const a = DEMO ? null : store.object('air');
+  return a && typeof a.key === 'string' && Number.isFinite(a.at) && (a.raw === null || Array.isArray(a.raw?.t)) ? a : { raw: null, key: '', at: 0 };
+}
 
 // Gemini on käytettävissä vain, kun avain on tallennettu (esimerkkitilassa ei koskaan). Ilman sitä vastataan sovelluksen omalla laskennalla.
 const keyOn = () => !DEMO && Boolean(aiSettings.key());
@@ -198,8 +206,22 @@ function renderAdvice(fc, now) {
   }
   document.querySelectorAll('#hdSeg .seg').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.day === state.vday)));
   el.verdict.hidden = !hl;
-  patch('verdict', el.verdict, hl ? verdictHtml({ hl }) : '');
-  const html = alertsHtml({ alerts: v?.alerts || [], official: state.official, officialState: officialState(now), checkedAt: state.warn.fetchedAt || 0, nowMs: now, tz: fc.tz });
+  const air = currentAir(now);
+  let airHl = [];
+  let airAl = [];
+  try {
+    airHl = airHighlights(airWindow(fc, air, ...homeAirSpan(fc, now)));
+    const { idx } = nowPosition(fc, now);
+    airAl = airAlerts(fc, air, idx, idx + 23);
+    // Sama asia ei näy kahdesti: huomio kertoo huonon ilman ja erittäin runsaan siitepölyn, pilleri jää pois
+    airHl = airHl.filter((x) => !(x.kind === 'aqi' && airAl.some((a) => a.key === 'aqi')) && !(x.kind === 'pollen' && x.level >= 3 && airAl.some((a) => a.key === 'pollen')));
+  } catch {
+    /* ilma on lisä eikä saa kaataa etusivua */
+  }
+  patch('verdict', el.verdict, hl ? verdictHtml({ hl, air: airHl }) : '');
+  // Omat huomiot: säähuomiot ensin samalla tasolla, ilma niiden jälkeen
+  const own = [...(v?.alerts || []), ...airAl].sort((a, b) => b.level - a.level);
+  const html = alertsHtml({ alerts: own, official: state.official, officialState: officialState(now), checkedAt: state.warn.fetchedAt || 0, nowMs: now, tz: fc.tz });
   el.alerts.hidden = !html;
   if (patch('alerts', el.alerts, html)) sizeStage();
 }
@@ -289,6 +311,48 @@ async function refreshObs({ ignoreAge = false } = {}) {
   if (state.fc) {
     renderHours();
     patch('certainty', el.certainty, certPageHtml({ fc: state.fc, results: state.results, nowMs: nowMs(), obs: currentObs(nowMs()) }));
+  }
+}
+
+let airBusy = false;
+
+/** Ilmanlaatu tälle paikalle, jos se on haettu eikä ole liian vanha; null muuten (myös kun lähde ei kata paikkaa). */
+function currentAir(now) {
+  return airUsable(state.air, ncKey(state.place), now) ? state.air.raw : null;
+}
+
+/** Etusivun ilmarivin aikaväli: tänään loppupäivä (vähintään 6 tuntia), huomenna klo 7–21. */
+function homeAirSpan(fc, now) {
+  const { idx, local } = nowPosition(fc, now);
+  if (state.vday === 'tomorrow') {
+    const w = tomorrowWindow(fc, now);
+    if (w) return [w.from, w.to];
+  }
+  const end = fc.hours.findIndex((h) => h.t === `${local.date}T23:00`);
+  return [idx, Math.max(idx + 5, end)];
+}
+
+/** Hakee ilmanlaadun, siitepölyn ja UV:n (Open-Meteo, CAMS). Hiljainen lisälähde kuten tutkaennuste: virhe ei näy käyttäjälle. */
+async function refreshAir({ ignoreAge = false } = {}) {
+  const p = state.place;
+  const key = ncKey(p);
+  if (!key || airBusy) return;
+  const now = nowMs();
+  if (!ignoreAge && state.air.key === key && now - state.air.at < AIR_TTL) return;
+  airBusy = true;
+  try {
+    const r = await runSource(sources, 'air', () => fetchAir(p.lat, p.lon, { fetchFn }), { now });
+    if (ncKey(state.place) === key && 'value' in r) {
+      state.air = { raw: r.value, key, at: now }; // value null = ei kattavuutta tälle paikalle
+      if (!DEMO) store.set('air', state.air);
+    }
+  } finally {
+    airBusy = false;
+  }
+  if (state.fc) {
+    renderAdvice(state.fc, nowMs());
+    renderHours();
+    renderWeek();
   }
 }
 
@@ -473,7 +537,7 @@ function renderHours(now = nowMs()) {
   const chart = state.hoursView === 'chart';
   const raw = state.nc.key === ncKey(state.place) ? state.nc.raw : null;
   const radar = state.vday === 'today' ? radarHtml({ raw, nc: state.nowcast, nowMs: now, tz: fc.tz }) : '';
-  patch('hourly', el.hourly, hoursPageHtml({ fc, nowMs: now, day: state.vday, open: state.hourOpen, more: state.hoursMore, view: state.hoursView, radar, fetchedAt: state.fetchedAt, loading: state.loading && state.manualLoad, obs: currentObs(now), nowcast: state.vday === 'today' ? state.nowcast : null }));
+  patch('hourly', el.hourly, hoursPageHtml({ fc, nowMs: now, day: state.vday, open: state.hourOpen, more: state.hoursMore, view: state.hoursView, radar, fetchedAt: state.fetchedAt, loading: state.loading && state.manualLoad, obs: currentObs(now), nowcast: state.vday === 'today' ? state.nowcast : null, air: currentAir(now) }));
   el.meteo.hidden = !chart;
   if (chart) renderMeteo(now);
 }
@@ -484,7 +548,7 @@ function renderWeek(now = nowMs()) {
   if (!fc) return;
   if (state.dayOpen && !fc.days.slice(0, 7).some((d) => d.date === state.dayOpen)) state.dayOpen = null;
   const dayLeft = $('.dstrip', el.daily)?.scrollLeft || 0;
-  if (patch('daily', el.daily, weekPageHtml({ fc, nowMs: now, open: state.dayOpen }))) {
+  if (patch('daily', el.daily, weekPageHtml({ fc, nowMs: now, open: state.dayOpen, air: currentAir(now) }))) {
     const ds = $('.dstrip', el.daily);
     if (ds) {
       if (dayLeft && ds.dataset.date === state.dayScrolled) ds.scrollLeft = dayLeft;
@@ -776,6 +840,7 @@ async function runLoad({ manual = false, signal } = {}) {
   void refreshNowcast({ ignoreAge: manual });
   void refreshWarnings({ ignoreAge: manual });
   void refreshObs({ ignoreAge: manual });
+  void refreshAir({ ignoreAge: manual });
 }
 
 // ---------- Paikka ----------
@@ -917,7 +982,7 @@ async function runAi({ force = false } = {}) {
   state.ai = { status: 'loading', text: '', error: '', fp };
   renderAi();
   try {
-    const text = await explain({ fc: state.fc, place: state.place, nowMs: nowMs(), selection: selection(), results: state.results, mode: aiMode(), fetchFn, signal: aiAbort.signal });
+    const text = await explain({ fc: state.fc, place: state.place, nowMs: nowMs(), selection: selection(), results: state.results, air: currentAir(nowMs()), mode: aiMode(), fetchFn, signal: aiAbort.signal });
     if (mySeq !== aiSeq) return;
     aiCache.set(fp, text);
     if (aiCache.size > AI_CACHE_MAX) aiCache.delete(aiCache.keys().next().value); // vanhin pois (Map säilyttää lisäysjärjestyksen)
@@ -949,6 +1014,7 @@ function tick() {
   void refreshNowcast();
   void refreshWarnings();
   void refreshObs();
+  void refreshAir();
   validateSelection();
   renderAll();
   updateSky();
@@ -969,7 +1035,7 @@ const TITLES = { search: 'Paikkakunta', settings: 'Asetukset', chat: 'Kysy Sää
 function sheetContent(kind) {
   if (kind === 'search') return searchSheetHtml({ recent: state.recent });
   if (kind === 'chat') return chatSheetHtml({ mode: aiMode(), hasKey: keyOn(), hasMessages: state.chat.length > 0 });
-  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs', 'radarmap', 'cloudmap'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
+  if (kind === 'about') return aboutSheetHtml({ version: VERSION, demo: DEMO, sources: ['nowcast', 'warnings', 'obs', 'air', 'radarmap', 'cloudmap'].map((id) => sourceLine(id, sources.status(id), nowMs())) });
   return settingsSheetHtml({ hasKey: keyOn(), mode: aiMode(), model: aiSettings.model(), refreshMin: state.refreshMin, models: state.models, demo: DEMO, sens: state.sens, anim: store.bool('anim', true) });
 }
 
@@ -1118,7 +1184,10 @@ async function forecastFor(place) {
   const key = placeKey(place);
   const hit = placeData.get(key);
   if (hit && nowMs() - hit.at < 10 * 60000) return hit;
+  // Ilmanlaatu haetaan rinnalla (chat: siitepöly, ilmanlaatu ja UV toisella paikkakunnalla); sen puute ei estä vastausta.
+  const airP = runSource(sources, 'air', () => fetchAir(place.lat, place.lon, { fetchFn }), { now: nowMs() }).then((r) => r.value || null, () => null);
   const results = await fetchAll(place.lat, place.lon, { fetchFn, now: nowMs() });
+  const air = await airP;
   let fc = null;
   try {
     fc = blendForecast(results, { nowMs: nowMs() });
@@ -1126,7 +1195,7 @@ async function forecastFor(place) {
     fc = null;
   }
   if (!fc) throw new Error(`yksikään säämalli ei vastannut. ${summarizeErrors(results)}`);
-  const data = { at: nowMs(), fc, results };
+  const data = { at: nowMs(), fc, results, air };
   placeData.set(key, data);
   if (placeData.size > 8) placeData.delete(placeData.keys().next().value);
   return data;
@@ -1138,8 +1207,8 @@ async function runTool(name, args) {
   const found = await searchPlaces(q, { fetchFn, count: 3 });
   if (!found.length) throw new Error(`Paikkaa "${q}" ei löytynyt`);
   const p = found[0];
-  const { fc, results } = await forecastFor(p);
-  return { paikka: placeLabel(p), ...compactForecast(fc, nowMs(), { hours: 36, results }) };
+  const { fc, results, air } = await forecastFor(p);
+  return { paikka: placeLabel(p), ...compactForecast(fc, nowMs(), { hours: 36, results, air }) };
 }
 
 /** Vastaa sovelluksen omalla laskennalla: ei tekoälyä eikä Gemini-kutsuja. */
@@ -1152,6 +1221,7 @@ async function internalAnswer(text) {
     last: state.chatLast,
     sensitivity: state.sens,
     nowcast: currentNowcast(nowMs()),
+    air: currentAir(nowMs()),
     geocode: (q) => searchPlaces(q, { fetchFn, count: 5 }),
     forecastFor,
   });
@@ -1189,7 +1259,7 @@ async function sendChat(text) {
   let why = '';
   if (mode !== 'internal' && state.fc) {
     try {
-      const out = await chat({ fc: state.fc, place: state.place, nowMs: nowMs(), history: chatHistory(), results: state.results, mode, runTool, fetchFn });
+      const out = await chat({ fc: state.fc, place: state.place, nowMs: nowMs(), history: chatHistory(), results: state.results, air: currentAir(nowMs()), mode, runTool, fetchFn });
       msg = { role: 'assistant', text: out, src: mode === 'free' ? 'Gemini · sovelluksen data + yleistieto' : 'Gemini · data: sovelluksen säämallit' };
     } catch (e) {
       why = shortReason(e); // Gemini ei vastannut: vastataan sovelluksen omalla laskennalla ja kerrotaan syy
@@ -1414,6 +1484,16 @@ async function probeSources(push, p, t) {
   } else if ('value' in r) push(`  – Tutkaennuste: ei kata tätä paikkaa (${r.reason})`);
   else if (r.error) push(`  ✗ Tutkaennuste: ${await explainFetchError(r.error, nowcastUrl(p.lat, p.lon))}`);
   else push(`  – Tutkaennuste: ohitettu (${r.skipped})`);
+  const ta = performance.now();
+  const a = await runSource(sources, 'air', () => fetchAir(p.lat, p.lon, { fetchFn }), { force: true, now: t });
+  const ams = Math.round(performance.now() - ta);
+  if (a.value) {
+    state.air = { raw: a.value, key: ncKey(p), at: t };
+    const sum = state.fc ? airWindow(state.fc, a.value, nowPosition(state.fc, t).idx, nowPosition(state.fc, t).idx + 23) : null;
+    push(`  ✓ Ilmanlaatu ja siitepöly (Open-Meteo, CAMS) ${ams} ms, ${a.value.note}${sum?.aqi ? `; ilmanlaatu enintään ${sum.aqi.info.word} (${Math.round(sum.aqi.max)})` : ''}${a.value.hasPollen ? '' : '; siitepölyä ei ennusteta nyt'}`);
+  } else if ('value' in a) push(`  – Ilmanlaatu ja siitepöly: ${a.reason}`);
+  else if (a.error) push(`  ✗ Ilmanlaatu ja siitepöly: ${await explainFetchError(a.error, airUrl(p.lat, p.lon))}`);
+  else push(`  – Ilmanlaatu ja siitepöly: ohitettu (${a.skipped})`);
   if (!inFinland(p.lat, p.lon)) return push('  – Viralliset varoitukset: koskevat vain Suomea');
   const t1 = performance.now();
   const w = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn }), { force: true, now: t });

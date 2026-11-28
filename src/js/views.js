@@ -8,6 +8,7 @@ import { icon, icon3d } from './icons.js';
 import { meteogram, RANGES } from './meteogram.js';
 import { sunEvents, dayLengthMs } from './sun.js';
 import { placeSubtitle } from './geo.js';
+import { hourAir, airWindow, grains } from './airquality.js';
 
 export const SVG = {
   locate: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
@@ -192,9 +193,46 @@ export function alertsHtml({ alerts = [], official = [], officialState = 'ok', c
   return `<div class="alert-list" role="region" aria-label="Varoitukset ja huomiot">${rows.join('')}</div>`;
 }
 
-/** Etusivun otsikko: kaksi riviä (toiminto + aika) ja pieni lisärivi. Ei laatikoita eikä painikkeita. */
-export function verdictHtml({ hl }) {
-  return `<p class="vsay"><b>${esc(hl.l1)}</b><span>${esc(hl.l2)}</span></p>${hl.small ? `<p class="vsmall">${esc(hl.small)}</p>` : ''}`;
+/** Etusivun otsikko: kaksi riviä (toiminto + aika) ja pieni lisärivi. Ei laatikoita eikä painikkeita. air: airHighlights()-rivi. */
+export function verdictHtml({ hl, air = [] }) {
+  return `<p class="vsay"><b>${esc(hl.l1)}</b><span>${esc(hl.l2)}</span></p>${hl.small ? `<p class="vsmall">${esc(hl.small)}</p>` : ''}${airPillsHtml(air, 'vair')}`;
+}
+
+// ---------- Ilma: siitepöly, ilmanlaatu ja UV ----------
+
+const AIR_GLYPH = { pollen: GLYPH.pollen, aqi: GLYPH.air, uv: GLYPH.uv };
+
+/** Pienet ilmapillerit (Koti ja Tunnit). items: [{ kind, text, level 0–3, sr }]. Väripiste kertoo tason, teksti sanoo sen. */
+export function airPillsHtml(items, cls = 'air-row') {
+  if (!items?.length) return '';
+  const pills = items.map((x) => `<span class="ap lv${Math.max(0, Math.min(3, x.level))}">${AIR_GLYPH[x.kind] || ''}<b>${esc(x.text)}</b></span>`).join('');
+  return `<p class="${cls}" role="note" aria-label="${esc(`Ilma: ${items.map((x) => x.sr || x.text).join(', ')}`)}">${pills}</p>`;
+}
+
+/** Tunnin ilmapillerit: ilmanlaatu, UV (päivällä) ja siitepöly lajeittain (vähäisestä alkaen). Neuvo, kun UV on vähintään 3 tai ilma huono. */
+function hourAirHtml(fc, i, air) {
+  const a = hourAir(fc, air, i);
+  if (!a) return '';
+  const items = [];
+  if (a.aqiInfo) items.push({ kind: 'aqi', text: `Ilmanlaatu ${a.aqiInfo.word}`, level: a.aqiInfo.level >= 5 ? 3 : a.aqiInfo.level >= 4 ? 2 : a.aqiInfo.level === 3 ? 1 : 0, sr: `Ilmanlaatu ${a.aqiInfo.word}${a.dom && a.aqiInfo.level >= 3 ? `, eniten ${a.dom.name}` : ''}` });
+  if (a.uvInfo && (fc.hours[i].isDay || a.uvInfo.level >= 1)) items.push({ kind: 'uv', text: `UV ${a.uvInfo.value} · ${a.uvInfo.word}`, level: Math.min(3, a.uvInfo.level), sr: `UV-indeksi ${a.uvInfo.value}, ${a.uvInfo.word}` });
+  for (const p of a.pollen.filter((x) => x.level >= 1).sort((x, y) => y.level - x.level || y.v - x.v).slice(0, 3)) {
+    items.push({ kind: 'pollen', text: `${cap(p.name)} ${p.word}`, level: p.level >= 4 ? 3 : p.level - 1, sr: `${cap(p.gen)} siitepölyä ${grains(p.v)}, ${p.word}` });
+  }
+  const tips = [];
+  if (a.aqiInfo?.level >= 3 && a.aqiInfo.advice) tips.push(a.aqiInfo.advice);
+  if (a.uvInfo?.level >= 1) tips.push(a.uvInfo.advice);
+  return `${airPillsHtml(items)}${tips.length ? `<p class="air-tip">${esc(tips.join(' '))}</p>` : ''}`;
+}
+
+/** Päivän ilma lyhyesti Viikko-sivun tuntinauhan yhteenvetoon: vain kun sillä on merkitystä. */
+function dayAirBits(fc, air, day) {
+  const sum = airWindow(fc, air, day.from, day.to);
+  const bits = [];
+  for (const p of sum.pollen.filter((x) => x.level >= 2).slice(0, 2)) bits.push(`${p.name} ${p.word}`);
+  if (sum.aqi?.info.level >= 4) bits.push(`ilmanlaatu ${sum.aqi.info.word}`);
+  if (sum.uv?.info.level >= 1) bits.push(`UV enintään ${sum.uv.info.value}`);
+  return bits;
 }
 
 // ---------- Tuntirata ----------
@@ -304,7 +342,7 @@ export function meteoHtml({ fc, nowMs, range = '24h', inspectIso = null, width =
 // ---------- Tunnit ----------
 
 /** Tunnin lisätiedot riville avattuna: tuntuu kuin, tuuli, sade, pilvisyys ja mallien ero. */
-function hourDetailsHtml(fc, i, { now = false, nowMs, fetchedAt = 0, loading = false, obs = null } = {}) {
+function hourDetailsHtml(fc, i, { now = false, nowMs, fetchedAt = 0, loading = false, obs = null, air = null } = {}) {
   const h = fc.hours[i];
   const gust = h.gust - h.wind >= 3 ? `, puuskat ${fmtNum(h.gust)} m/s` : '';
   const rain = h.precip >= 0.05 ? `Sade ${fmtMm(h.precip)} tunnissa · ${popText(h)}` : h.pop >= 0.15 ? `Ei sadetta todennäköisesti · ${popText(h)}` : 'Ei sadetta';
@@ -317,7 +355,7 @@ function hourDetailsHtml(fc, i, { now = false, nowMs, fetchedAt = 0, loading = f
     <li>Pilvisyys ${Math.round(h.cloud ?? 0)} %${esc(spread)}</li>
     ${now && obs ? `<li>Mitattu ${esc(fmtTemp(obs.value, { digits: 1 }))} · ${esc(obs.name || 'lähin asema')}</li>` : ''}
     ${now ? nowExtrasHtml({ fc, nowMs, fetchedAt, loading }) : ''}
-  </ul><button class="pill sm" type="button" data-act="ask-open" data-q="${esc(q)}">${SVG.spark}Kysy tästä tunnista</button></div>`;
+  </ul>${hourAirHtml(fc, i, air)}<button class="pill sm" type="button" data-act="ask-open" data-q="${esc(q)}">${SVG.spark}Kysy tästä tunnista</button></div>`;
 }
 
 /** Tutkan kahden tunnin sadekäyrä, kun sade on lähellä. raw: nowcast.js:n jäsentämä { steps:[{t, rate}] }. */
@@ -340,7 +378,7 @@ export function radarHtml({ raw, nc, nowMs, tz }) {
  * Tunnit-sivu: otsikko, Lista/Kaavio-valinta ja tuntilista kromipunoksen vieressä. Rivin napautus avaa lisätiedot paikallaan.
  * day 'tomorrow': huomisen tunnit klo 6–23. more: 48 tuntia 13 sijaan.
  */
-export function hoursPageHtml({ fc, nowMs, day = 'today', open = null, more = false, view = 'list', radar = '', fetchedAt = 0, loading = false, obs = null, nowcast = null }) {
+export function hoursPageHtml({ fc, nowMs, day = 'today', open = null, more = false, view = 'list', radar = '', fetchedAt = 0, loading = false, obs = null, nowcast = null, air = null }) {
   const { idx, local } = nowPosition(fc, nowMs);
   let hs;
   let kick;
@@ -380,7 +418,7 @@ export function hoursPageHtml({ fc, nowMs, day = 'today', open = null, more = fa
     const name = `${now ? 'Nyt' : `${weekday(date)} klo ${hr(h.t)}`}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}${dry ? '' : `, sateen todennäköisyys ${pc} %`}`;
     block.push(`<div class="hv-item"><button class="hv${now ? ' now' : ''}" type="button" data-act="hrow" data-iso="${esc(h.t)}" aria-expanded="${expanded}" aria-controls="hm-${esc(h.t)}" aria-label="${esc(name)}">
       <span class="hv-t"><i></i>${now ? 'nyt' : hh(h.t)}</span>${icon3d(h.sym, h.isDay, 0)}<span class="hv-temp">${esc(fmtTemp(h.temp))}</span>${dry ? '' : `<span class="hv-bar" aria-hidden="true"><b style="width:${pc}%"></b></span><span class="hv-pc">${pc} %</span>`}</button>
-      ${expanded ? hourDetailsHtml(fc, i, { now, nowMs, fetchedAt, loading, obs }) : ''}</div>`);
+      ${expanded ? hourDetailsHtml(fc, i, { now, nowMs, fetchedAt, loading, obs, air }) : ''}</div>`);
   });
   flush();
   const moreBtn = day === 'tomorrow' ? '' : `<button class="more-btn" type="button" data-act="hours-more" aria-expanded="${more}">${more ? 'Näytä vähemmän' : 'Näytä 48 tuntia'}</button>`;
@@ -398,12 +436,12 @@ function popPctRow(h) {
 // ---------- Viikko ----------
 
 /** Päivän tunnit vaakasuuntaisena nauhana päivän rivin alla. */
-function dayHoursHtml({ fc, nowMs, day }) {
+function dayHoursHtml({ fc, nowMs, day, air = null }) {
   const { idx, local } = nowPosition(fc, nowMs);
   const hours = fc.hours.filter((h, i) => h.t.slice(0, 10) === day.date && (day.date !== local.date || i >= idx));
   if (!hours.length) return '';
   const wind = Math.max(...hours.map((h) => h.wind || 0));
-  const bits = [`ylin ${fmtTemp(day.tmax)}, alin ${fmtTemp(day.tmin)}`, day.precip >= 0.1 ? `sadetta ${fmtMm(day.precip)}` : 'ei merkittävää sadetta', `tuulta enintään ${fmtNum(wind)} m/s`];
+  const bits = [`ylin ${fmtTemp(day.tmax)}, alin ${fmtTemp(day.tmin)}`, day.precip >= 0.1 ? `sadetta ${fmtMm(day.precip)}` : 'ei merkittävää sadetta', `tuulta enintään ${fmtNum(wind)} m/s`, ...dayAirBits(fc, air, day)];
   const cells = hours.map((h) => {
     const p = h.precip >= 0.1 ? fmtMm(h.precip).replace(' mm', '') : '';
     return `<div class="hr" role="listitem" data-iso="${esc(h.t)}" aria-label="${esc(`klo ${hr(h.t)}, ${SYMBOLS[h.sym]}, ${fmtTemp(h.temp)}${p ? `, sadetta ${p} mm` : ''}`)}">
@@ -414,7 +452,7 @@ function dayHoursHtml({ fc, nowMs, day }) {
 }
 
 /** Viikko-sivu: otsikko, viikonloppu, ja päivät kromikapseleina yhteisellä lämpöasteikolla. Päivän napautus avaa sen tunnit. */
-export function weekPageHtml({ fc, nowMs, open = null }) {
+export function weekPageHtml({ fc, nowMs, open = null, air = null }) {
   const { idx, frac, local } = nowPosition(fc, nowMs);
   const today = local.date;
   const days = fc.days.slice(0, 7);
@@ -438,7 +476,7 @@ export function weekPageHtml({ fc, nowMs, open = null }) {
       <span class="wd-n"><b>${esc(name)}</b><small>${esc(sub)}</small></span>${icon3d(d.sym, true, 0)}
       <span class="wd-r" aria-hidden="true"><span class="wd-cap" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"><em class="lo">${esc(fmtTemp(d.tmin))}</em><em class="hi">${esc(fmtTemp(d.tmax))}</em></span>${dot}</span>
       <span class="wd-x" aria-hidden="true">${rain ? `<span>${esc(rain)}</span>` : ''}${slip ? '<span class="slip">liukasta</span>' : ''}</span></button>
-      ${expanded ? dayHoursHtml({ fc, nowMs, day: d }) : ''}</div>`;
+      ${expanded ? dayHoursHtml({ fc, nowMs, day: d, air }) : ''}</div>`;
   });
   const [w1, w2] = weekHeadline(days, today);
   const we = weekendLine(days, today);
@@ -673,6 +711,7 @@ export function aboutSheetHtml({ version, demo, sources = [] }) {
         <p class="note">Nämä ovat valinnaisia: jos lähde ei vastaa tai ei kata paikkaasi, SääÄly toimii ilman sitä eikä näytä virhettä.</p>
         <ul class="plain">
           <li>Tutkaennuste (sade seuraavien kahden tunnin aikana, Pohjoismaat): <a href="https://api.met.no/weatherapi/nowcast/2.0/documentation" target="_blank" rel="noopener">MET Norway Nowcast</a>, CC BY 4.0.</li>
+          <li>Ilmanlaatu, siitepöly ja UV-indeksin varalähde: <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noopener">Open-Meteo Air Quality</a> (Copernicus CAMS, CC BY 4.0). Mallilaskelma, ei mittaus; siitepöly vain Euroopassa kasvukaudella.</li>
           <li>Viralliset säävaroitukset (Suomi): <a href="https://www.ilmatieteenlaitos.fi/varoitukset" target="_blank" rel="noopener">Ilmatieteen laitos</a>, CAP-syöte, CC BY 4.0. Koko maan syöte ladataan ja oma alueesi valitaan laitteella, joten sijaintiasi ei lähetetä.</li>
         </ul>
         ${sources.length ? `<ul class="plain src-status" aria-label="Lähteiden tila">${sources.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
@@ -684,7 +723,7 @@ export function aboutSheetHtml({ version, demo, sources = [] }) {
       <section class="set">
         <h3>Mihin tietosi menevät</h3>
         <ul class="plain">
-          <li><b>Sijainti</b> (koordinaatit) lähtee Open-Meteolle ennusteen hakua varten, MET Norwayn tutkaennusteelle ja BigDataCloudille paikannimen hakua varten.</li>
+          <li><b>Sijainti</b> (koordinaatit) lähtee Open-Meteolle ennusteen ja ilmanlaadun hakua varten, MET Norwayn tutkaennusteelle ja BigDataCloudille paikannimen hakua varten.</li>
           <li><b>Hakusanat</b> lähtevät Open-Meteon paikkahakuun.</li>
           <li><b>Gemini</b> (valinnainen): jos lisäät avaimen, kysymyksesi ja sovelluksen säädata lähetetään Googlelle. Avain tallentuu vain tämän laitteen selaimeen.</li>
           <li>Ei mainoksia, ei analytiikkaa, ei seurantaa eikä omaa palvelinta. Paikka, asetukset ja välimuisti tallentuvat vain tämän laitteen selaimeen (Tiedot-kohdasta ne voi tyhjentää).</li>

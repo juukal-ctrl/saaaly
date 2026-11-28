@@ -3,6 +3,7 @@
 
 import { store, defaultFetch, weekday, localNow } from './util.js';
 import { nowPosition, snapshot, modelRows, modelDaily, SYMBOLS } from './blend.js';
+import { hourAir, airWindow, POLLEN } from './airquality.js';
 
 export const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 export const DEFAULT_MODEL = 'gemini-flash-latest';
@@ -157,7 +158,7 @@ const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
  * Tiivis, koneluettava kuvaus ennusteesta tekoälylle. Kun results annetaan, mukaan tulevat myös
  * yksittäisten mallien omat luvut (nyt ja seuraavat päivät), jotta tekoäly voi kertoa, mitä mikin malli sanoo.
  */
-export function compactForecast(fc, nowMs, { hours = 48, results = null } = {}) {
+export function compactForecast(fc, nowMs, { hours = 48, results = null, air = null } = {}) {
   const { idx, frac, local } = nowPosition(fc, nowMs);
   const rows = fc.hours.slice(idx, idx + hours).map((h) => [h.t.slice(5, 16).replace('T', ' '), r1(h.temp), r1(h.feels), r1(h.precip), Math.round(h.pop * 100), Math.round(h.cloud), r1(h.wind), r1(h.gust), SYMBOLS[h.sym]]);
   const days = fc.days.slice(0, 7).map((d) => [d.date, weekday(d.date, true), r1(d.tmin), r1(d.tmax), r1(d.precip), r1(d.wind), SYMBOLS[d.sym]]);
@@ -174,6 +175,8 @@ export function compactForecast(fc, nowMs, { hours = 48, results = null } = {}) 
     paivat_sarakkeet: ['paiva', 'viikonpaiva', 'alin_C', 'ylin_C', 'sade_mm', 'tuuli_ms', 'saa'],
     paivat: days,
   };
+  const ilma = airContext(fc, idx, hours, air);
+  if (ilma) out.ilma = ilma;
   if (results?.length) {
     const blendNow = snapshot(fc, idx, frac).temp;
     out.mallit_nyt = modelRows(results, fc, idx, frac, blendNow).map((r) =>
@@ -187,6 +190,32 @@ export function compactForecast(fc, nowMs, { hours = 48, results = null } = {}) 
   return out;
 }
 
+/**
+ * Ilmanlaatu, siitepöly ja UV-indeksi tekoälylle samoina luokkina kuin sovelluksessa (airquality.js). UV tulee säämalleista,
+ * ilmanlaadun lähteestä vain varalla. null, jos mitään ei ole. Siitepölylajit vain, jos niitä ennustetaan.
+ */
+function airContext(fc, idx, hours, air) {
+  const rows = [];
+  const kinds = air?.hasPollen ? POLLEN.filter((p) => air.pollen[p.key].some((v) => v != null)) : [];
+  for (let i = idx; i < Math.min(fc.hours.length, idx + hours); i++) {
+    const a = hourAir(fc, air, i);
+    if (!a) continue;
+    rows.push([fc.hours[i].t.slice(5, 16).replace('T', ' '), a.aqi == null ? null : Math.round(a.aqi), a.aqiInfo?.word ?? null, r1(a.uv), ...kinds.map((p) => r1(a.pollen.find((x) => x.key === p.key)?.v ?? null))]);
+  }
+  if (!rows.length) return null;
+  const days = fc.days.slice(0, 4).map((d) => {
+    const s = airWindow(fc, air, d.from, d.to);
+    return { paiva: d.date, ilmanlaatu_huonoin: s.aqi?.info.word ?? null, uv_max: s.uv ? r1(s.uv.max) : null, uv_luokka: s.uv?.info.word ?? null, siitepoly: s.pollen.filter((p) => p.level >= 1).map((p) => `${p.name} ${p.word} (enintään ${Math.round(p.max)} kpl/m3)`) };
+  });
+  return {
+    lahde: air ? 'Copernicus CAMS -malliennuste (Open-Meteo), ei mittaus. UV-indeksi säämalleista.' : 'UV-indeksi säämalleista. Ilmanlaatu- ja siitepölytietoa ei saatu.',
+    luokat: 'Ilmanlaatu (eurooppalainen indeksi): hyvä <20, tyydyttävä 20–40, kohtalainen 40–60, huono 60–80, erittäin huono 80–100. UV: matala 0–2, kohtalainen 3–5, korkea 6–7, erittäin korkea 8–10. Siitepöly kpl/m3 (puut): vähäinen 1–9, kohtalainen 10–99, runsas 100–999; heinät ja pujo: runsas yli 30.',
+    tunnit_sarakkeet: ['aika', 'ilmanlaatuindeksi', 'ilmanlaatu', 'uv_indeksi', ...kinds.map((p) => `${p.name}_kpl_m3`)],
+    tunnit: rows,
+    paivat: days,
+  };
+}
+
 export function placeLabel(place) {
   const lower = (x) => String(x ?? '').toLocaleLowerCase('fi-FI');
   return [place.name, place.region && lower(place.region) !== lower(place.name) ? place.region : ''].filter(Boolean).join(', ');
@@ -194,7 +223,7 @@ export function placeLabel(place) {
 
 const RULES_GROUNDED = [
   'TÄRKEÄT SÄÄNNÖT:',
-  '1. Vastaat vain alla olevan SÄÄDATAN perusteella. Se on sovelluksen eri säämalleista (ECMWF, ICON, MET Norway, Météo-France, UK Met Office, GFS, GEM, FMI) hakema ja koodilla yhdistämä ennuste, ja se on ainoa tietolähteesi sään nykytilasta ja ennusteesta.',
+  '1. Vastaat vain alla olevan SÄÄDATAN perusteella. Se on sovelluksen eri säämalleista (ECMWF, ICON, MET Norway, Météo-France, UK Met Office, GFS, GEM, FMI) hakema ja koodilla yhdistämä ennuste, ja se on ainoa tietolähteesi sään nykytilasta ja ennusteesta. Ilmanlaatu, siitepöly ja UV-indeksi ovat kentässä ilma; jos kenttää tai lajia ei ole, sovelluksella ei ole sitä tietoa.',
   '2. Älä käytä omaa tietoasi nykyisestä säästä, ennusteista, havainnoista tai uutisista. Älä keksi lukuja, aikoja, paikkoja tai malleja, joita datassa ei ole.',
   '3. Jokaisen mainitsemasi luvun pitää löytyä datasta tai olla siitä suoraan laskettu (summa, ero, pienin tai suurin arvo). Kun kerrot, mitä yksittäinen malli ennustaa, käytä kenttiä mallit_nyt ja mallit_paivittain ja mainitse mallin nimi.',
   '4. Jos kysymykseen ei voi vastata datalla (aihe ei ole sää, ajankohta on ennusteen ulkopuolella tai paikka puuttuu), sano se lyhyesti ja kerro, mihin datalla voi vastata. Älä arvaa.',
@@ -208,7 +237,7 @@ const RULES_FREE = [
   '3. Jos data ei riitä vastaukseen, sano se.',
 ];
 
-export function systemPrompt({ place, fc, nowMs, results = null, mode = 'grounded' }) {
+export function systemPrompt({ place, fc, nowMs, results = null, air = null, mode = 'grounded' }) {
   const ln = localNow(nowMs, fc.tz);
   const rules = mode === 'free' ? RULES_FREE : RULES_GROUNDED;
   return [
@@ -221,7 +250,7 @@ export function systemPrompt({ place, fc, nowMs, results = null, mode = 'grounde
     'Jos käyttäjä kysyy muun paikkakunnan kuin nykyisen paikan säästä, hae data get_forecast-työkalulla.',
     '',
     'SÄÄDATA (JSON):',
-    JSON.stringify(compactForecast(fc, nowMs, { results })),
+    JSON.stringify(compactForecast(fc, nowMs, { results, air })),
   ].join('\n');
 }
 
@@ -244,7 +273,7 @@ export const TOOLS = [
 // ---------- Selitys ja chat ----------
 
 /** Selittää sään valitulle ajankohdalle. selection: { type:'now'|'hour'|'day', label } */
-export async function explain({ fc, place, nowMs, selection, results = null, mode = 'grounded', fetchFn = defaultFetch, signal }) {
+export async function explain({ fc, place, nowMs, selection, results = null, air = null, mode = 'grounded', fetchFn = defaultFetch, signal }) {
   const key = aiSettings.key();
   const target =
     selection.type === 'now'
@@ -253,7 +282,7 @@ export async function explain({ fc, place, nowMs, selection, results = null, mod
         ? `tunti ${selection.label}`
         : `päivä ${selection.label}`;
   const ask = `Selitä sää ajankohdalle: ${target}. Kerro, mitä on tulossa ja mikä sen todennäköisesti aiheuttaa, jos data antaa siihen aihetta. Lopuksi yksi käytännön vinkki. Enintään 90 sanaa.`;
-  const system = systemPrompt({ place, fc, nowMs, results, mode: mode === 'free' ? 'free' : 'grounded' });
+  const system = systemPrompt({ place, fc, nowMs, results, air, mode: mode === 'free' ? 'free' : 'grounded' });
   return withModelHeal(
     async (model) => textOf(await generate({ key, model, system, contents: [{ role: 'user', parts: [{ text: ask }] }], temperature: 0.4, fetchFn, signal })),
     { key, fetchFn },
@@ -264,9 +293,9 @@ export async function explain({ fc, place, nowMs, selection, results = null, mod
  * Keskustelu. history: [{role:'user'|'assistant', text}], viimeinen on käyttäjän.
  * runTool(name, args) palauttaa tavallisen objektin (esim. paikan ennuste).
  */
-export async function chat({ fc, place, nowMs, history, results = null, mode = 'grounded', runTool, fetchFn = defaultFetch, signal, maxSteps = 4 }) {
+export async function chat({ fc, place, nowMs, history, results = null, air = null, mode = 'grounded', runTool, fetchFn = defaultFetch, signal, maxSteps = 4 }) {
   const key = aiSettings.key();
-  const system = systemPrompt({ place, fc, nowMs, results, mode: mode === 'free' ? 'free' : 'grounded' });
+  const system = systemPrompt({ place, fc, nowMs, results, air, mode: mode === 'free' ? 'free' : 'grounded' });
   const contents = history.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] }));
   let tools = runTool ? TOOLS : undefined;
 
