@@ -230,7 +230,7 @@ function sizeStage() {
 
 const NC_TTL = 5 * 60000; // tutkaennuste päivittyy viiden minuutin välein
 const NC_TTL_NOCOV = 60 * 60000; // kattavuuden ulkopuolella kysytään harvoin
-let ncBusy = false;
+let ncBusy = ''; // paikka, jolle tutkaennustetta haetaan parhaillaan (toisen paikan haku ei estä uuden paikan hakua)
 const ncKey = (p) => (p && Number.isFinite(p.lat) && Number.isFinite(p.lon) ? `${p.lat.toFixed(2)},${p.lon.toFixed(2)}` : '');
 
 /** Tutkaennusteen tulkinta hetkelle now; null, jos ei saatavilla, vanhentunut tai haettu toiselle paikalle. */
@@ -245,16 +245,16 @@ function currentNowcast(now) {
 async function refreshNowcast({ ignoreAge = false } = {}) {
   const p = state.place;
   const key = ncKey(p);
-  if (!key || ncBusy) return;
+  if (!key || ncBusy === key) return;
   const now = nowMs();
   const nc = state.nc;
   if (!ignoreAge && nc.key === key && now - nc.at < nc.ttl) return;
-  ncBusy = true;
+  ncBusy = key;
   try {
     const r = await runSource(sources, 'nowcast', () => fetchNowcast(p.lat, p.lon, { fetchFn }), { now });
     if (ncKey(state.place) === key && 'value' in r) state.nc = { raw: r.value, key, at: now, ttl: r.value ? NC_TTL : NC_TTL_NOCOV }; // value null = tutka ei kata paikkaa
   } finally {
-    ncBusy = false;
+    if (ncBusy === key) ncBusy = '';
   }
   if (state.fc) {
     renderAdvice(state.fc, nowMs());
@@ -263,7 +263,7 @@ async function refreshNowcast({ ignoreAge = false } = {}) {
 }
 
 const OBS_TTL = 10 * 60000; // asemat mittaavat kymmenen minuutin välein
-let obsBusy = false;
+let obsBusy = ''; // paikka, jonka havaintoa haetaan parhaillaan
 
 /** Lähimmän aseman havainto, jos se on haettu tälle paikalle eikä ole vanha. */
 function currentObs(now) {
@@ -276,15 +276,15 @@ function currentObs(now) {
 async function refreshObs({ ignoreAge = false } = {}) {
   const p = state.place;
   const key = ncKey(p);
-  if (!key || obsBusy || !inFinland(p.lat, p.lon)) return;
+  if (!key || obsBusy === key || !inFinland(p.lat, p.lon)) return;
   const now = nowMs();
   if (!ignoreAge && state.obs.key === key && now - state.obs.at < OBS_TTL) return;
-  obsBusy = true;
+  obsBusy = key;
   try {
     const r = await runSource(sources, 'obs', () => fetchObs(p.lat, p.lon, { fetchFn, now }), { now });
     if (ncKey(state.place) === key && 'value' in r) state.obs = { raw: r.value, key, at: now };
   } finally {
-    obsBusy = false;
+    if (obsBusy === key) obsBusy = '';
   }
   if (state.fc) {
     renderHours();
@@ -673,7 +673,8 @@ function restoreCache() {
   if (DEMO) return false;
   const c = store.object('cache');
   if (!c || c.v !== CACHE_V || !Array.isArray(c.results) || c.placeKey !== placeKey(state.place)) return false;
-  if (nowMs() - c.fetchedAt > CACHE_MAX_AGE) return false;
+  // Rikkinäinen aikaleima (NaN) ohittaisi ikätarkistuksen ja estäisi myöhemmin ajastetun päivityksen (tick vertaa fetchedAt-arvoon)
+  if (!Number.isFinite(c.fetchedAt) || nowMs() - c.fetchedAt > CACHE_MAX_AGE) return false;
   try {
     const results = c.results.map((r) => ({ ...r, model: MODELS.find((m) => m.key === r.key) })).filter((r) => r.model);
     state.fc = blendForecast(results, { nowMs: nowMs() });
@@ -1419,7 +1420,7 @@ async function probeSources(push, p, t) {
   const w = await runSource(sources, 'warnings', () => fetchWarnings({ fetchFn }), { force: true, now: t });
   const wms = Math.round(performance.now() - t1);
   if (w.value) {
-    state.warn = { raw: w.value.alerts, at: t };
+    state.warn = { raw: w.value.alerts, at: t, stale: false, fetchedAt: w.value.fetchedAt };
     push(`  ✓ Viralliset varoitukset (Ilmatieteen laitos, GitHub-peilin kautta) ${wms} ms, ${w.value.note}; ${officialRows(w.value.alerts, p.lat, p.lon, t).length} tällä paikalla`);
   } else if ('value' in w) push(`  – Viralliset varoitukset: ${w.reason}`);
   else if (w.error) push(`  ✗ Viralliset varoitukset: ${await explainFetchError(w.error, MIRROR_URL)}`);
@@ -1811,8 +1812,10 @@ async function boot() {
   }
   if (!state.place.name && !first) {
     // Tallennetulta paikalta puuttui nimi (sovellus suljettiin kesken haun)
-    reverseGeocode(state.place.lat, state.place.lon, { fetchFn }).then((geo) => {
-      Object.assign(state.place, { name: geo.name, region: geo.region, country: geo.country, note: geo.note || '' });
+    const place = state.place;
+    reverseGeocode(place.lat, place.lon, { fetchFn }).then((geo) => {
+      if (state.place !== place) return; // käyttäjä ehti valita toisen paikan: nimeä ei saa kirjoittaa sen päälle
+      Object.assign(place, { name: geo.name, region: geo.region, country: geo.country, note: geo.note || '' });
       persistPlace();
       renderAll();
       syncAi({ immediate: true });
