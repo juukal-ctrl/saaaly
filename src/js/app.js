@@ -18,7 +18,7 @@ import { fetchWarnings, officialRows, inFinland, MIRROR_URL } from './warnings.j
 import { fetchObs } from './observations.js';
 import { fetchAir, airUrl, airWindow, airHighlights, airAlerts, airUsable, AIR_TTL } from './airquality.js';
 import { makeDemoFetch } from './demo.js';
-import { agoText, selLabel, placeHtml, favListHtml, favCurrentHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
+import { agoText, staleText, selLabel, placeHtml, favListHtml, favCurrentHtml, heroHtml, verdictHtml, alertsHtml, welcomeHtml, aboutSheetHtml, meteoHtml, selectionLines, hoursPageHtml, weekPageHtml, certPageHtml, radarHtml, trackHtml, modelsHtml, searchSheetHtml, resultsHtml, settingsSheetHtml, chatSheetHtml, messageHtml, typingHtml, chatEmptyHtml, modeNote } from './views.js';
 import { homeHeadline, tomorrowWindow } from './headline.js';
 import { createCube, createCubeChrome } from './cube.js';
 import { createMapView } from './mapview.js';
@@ -173,7 +173,7 @@ function renderHeader() {
   if (last.header !== html) {
     last.header = html;
     el.place.innerHTML = html;
-    el.place.setAttribute('aria-label', state.place?.name ? `Vaihda paikkakuntaa. Nyt: ${state.place.name}` : 'Vaihda paikkakuntaa');
+    el.place.removeAttribute('aria-label'); // nimi tulee näkyvästä tekstistä ja piilotekstistä (placeHtml, WCAG 2.5.3)
   }
   $('#refreshBtn')?.classList.toggle('spin', state.loading && (state.manualLoad || !state.fc));
 }
@@ -650,6 +650,13 @@ async function updateApp() {
   location.reload();
 }
 
+/** Tallennettu ennuste näkyy, mutta uutta ei saatu: kerrotaan, milloin näkyvä ennuste on haettu ja onko verkko poissa. */
+function staleBanner() {
+  if (!state.fc || !state.fetchedAt) return;
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  setBanner({ id: 'stale', kind: 'warn', text: staleText({ fetchedAt: state.fetchedAt, nowMs: nowMs(), offline }), action: { act: 'refresh', label: 'Yritä uudelleen' } });
+}
+
 function setBanner(b) {
   state.banner = b;
   if (!b) {
@@ -968,7 +975,7 @@ async function runLoad({ manual = false, signal } = {}) {
     const net = results.length && results.every((r) => r.kind === 'network' || r.kind === 'timeout');
     const hint = net ? ' Tarkista verkkoyhteys. Jos verkko toimii muuten, sisällönesto voi estää osoitteen api.open-meteo.com.' : '';
     if (state.fc) {
-      setBanner({ id: 'stale', kind: 'warn', text: `Päivitys ei onnistunut. Näytetään ennuste, joka haettiin ${agoText(nowMs() - state.fetchedAt)}.`, action: { act: 'refresh', label: 'Yritä uudelleen' } });
+      staleBanner();
     } else {
       state.error = `Yksikään säämalli ei vastannut. ${why}.${hint}`;
     }
@@ -2002,6 +2009,7 @@ function bindEvents() {
       app: el.app,
       faces: [...el.pages.querySelectorAll('.face')],
       sky: $('#sky'),
+      skyVersion: () => sky?.frames?.() ?? NaN,
       chrome: () => [$('.top', el.app), el.banner, el.welcome, el.fab],
     });
     cube = createCube(el.pages, {
@@ -2024,6 +2032,9 @@ function bindEvents() {
       sky?.poke();
     }
   });
+  window.addEventListener('offline', () => {
+    if (!DEMO) staleBanner();
+  });
   window.addEventListener('online', () => {
     load();
     checkForUpdate();
@@ -2039,6 +2050,23 @@ function registerWorker() {
   if (DEMO || !('serviceWorker' in navigator)) return;
   if (!(location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) return;
   navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+/** Aloitusnäytön pikakuvakkeet (manifest.webmanifest: shortcuts): ?avaa=kysy, kartta, tunnit tai viikko. */
+function openShortcut() {
+  const what = params.get('avaa');
+  if (!what) return;
+  try {
+    const u = new URL(location.href);
+    u.searchParams.delete('avaa'); // uudelleenlataus ei avaa samaa uudelleen
+    history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+  } catch {
+    /* ei väliä */
+  }
+  if (what === 'kysy') openSheet('chat');
+  else if (what === 'kartta') openMap('radar');
+  else if (what === 'tunnit') goPage(1, { smooth: false });
+  else if (what === 'viikko') goPage(2, { smooth: false });
 }
 
 async function boot() {
@@ -2083,6 +2111,7 @@ async function boot() {
       syncAi({ immediate: true });
     });
   }
+  openShortcut();
   startTimers();
   if (document.readyState === 'complete') registerWorker();
   else window.addEventListener('load', registerWorker);

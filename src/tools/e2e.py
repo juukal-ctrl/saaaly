@@ -698,6 +698,28 @@ with sync_playwright() as pw:
         finally:
             SERVER['down'] = False
     check('ilman verkkoa sovelluksen kuori aukeaa service workerin välimuistista', t_offline)
+
+    def t_offline_notice():
+        ctx.set_offline(True)  # laite ilman verkkoa: navigator.onLine on false
+        try:
+            page.reload()
+            expect(page.locator('.temp')).to_be_visible(timeout=8000)
+            banner = page.locator('#banner')
+            expect(banner).to_contain_text('Ei verkkoyhteyttä', timeout=15000)
+            expect(banner).to_contain_text(re.compile(r'Näytetään ennuste klo \d{1,2}\.\d\d'))
+            assert banner.get_attribute('role') == 'status', 'ilmoitus ei ole ruudunlukijan tilaviesti'
+        finally:
+            ctx.set_offline(False)
+    check('ilman verkkoa ilmoitus kertoo, minkä kellonajan ennuste näkyy', t_offline_notice)
+
+    def t_shortcut():
+        page.goto(BASE + '?avaa=kysy')
+        expect(page.locator('#sheetPanel[data-kind=chat]')).to_be_visible(timeout=8000)
+        assert 'avaa=' not in page.url, f'pikakuvakkeen kyselyosa jäi osoitteeseen: {page.url}'
+        page.keyboard.press('Escape')
+        page.goto(BASE + '?avaa=viikko')
+        page.wait_for_function("() => window.__saaaly.state.page === 2", timeout=8000)
+    check('aloitusnäytön pikakuvake avaa chatin tai Viikko-sivun', t_shortcut)
     ctx.close()
 
     print('Ensimmäinen käynnistys ilman sijaintilupaa')

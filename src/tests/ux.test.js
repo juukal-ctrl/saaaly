@@ -140,7 +140,7 @@ test('varmuus: sama mittari tänään ja huomenna, ei ristiriitaisia sanoja', ()
 
 test('etusivun otsikko piirretään ilman laatikoita ja painikkeita', () => {
   const html = verdictHtml({ hl: { l1: 'Talvitakki, pipo ja hanskat.', l2: 'Kuivaa koko päivän.', small: 'Seuraava sade ma klo 11.' } });
-  assert.match(html, /class="vsay"><b>Talvitakki, pipo ja hanskat\.<\/b><span>Kuivaa koko päivän\.<\/span>/);
+  assert.match(html, /class="vsay"><b>Talvitakki, pipo ja hanskat\.<\/b> <span>Kuivaa koko päivän\.<\/span>/);
   assert.match(html, /class="vsmall">Seuraava sade ma klo 11\./);
   assert.doesNotMatch(html, /<button/);
 });
@@ -156,8 +156,11 @@ test('varoitusrivi: viralliset ensin, oma huomio katkoviivalla; vanha tai puuttu
   assert.match(u, /Varoituksia ei voitu tarkistaa/);
   assert.match(u, /ilmatieteenlaitos\.fi\/varoitukset/);
   const now = Date.UTC(2026, 10, 26, 9, 45);
-  const old = alertsHtml({ checkedAt: Date.UTC(2026, 10, 26, 2, 24), nowMs: now });
+  const checked = Date.UTC(2026, 10, 26, 2, 24);
+  const old = alertsHtml({ checkedAt: checked, nowMs: now });
+  // Kellonaika näytetään paikan aikavyöhykkeessä (oletus Helsinki), laitteen aikavyöhykkeestä riippumatta.
   assert.match(old, /Varoitustieto klo 4\.24/);
+  assert.match(alertsHtml({ checkedAt: checked, nowMs: now, tz: 'UTC' }), /Varoitustieto klo 2\.24/);
   assert.equal(alertsHtml({ checkedAt: now - 20 * 60000, nowMs: now }), '', 'tuore tieto ilman varoituksia: ei mitään');
 });
 

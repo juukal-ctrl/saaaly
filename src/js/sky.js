@@ -132,12 +132,15 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
   let h = 0;
   let dpr = 1;
   let raf = 0;
+  let frameTimer = 0; // odotus seuraavaan kuvaan (ks. next())
+  let frames = 0; // piirrettyjen kuvien määrä: kuution kyljet kopioivat taivaan vain, kun se on muuttunut
   let last = 0;
   let time = 0;
   let inited = false;
   let userAnim = animate;
   let still = reduceMotion || !userAnim; // true: ei animaatiota (liikkeen vähennys tai asetuksista pois)
   let saver = false; // akku vähissä
+  let paused = false; // stop(): paneeli tai kartta peittää taivaan, kosketus ei herätä animaatiota ennen start()-kutsua
   let idleTimer = 0;
   let activeAt = globalThis.performance?.now?.() ?? 0; // viimeisin kosketus
   const cur = { ...DEFAULT, rainN: 0, snowN: 0 };
@@ -159,19 +162,19 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (!raf) draw(0);
+    draw(0); // koon muutos tyhjentää kankaan
   }
 
   function set(state, { snap = false } = {}) {
     for (const k of KEYS) if (state[k] != null && Number.isFinite(state[k])) tgt[k] = state[k];
-    const asleep = !raf && idleTimer !== 0; // joutilas: ei animaatiota, joten tila vaihdetaan suoraan
+    const asleep = (!running() && idleTimer !== 0) || paused; // joutilas tai pysäytetty: ei animaatiota, joten tila vaihdetaan suoraan
     if (!inited || snap || still || saver || asleep) {
       for (const k of KEYS) cur[k] = tgt[k];
       cur.rainN = rainCount();
       cur.snowN = snowCount();
       inited = true;
     }
-    if (!raf) draw(0);
+    if (!running()) draw(0);
   }
 
   const rainCount = () => (tgt.precip >= 0.05 ? clamp(30 + tgt.precip * 45, 0, 200) * (1 - tgt.snow) : 0);
@@ -196,6 +199,7 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
   }
 
   function draw(dt) {
+    frames++;
     const alt = cur.alt;
     const cover = clamp(cur.cloud, 0, 1);
     const gloom = clamp(cover * 0.35 + (cur.precip > 0.3 ? 0.2 : 0) + cur.thunder * 0.25 + cur.fog * 0.3, 0, 0.7);
@@ -289,14 +293,31 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
 
   const gapNow = () => (cur.rainN >= 1 || cur.snowN >= 1 || cur.thunder > 0.3 || flash.a > 0.01 ? GAP_RAIN : GAP_CALM);
 
+  // Kuvatahti: seuraava rAF pyydetään vasta, kun edellisestä kuvasta on kulunut lähes GAP (ajastin), eikä jokaisella
+  // näytön päivityksellä. Muuten selain tekisi pääsäikeessä 60 kuvaa sekunnissa, vaikka taivas piirretään 10–20 kertaa.
+  const running = () => raf !== 0 || frameTimer !== 0;
+
+  function next() {
+    const wait = gapNow() - 14;
+    if (wait <= 4) {
+      raf = requestAnimationFrame(loop);
+      return;
+    }
+    frameTimer = setTimeout(() => {
+      frameTimer = 0;
+      if (!raf && !paused) raf = requestAnimationFrame(loop);
+    }, wait);
+  }
+
   function loop(ts) {
     raf = 0;
     if (document.hidden) {
+      // Taustalla ei piirretä. rAF ei käy piilossa olevalla välilehdellä, joten tämä odottaa paluuta (visibilitychange herättää myös).
       raf = requestAnimationFrame(loop);
       return;
     }
     const idle = still || saver || ts - activeAt > IDLE_MS;
-    if (!last || ts - last >= gapNow()) {
+    if (!last || ts - last >= gapNow() - 10) {
       const dt = last ? Math.min(0.15, (ts - last) / 1000) : 0.016;
       last = ts;
       step(dt);
@@ -306,22 +327,26 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
       // Kuva on piirretty. Nukutaan ilman rAF-herätyksiä: seuraava kuva minuutin päästä tai kosketuksesta.
       idleTimer = setTimeout(() => {
         idleTimer = 0;
-        if (!raf) raf = requestAnimationFrame(loop);
+        if (!running() && !paused) raf = requestAnimationFrame(loop);
       }, GAP_IDLE);
       return;
     }
-    raf = requestAnimationFrame(loop);
+    next();
   }
 
   function start() {
-    if (raf || idleTimer) return;
+    paused = false;
+    if (running() || idleTimer) return;
     last = 0;
     raf = requestAnimationFrame(loop);
   }
 
   function stop() {
+    paused = true;
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
+    clearTimeout(frameTimer);
+    frameTimer = 0;
     clearTimeout(idleTimer);
     idleTimer = 0;
   }
@@ -329,12 +354,12 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
   /** Käyttäjä koski ruutuun: jatketaan animaatiota heti. */
   function poke() {
     activeAt = globalThis.performance?.now?.() ?? 0;
-    if (still || saver) return;
+    if (still || saver || paused) return;
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = 0;
     }
-    if (!raf) {
+    if (!running()) {
       last = 0;
       raf = requestAnimationFrame(loop);
     }
@@ -385,5 +410,5 @@ export function createSky(canvas, { reduceMotion = false, animate = true } = {})
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(resize, 150);
   });
-  return { set, resize, start, stop, poke, setAnimated, draw: () => draw(0), state: () => ({ ...cur }) };
+  return { set, resize, start, stop, poke, setAnimated, draw: () => draw(0), state: () => ({ ...cur }), frames: () => frames };
 }
