@@ -270,7 +270,7 @@ export function createCube(root, { onSettle = () => {}, onStart = () => {}, onTu
  * joten koko näyttö kääntyy yhtenä esineenä. Levossa kopiot poistetaan ja oikeat palaavat (ainoat vuorovaikutteiset).
  * app: alue, jonka kokoisia kyljet ovat; sky: taivaskangas; chrome(): kopioitavat elementit; dots: valitsin pisteille.
  */
-export function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]' }) {
+export function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]', skyVersion = null }) {
   const layers = faces.map((f) => {
     const cv = document.createElement('canvas');
     cv.className = 'face-sky';
@@ -281,7 +281,7 @@ export function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]'
     ch.inert = true;
     f.prepend(cv);
     f.append(ch);
-    return { cv, ch, ctx: cv.getContext('2d') };
+    return { cv, ch, ctx: cv.getContext('2d'), ver: -1 };
   });
   let src = null; // taivaskankaan alue, joka vastaa kylkeä (kangaspikseleinä)
 
@@ -293,6 +293,7 @@ export function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]'
     const k = sky && sky.clientWidth ? sky.width / sky.clientWidth : 1;
     src = sky ? { x: base.left * k, y: base.top * k, w: base.width * k, h: base.height * k } : null;
     layers.forEach((L, i) => {
+      L.ver = -1;
       L.ch.textContent = '';
       items.forEach((e, j) => {
         const c = e.cloneNode(true);
@@ -316,8 +317,12 @@ export function createCubeChrome({ app, faces, sky, chrome, dots = '[data-page]'
 
   function frame(shown) {
     if (!src) return;
+    // skyVersion: taivaan piirtokerta. Kopio vain, kun taivas on piirretty uudelleen (10–20 kertaa sekunnissa), ei jokaisella käännön kuvalla.
+    const v = skyVersion ? skyVersion() : NaN;
     for (const i of shown) {
       const L = layers[i];
+      if (L.ver === v) continue;
+      L.ver = v;
       try {
         L.ctx.drawImage(sky, src.x, src.y, src.w, src.h, 0, 0, L.cv.width, L.cv.height);
       } catch {

@@ -397,6 +397,10 @@ export function createMapView(root, { getPlace, getTz = () => 'Europe/Helsinki',
     if (!on) return;
     const tick = () => {
       if (!S.playing || !S.open) return;
+      if (globalThis.document?.hidden) {
+        S.timer = setTimeout(tick, 1000); // taustalla ei vaihdeta kehyksiä (ei piirtoa eikä tiilihakuja)
+        return;
+      }
       const n = steps();
       const next = current() + 1 >= n ? 0 : current() + 1;
       setStep(next);
@@ -416,7 +420,6 @@ export function createMapView(root, { getPlace, getTz = () => 'Europe/Helsinki',
   function chrome() {
     root.querySelectorAll('[data-mv="tab"]').forEach((b) => {
       const on = b.dataset.tab === S.tab;
-      b.setAttribute('aria-selected', on ? 'true' : 'false');
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
     legend.innerHTML =
