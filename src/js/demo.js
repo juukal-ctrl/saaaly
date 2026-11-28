@@ -1,4 +1,4 @@
-// demo.js: synteettinen säädata testeihin ja esikatseluun (?demo=1, ?demo=rain|snow|clear|thunder|fog).
+// demo.js: synteettinen säädata testeihin ja esikatseluun (?demo=1, ?demo=rain|snow|clear|thunder|fog), myös ilmanlaatu ja siitepöly.
 // Tuottaa Open-Meteon vastausmuotoa, joten koko sovelluksen koodipolku (haku, jäsennys, yhdistely) on sama kuin oikealla datalla.
 
 import { FI_CITIES, haversineKm } from './geo.js';
@@ -200,6 +200,66 @@ export function syntheticNowcast({ lat, lon, nowMs = Date.now(), tz = 'Europe/He
   };
 }
 
+// Siitepölykaudet esimerkkitilassa (Lounais-Suomi): huippupäivä vuoden alusta, leveys (vrk) ja huippupitoisuus (kpl/m³).
+const POLLEN_SEASON = { alder_pollen: [95, 10, 160], birch_pollen: [132, 8, 650], grass_pollen: [178, 14, 55], mugwort_pollen: [214, 8, 24], ragweed_pollen: [236, 9, 2] };
+const AQ_BANDS = { pm2_5: [10, 20, 25, 50, 75], pm10: [20, 40, 50, 100, 150], nitrogen_dioxide: [40, 90, 120, 230, 340], ozone: [50, 100, 130, 240, 380] };
+
+/** Saasteen osaindeksi 0–100+ (20 yksikköä luokkaa kohden), josta eurooppalainen indeksi on suurin. */
+function subIndex(v, th) {
+  const edges = [0, ...th];
+  for (let k = 1; k < edges.length; k++) if (v < edges[k]) return (k - 1) * 20 + ((v - edges[k - 1]) / (edges[k] - edges[k - 1])) * 20;
+  return 100 + (v - th.at(-1)) / 5;
+}
+
+/**
+ * Open-Meteo Air Quality -muotoinen synteettinen vastaus (timeformat=unixtime, 4 vrk). Siitepöly noudattaa kasvukautta (talvella null kuten oikeassa
+ * rajapinnassa), päivärytmiä ja sadetta; sumuskenaariossa inversio heikentää ilmanlaatua aamulla. UV samasta auringon korkeudesta kuin säämalleissa.
+ */
+export function syntheticAir({ lat, lon, nowMs = Date.now(), tz = 'Europe/Helsinki', scenario = 'mixed', days = 4 }) {
+  const t0 = Date.UTC(...new Date(nowMs).toISOString().slice(0, 10).split('-').map((x, k) => (k === 1 ? +x - 1 : +x)));
+  const sc = SCENARIOS[scenario];
+  const time = [];
+  const hourly = { time };
+  for (const k of ['european_aqi', 'pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone', 'uv_index', ...Object.keys(POLLEN_SEASON)]) hourly[k] = [];
+  const noise = rng(hashStr(`air${scenario}`));
+  for (let i = 0; i < days * 24; i++) {
+    const ms = t0 + i * 3600000;
+    time.push(ms / 1000);
+    const ln = localNow(ms, tz);
+    const doy = Math.round((Date.parse(ln.date + 'T00:00:00Z') - Date.UTC(+ln.date.slice(0, 4), 0, 1)) / 86400000) + 1;
+    const hr = ln.hour + ln.minute / 60;
+    const rush = Math.exp(-(((hr - 8) / 1.6) ** 2)) + 0.8 * Math.exp(-(((hr - 16.5) / 1.8) ** 2));
+    const sunAlt = sunPosition(ms, lat, lon).altitudeDeg;
+    const wet = sc ? sc.precip > 0 : Math.exp(-(((i - 31) / 4.5) ** 2)) > 0.3;
+    const cloud = sc ? sc.cloud : 50;
+    const inv = scenario === 'fog' ? 3.2 : scenario === 'snow' ? 1.4 : 1;
+    const pm25 = (3 + 5 * rush) * inv * (wet ? 0.6 : 1) + noise() * 1.5;
+    const pm10 = pm25 * 1.7 + noise() * 2;
+    const no2 = (6 + 26 * rush) * inv + noise() * 3;
+    const o3 = Math.max(10, 38 + 30 * Math.max(0, Math.sin((sunAlt * Math.PI) / 180)) * (1 - cloud / 160) - no2 * 0.3 + noise() * 4);
+    const aqi = Math.max(subIndex(pm25, AQ_BANDS.pm2_5), subIndex(pm10, AQ_BANDS.pm10), subIndex(no2, AQ_BANDS.nitrogen_dioxide), subIndex(o3, AQ_BANDS.ozone));
+    hourly.pm2_5.push(+pm25.toFixed(1));
+    hourly.pm10.push(+pm10.toFixed(1));
+    hourly.nitrogen_dioxide.push(+no2.toFixed(1));
+    hourly.ozone.push(+o3.toFixed(1));
+    hourly.european_aqi.push(Math.round(aqi));
+    hourly.uv_index.push(+Math.max(0, 5.5 * Math.sin((Math.max(0, sunAlt) * Math.PI) / 180) * (1 - 0.7 * (cloud / 100))).toFixed(2));
+    // Kasvukauden ulkopuolella (loka–helmikuu) CAMS ei anna siitepölyä: null, ei nolla
+    const season = doy >= 60 && doy <= 273;
+    const diurnal = 0.35 + 0.65 * Math.exp(-(((hr - 14) / 4) ** 2));
+    const washout = sc ? (sc.snow ? 0 : sc.precip > 0 ? 0.15 : 1) : wet ? 0.25 : 1;
+    for (const [k, [peak, width, max]] of Object.entries(POLLEN_SEASON)) {
+      if (!season) {
+        hourly[k].push(null);
+        continue;
+      }
+      const v = max * Math.exp(-(((doy - peak) / width) ** 2)) * diurnal * washout * (0.85 + 0.3 * noise());
+      hourly[k].push(v < 0.05 ? 0 : +v.toFixed(1));
+    }
+  }
+  return { latitude: +lat.toFixed(2), longitude: +lon.toFixed(2), generationtime_ms: 0.4, utc_offset_seconds: 0, timezone: 'GMT', hourly_units: { european_aqi: 'EAQI', birch_pollen: 'grains/m³' }, hourly };
+}
+
 const DEMO_WARNINGS = {
   thunder: ['Ukkosvaroitus', 'Severe', 'orange', 'Voimakkaita ukkoskuuroja, paikoin rakeita. Kuurojen mukana voi tulla puuskia yli 20 m/s.'],
   snow: ['Liukkausvaroitus', 'Moderate', 'yellow', 'Tiet ja kevyen liikenteen väylät voivat olla erittäin liukkaita.'],
@@ -250,6 +310,7 @@ export function makeDemoFetch({ scenario = 'mixed', nowMs, log } = {}) {
       return json(syntheticGrid({ lats, lons, nowMs: nowMs ?? Date.now(), hours: +url.searchParams.get('forecast_hours') || 25, scenario }));
     }
     if (url.hostname === 'api.rainviewer.com') return json(syntheticRadarMaps(nowMs ?? Date.now()));
+    if (url.hostname === 'air-quality-api.open-meteo.com') return json(syntheticAir({ lat: +url.searchParams.get('latitude'), lon: +url.searchParams.get('longitude'), nowMs: nowMs ?? Date.now(), scenario, days: +url.searchParams.get('forecast_days') || 4 }));
     if (url.hostname === 'api.open-meteo.com') {
       const id = url.searchParams.get('models');
       if (id === 'fmi_seamless' || id === 'dead_model') return json({ error: true, reason: `Cannot initialize MultiDomains from invalid String value ${id} for key models` }, 400);

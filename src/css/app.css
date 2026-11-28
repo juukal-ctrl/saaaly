@@ -5198,3 +5198,78 @@ body.light .fav-cur {
 .fav-empty {
   margin: 6px 0 4px;
 }
+
+/* ---------- Ilma: siitepöly, ilmanlaatu ja UV (Koti, Tunnit) ---------- */
+
+.vair,
+.air-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.verdict .vair {
+  margin-top: 2.6cqw;
+  max-width: 64cqw;
+}
+
+.ap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 11px 3px 7px;
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 10px 22px -14px rgba(80, 50, 160, 0.55);
+  font-size: 12.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.verdict .ap {
+  font-size: max(3.1cqw, 12px);
+}
+
+.ap svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+
+.ap b {
+  font-weight: 600;
+}
+
+/* Tason väripiste pillerin lopussa: teksti kertoo tason, väri vain vahvistaa sitä */
+.ap::after {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: #8fd9a8;
+}
+
+.ap.lv1::after { background: #f2c230; }
+.ap.lv2::after { background: #f08a24; }
+.ap.lv3::after { background: #e5484d; }
+
+.hv-more .air-row {
+  margin: -2px 0 8px;
+}
+
+.air-tip {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink2);
+}

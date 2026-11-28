@@ -81,6 +81,7 @@ const CSP_CONNECT = [
   'https://raw.githubusercontent.com', // varoitusten peili (haara warnings-data), ks. js/warnings.js
   'https://opendata.fmi.fi', // lähimmän sääaseman havainto, ks. js/observations.js
   'https://api.rainviewer.com', // tutkakartan kehysluettelo, ks. js/mapview.js
+  'https://air-quality-api.open-meteo.com', // ilmanlaatu, siitepöly ja UV:n varalähde, ks. js/airquality.js
 ];
 const CSP_IMG = ['https://tilecache.rainviewer.com']; // tutkakartan tiilet (kuvina, ei luettavina)
 const CSP = [

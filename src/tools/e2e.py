@@ -88,7 +88,7 @@ def gemini_route(route):
 def other_route(route):
     route.fulfill(status=403, headers=CORS, body='{"error":{"message":"estetty testissä"}}')
 
-DATA_RX = re.compile(r'https://(api\.open-meteo\.com|geocoding-api\.open-meteo\.com|api\.bigdatacloud\.net|api\.met\.no|raw\.githubusercontent\.com|opendata\.fmi\.fi|api\.rainviewer\.com)/')
+DATA_RX = re.compile(r'https://(api\.open-meteo\.com|geocoding-api\.open-meteo\.com|air-quality-api\.open-meteo\.com|api\.bigdatacloud\.net|api\.met\.no|raw\.githubusercontent\.com|opendata\.fmi\.fi|api\.rainviewer\.com)/')
 TILE_RX = re.compile(r'https://tilecache\.rainviewer\.com/')
 tile_log = []
 
@@ -505,6 +505,8 @@ with sync_playwright() as pw:
                 tulos = last['functionResponse']['response']['tulos']
         assert tulos and tulos['paikka'] == 'Rovaniemi, Lappi', f'työkalu ei palauttanut Rovaniemen sääennustetta: {tulos}'
         assert 'mallit_nyt' in tulos and len(tulos['tunnit']) == 36, 'työkalun tulos ei sisällä mallikohtaisia lukuja tai 36 tuntia'
+        assert tulos.get('ilma', {}).get('tunnit'), 'työkalun tulos ei sisällä toisen paikan ilmanlaatua'
+        assert '"ilma":' in sys_prompt(chat_calls('Rovaniemellä')[0]), 'Geminin säädatasta puuttuu ilmanlaatu'
         page.click('.sheet-head [data-act=close]')
     check('chat: get_forecast-työkalu palauttaa toisen paikan datan (mallit mukana) ja vastaus kertoo lähteensä', t_chat)
 
@@ -1004,6 +1006,57 @@ with sync_playwright() as pw:
         assert not [e for e in page10.errors if 'Failed to load resource' not in e], page10.errors[:3]
     check('chat: suosikin nimi ratkeaa ilman paikkahakua', t_fav_chat)
     ctx10.close()
+
+    # Ilmanlaatu: sumuskenaarion ilma (inversio, huono ilmanlaatu huomenna aamulla) muuten tavallisen sään päälle
+    ctx10, page10 = new_page(browser)
+    air_calls = []
+    ctx10.route(re.compile(r'https://air-quality-api\.open-meteo\.com/'), lambda r: (air_calls.append(r.request.url), r.fulfill(status=200, headers=CORS, body=mock_data(r.request.url, 'fog')['body'])))
+    def t_air():
+        page10.goto(BASE)
+        ready(page10)
+        page10.wait_for_function("() => Boolean(window.__saaaly.state.air.raw)", timeout=8000)
+        assert len(air_calls) == 1, air_calls
+        assert 'latitude=60.45&longitude=22.27' in air_calls[0], f'sijaintia ei pyöristetty: {air_calls[0]}'
+        own = page10.locator('#alerts .alert.own')
+        expect(own).to_contain_text('Huono ilmanlaatu')
+        expect(own).to_contain_text('SääÄlyn huomio')
+        assert page10.locator('#verdict .vair').count() == 0, 'huomio kertoo jo huonosta ilmasta: ei toista pilleriä'
+        goto_page(page10, 1)
+        page10.click('#strip .hv[data-iso="2026-10-15T08:00"]')
+        expect(page10.locator('#strip .hv-more .air-row')).to_contain_text('Ilmanlaatu huono')
+        page10.click('.ask-btn')
+        ask(page10, 'Millainen ilmanlaatu on huomenna?')
+        expect(page10.locator('.msg.bot').first).to_contain_text('Ilmanlaatu huomenna: huono', timeout=8000)
+        ask(page10, 'Onko siitepölyä?')
+        expect(page10.locator('.msg.bot').nth(1)).to_contain_text('Siitepölyä ei ennusteta nyt', timeout=8000)
+        page10.click('.sheet-head [data-act=close]')
+        page10.reload()
+        ready(page10)
+        page10.wait_for_timeout(800)
+        assert len(air_calls) == 1, 'ilmanlaatu haettiin uudelleen, vaikka edellinen haku on alle tunnin vanha'
+        expect(page10.locator('#alerts .alert.own')).to_contain_text('Huono ilmanlaatu')
+        assert not page10.errors, page10.errors[:3]
+    check('ilmanlaatu: huomio etusivulla, tunnin ilmapillerit, chat vastaa datasta, haku pyöristetty ja välimuistissa', t_air)
+    ctx10.close()
+
+    ctx11, page11 = new_page(browser)
+    ctx11.route(re.compile(r'https://air-quality-api\.open-meteo\.com/'), lambda r: r.abort('failed'))
+    def t_air_blocked():
+        page11.goto(BASE)
+        ready(page11)
+        page11.wait_for_function("() => JSON.parse(localStorage.getItem('saaaly.src') || '{}').air?.fails === 1", timeout=8000)
+        assert page11.locator('#banner').is_hidden(), 'lähteen epäonnistuminen ei saa näkyä ilmoituksena'
+        assert page11.locator('#alerts .alert.own').count() == 0
+        page11.click('.ask-btn')
+        ask(page11, 'Onko siitepölyä?')
+        expect(page11.locator('.msg.bot').first).to_contain_text('Siitepölytietoa ei juuri nyt saatu', timeout=8000)
+        page11.click('.sheet-head [data-act=close]')
+        open_adv(page11)
+        page11.click('[data-act=diag]')
+        expect(page11.locator('#diag')).to_contain_text('Valmis.', timeout=20000)
+        expect(page11.locator('#diag')).to_contain_text('✗ Ilmanlaatu ja siitepöly')
+    check('estetty ilmanlaatulähde ei näy käyttäjälle; chat ja diagnostiikka kertovat syyn', t_air_blocked)
+    ctx11.close()
 
     ctx7, page7 = new_page(browser)
     ctx7.route(re.compile(r'https://raw\.githubusercontent\.com/'), lambda r: r.fulfill(status=200, headers=CORS, body=mock_data(r.request.url, 'thunder')['body']))
