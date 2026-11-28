@@ -171,7 +171,8 @@ export function resolveWindow(q, fc, nowMs, def = 'next24') {
   const last = fc.hours.length - 1;
   const first = fc.hours[0].t;
   const map = idxMap(fc);
-  const loc = (iso) => map.get(iso) ?? (iso < first ? -1 : last + 1);
+  // Puuttuva tunti ennusteen sisällä (aukko tai kesäaikaan siirtymisen hyppy) on seuraava olemassa oleva tunti, ei "ennusteen jälkeen"
+  const loc = (iso) => map.get(iso) ?? (iso < first ? -1 : iso > fc.hours[last].t ? last + 1 : fc.hours.findIndex((h) => h.t > iso));
   const at = (date, hour) => loc(`${addDays(date, Math.floor(hour / 24))}T${pad2(hour % 24)}:00`);
   const win = { kind: 'range', from: np.idx, to: np.idx, days: null, dates: null, label: '', past: false, beyond: false, clipped: false, nowIdx: np.idx, today, explicit: when.explicit };
 

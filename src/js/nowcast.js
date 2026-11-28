@@ -132,7 +132,7 @@ export function summarizeNowcast(nc, nowMs = Date.now()) {
     return { ...out, state: 'dry', startMin: null, endMin: null, peak: 0, mm: 0, word: '', tail, line: `Tutkan mukaan ${tail}.` };
   }
   const startMin = round5(minTo(j));
-  const { peak, mm } = span(j, j + 11); // tunnin ajan alusta
+  const { peak, mm } = span(j, j + Math.max(1, Math.round(3600000 / dt)) - 1); // tunnin ajan alusta (askelpituus vaihtelee)
   const word = intensityWord(peak);
   const tail = startMin <= 5 ? 'sade alkaa aivan pian' : `sade alkaa noin ${startMin} min päästä`;
   return { ...out, state: 'dry', startMin, endMin: null, peak, mm, word, tail, line: `Tutkan mukaan ${tail} (${word}).` };

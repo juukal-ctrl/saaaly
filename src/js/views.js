@@ -1,7 +1,7 @@
 // views.js: näkymät HTML-merkkijonoina. Puhtaita funktioita: sama syöte antaa saman HTML:n.
 // Kaikki dynaaminen teksti kulkee esc()-funktion kautta.
 
-import { escapeHtml as esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, mdToHtml, zonedToUtcMs, localNow, partsIn } from './util.js';
+import { escapeHtml as esc, fmtTemp, fmtNum, fmtMm, windFrom, weekday, fmtDM, addDays, cap, mdToHtml, zonedToUtcMs, localNow } from './util.js';
 import { SYMBOLS, nowPosition, snapshot, modelRows, describeNow, describeDay, describeHour, popText } from './blend.js';
 import { homeHeadline, hoursHeadline, weekHeadline, weekendLine, daySlippery, certaintyInfo, tomorrowHero, tomorrowWindow } from './headline.js';
 import { icon, icon3d } from './icons.js';
@@ -54,7 +54,6 @@ export function agoText(ms) {
 export const STALE_MIN = 60;
 
 const hh = (iso) => iso.slice(11, 13);
-const clock = (ms) => new Date(ms).toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit' });
 
 export function selLabel(sel) {
   if (sel.type === 'hour') return `${weekday(sel.iso.slice(0, 10))} ${fmtDM(sel.iso.slice(0, 10))} klo ${hh(sel.iso)}`;
@@ -183,11 +182,9 @@ export function alertsHtml({ alerts = [], official = [], officialState = 'ok', c
     rows.push(`<details class="alert own"><summary><i class="sev-dot" aria-hidden="true"></i><span class="a-txt"><b>${esc(a.title)}</b><small>${esc(a.short || '')} · SääÄlyn huomio</small></span>${SVG.caret}</summary><p>${esc(a.text)}</p><p class="fine">Oma laskenta mallidatasta, ei virallinen varoitus. <a href="${FMI_WARN}" target="_blank" rel="noopener">Viralliset varoitukset</a></p></details>`);
   }
   if (unknown) {
-    // Kellonaika paikan aikavyöhykkeessä (sama kuin muualla sovelluksessa), ei laitteen.
-    const d = checkedAt ? partsIn(checkedAt, tz) : null;
-    const n = partsIn(nowMs || Date.now(), tz);
-    const sameDay = d && d.y === n.y && d.m === n.m && d.d === n.d;
-    const t = d ? `${sameDay ? '' : `${d.d}.${d.m}. `}klo ${d.h}.${String(d.mi).padStart(2, '0')}` : '';
+    // Kellonaika paikan aikavyöhykkeessä (ei laitteen): sama kuin muualla sovelluksessa
+    const d = checkedAt ? localNow(checkedAt, tz) : null;
+    const t = d ? `${d.date === localNow(nowMs || Date.now(), tz).date ? '' : `${fmtDM(d.date)} `}klo ${d.hour}.${String(d.minute).padStart(2, '0')}` : '';
     const txt = d ? `Varoitustieto ${t}` : 'Varoituksia ei voitu tarkistaa';
     rows.push(`<a class="alert-chip" href="${FMI_WARN}" target="_blank" rel="noopener"><i aria-hidden="true"></i>${esc(txt)} · tarkista Ilmatieteen laitokselta</a>`);
   }
